@@ -33,7 +33,7 @@ This is **pre-alpha** not ready for use!
 ### Project Structure
 
 ```
-go_notes_web/
+gonotes/
 ├── main.go                 # Application entry point
 ├── models/                 # Data models and database operations
 │   ├── db.go              # DuckDB connection and dual-database setup
@@ -73,7 +73,7 @@ go_notes_web/
 1. **Clone the repository**
    ```bash
    git clone <repository-url>
-   cd go_notes_web
+   cd gonotes
    ```
 
 2. **Download dependencies**

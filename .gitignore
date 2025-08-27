@@ -1,0 +1,17 @@
+.idea/
+.vscode/
+.zed/
+.claude
+
+.DS_Store
+test/
+test_db/
+
+*.gob
+*.csv
+
+*.sqlite
+*.ddb
+
+gonotes.exe
+gonotes

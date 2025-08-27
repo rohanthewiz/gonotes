@@ -2,7 +2,7 @@ package pages
 
 import (
 	"github.com/rohanthewiz/element"
-	"go_notes_web/models"
+	"gonotes/models"
 )
 
 // RenderNoteCardHTML renders a note card as HTML string

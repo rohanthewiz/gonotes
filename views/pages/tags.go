@@ -2,7 +2,7 @@ package pages
 
 import (
 	"github.com/rohanthewiz/element"
-	"go_notes_web/views"
+	"gonotes/views"
 )
 
 // TagInfo holds information about a tag
@@ -14,7 +14,7 @@ type TagInfo struct {
 // RenderTagsPage renders the tags overview page
 func RenderTagsPage(tags []TagInfo, userGUID string) string {
 	return views.BaseLayout("", "", views.PageWithHeader{
-		UserGUID: userGUID,
+		UserGUID:   userGUID,
 		ActivePage: "tags",
 		Content: TagsContent{
 			Tags: tags,
@@ -34,7 +34,7 @@ func (tc TagsContent) Render(b *element.Builder) (x any) {
 			b.H2().T("Tags"),
 			b.P().F("Manage and explore your %d tags", len(tc.Tags)),
 		),
-		
+
 		// Tags cloud/grid
 		b.DivClass("tags-container").R(
 			tc.renderTags(b),
@@ -51,7 +51,7 @@ func (tc TagsContent) renderTags(b *element.Builder) (x any) {
 		)
 		return
 	}
-	
+
 	// Render tags as a grid of cards
 	b.DivClass("tags-grid").R(
 		element.ForEach(tc.Tags, func(tag TagInfo) {
@@ -69,7 +69,7 @@ func (tc TagsContent) renderTags(b *element.Builder) (x any) {
 						"title", "Rename tag",
 						"@click", "renameTag('"+tag.Name+"')").T("✏️"),
 					b.Button("class", "btn-icon",
-						"title", "Delete tag", 
+						"title", "Delete tag",
 						"hx-delete", "/api/tags/"+tag.Name,
 						"hx-confirm", "Remove this tag from all notes?",
 						"hx-target", "closest .tag-card",
@@ -78,7 +78,7 @@ func (tc TagsContent) renderTags(b *element.Builder) (x any) {
 			)
 		}),
 	)
-	
+
 	// JavaScript for tag operations
 	b.Script().T(`
 		function renameTag(oldName) {
@@ -97,6 +97,6 @@ func (tc TagsContent) renderTags(b *element.Builder) (x any) {
 			}
 		}
 	`)
-	
+
 	return
 }

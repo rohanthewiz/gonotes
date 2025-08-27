@@ -2,8 +2,8 @@ package pages
 
 import (
 	"github.com/rohanthewiz/element"
-	"go_notes_web/models"
-	"go_notes_web/views"
+	"gonotes/models"
+	"gonotes/views"
 	"html"
 	"strings"
 )
@@ -11,10 +11,10 @@ import (
 // RenderNoteView renders a single note view page
 func RenderNoteView(note *models.Note, canEdit bool, userGUID string) string {
 	return views.BaseLayout("", "", views.PageWithHeader{
-		UserGUID: userGUID,
+		UserGUID:   userGUID,
 		ActivePage: "notes",
 		Content: NoteViewContent{
-			Note: note,
+			Note:    note,
 			CanEdit: canEdit,
 		},
 	})
@@ -32,11 +32,11 @@ func (nv NoteViewContent) Render(b *element.Builder) (x any) {
 		b.DivClass("note-header").R(
 			b.H1Class("note-title").T(nv.Note.Title),
 			b.DivClass("note-meta").R(
-				b.Span("class", "note-date").T("Updated: " + nv.Note.UpdatedAt.Format("Jan 2, 2006 3:04 PM")),
+				b.Span("class", "note-date").T("Updated: "+nv.Note.UpdatedAt.Format("Jan 2, 2006 3:04 PM")),
 				nv.renderPrivateIcon(b),
 			),
 		),
-		
+
 		// Note actions bar
 		b.DivClass("note-actions-bar").R(
 			nv.renderEditButton(b),
@@ -46,10 +46,10 @@ func (nv NoteViewContent) Render(b *element.Builder) (x any) {
 				"@click", "exportNote()").T("💾 Export"),
 			nv.renderDeleteButton(b),
 		),
-		
+
 		// Note tags
 		nv.renderTags(b),
-		
+
 		// Note body (rendered markdown)
 		b.DivClass("note-content").R(
 			// Content will be rendered as HTML from markdown
@@ -69,7 +69,7 @@ func (nv NoteViewContent) Render(b *element.Builder) (x any) {
 				}
 			}),
 		),
-		
+
 		// JavaScript for note actions
 		b.Script().T(`
 			function copyToClipboard() {
@@ -81,7 +81,7 @@ func (nv NoteViewContent) Render(b *element.Builder) (x any) {
 			
 			function exportNote() {
 				// Implementation for exporting note
-				window.location.href = '/api/notes/` + nv.Note.GUID + `/export';
+				window.location.href = '/api/notes/`+nv.Note.GUID+`/export';
 			}
 		`),
 	)
@@ -121,7 +121,7 @@ func (nv NoteViewContent) renderTags(b *element.Builder) (x any) {
 	if nv.Note.Tags == "" {
 		return
 	}
-	
+
 	b.DivClass("note-tags-view").R(
 		b.Span("class", "tags-label").T("Tags: "),
 		b.Wrap(func() {

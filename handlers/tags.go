@@ -3,9 +3,9 @@ package handlers
 import (
 	"github.com/rohanthewiz/logger"
 	"github.com/rohanthewiz/rweb"
-	"go_notes_web/models"
-	"go_notes_web/views/pages"
-	"go_notes_web/views/partials"
+	"gonotes/models"
+	"gonotes/views/pages"
+	"gonotes/views/partials"
 	"net/http"
 )
 

@@ -3,8 +3,8 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
-	"go_notes_web/models"
-	"go_notes_web/views/pages"
+	"gonotes/models"
+	"gonotes/views/pages"
 	"net/http"
 	"strconv"
 
@@ -100,7 +100,7 @@ func EditNote(c rweb.Context) error {
 // NewNoteForm displays the form for creating a new note
 func NewNoteForm(c rweb.Context) error {
 	userGUID := getUserGUID(c)
-	
+
 	// Pass nil for new note
 	html := pages.RenderNoteEdit(nil, userGUID)
 	return c.WriteHTML(html)

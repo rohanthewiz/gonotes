@@ -2,17 +2,17 @@ package pages
 
 import (
 	"github.com/rohanthewiz/element"
-	"go_notes_web/models"
-	"go_notes_web/views"
+	"gonotes/models"
+	"gonotes/views"
 )
 
 // RenderDashboard creates the main dashboard page
 func RenderDashboard(notes []models.Note, userGUID string) string {
 	return views.BaseLayout("", "", views.PageWithHeader{
-		UserGUID: userGUID,
+		UserGUID:   userGUID,
 		ActivePage: "dashboard",
 		Content: DashboardContent{
-			Notes: notes,
+			Notes:    notes,
 			UserGUID: userGUID,
 		},
 	})
@@ -33,11 +33,11 @@ func (d DashboardContent) Render(b *element.Builder) (x any) {
 				b.Span("class", "stat").F("Total: %d notes", len(d.Notes)),
 			),
 		),
-		
+
 		// Filter and sort controls
 		b.DivClass("controls-bar").R(
 			b.DivClass("filter-controls").R(
-				b.Select("name", "sort", 
+				b.Select("name", "sort",
 					"class", "sort-select",
 					"hx-get", "/partials/notes-list",
 					"hx-target", "#notes-grid",
@@ -65,12 +65,12 @@ func (d DashboardContent) Render(b *element.Builder) (x any) {
 					"@click", "switchView('list')").T("List"),
 			),
 		),
-		
+
 		// Notes grid/list
 		b.Div("id", "notes-grid", "class", "notes-grid").R(
 			d.renderNotes(b),
 		),
-		
+
 		// Load more button for pagination
 		b.DivClass("load-more-container").R(
 			b.Button("class", "btn btn-secondary",
@@ -93,7 +93,7 @@ func (d DashboardContent) renderNotes(b *element.Builder) (x any) {
 		)
 		return
 	}
-	
+
 	element.ForEach(d.Notes, func(note models.Note) {
 		b.Wrap(func() {
 			element.RenderComponents(b, RenderNoteCard(note))
@@ -118,7 +118,7 @@ func (nc NoteCard) Render(b *element.Builder) (x any) {
 		"hx-get", "/notes/"+nc.Note.GUID,
 		"hx-target", "#content-wrapper",
 		"hx-push-url", "true").R(
-		
+
 		// Note header
 		b.DivClass("note-card-header").R(
 			b.H3Class("note-title").T(nc.Note.Title),
@@ -127,15 +127,15 @@ func (nc NoteCard) Render(b *element.Builder) (x any) {
 				nc.renderPrivateIcon(b),
 			),
 		),
-		
+
 		// Note preview
 		b.DivClass("note-preview").R(
 			b.P().T(nc.truncateText(nc.Note.Body.String, 150)),
 		),
-		
+
 		// Note tags
 		nc.renderTags(b),
-		
+
 		// Note actions
 		b.DivClass("note-actions").R(
 			b.Button("class", "btn-icon",
@@ -169,7 +169,7 @@ func (nc NoteCard) renderTags(b *element.Builder) (x any) {
 	if nc.Note.Tags == "" {
 		return
 	}
-	
+
 	b.DivClass("note-tags").R(
 		b.Wrap(func() {
 			// Parse tags (comma-separated) and render each

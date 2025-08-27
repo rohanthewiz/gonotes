@@ -2,8 +2,8 @@ package pages
 
 import (
 	"github.com/rohanthewiz/element"
-	"go_notes_web/models"
-	"go_notes_web/views"
+	"gonotes/models"
+	"gonotes/views"
 )
 
 // RenderNoteEdit renders the note editor page
@@ -21,12 +21,12 @@ func RenderNoteEdit(note *models.Note, userGUID string) string {
 			margin-bottom: 10px;
 		}
 	`
-	
+
 	return views.BaseLayout(monacoStyles, "", views.PageWithHeader{
-		UserGUID: userGUID,
+		UserGUID:   userGUID,
 		ActivePage: "notes",
 		Content: NoteEditContent{
-			Note: note,
+			Note:  note,
 			IsNew: note == nil,
 		},
 	})
@@ -47,7 +47,7 @@ func (ne NoteEditContent) Render(b *element.Builder) (x any) {
 	noteBody := ""
 	noteTags := ""
 	isPrivate := false
-	
+
 	if !ne.IsNew && ne.Note != nil {
 		formAction = "/api/notes/" + ne.Note.GUID
 		formMethod = "put"
@@ -59,20 +59,20 @@ func (ne NoteEditContent) Render(b *element.Builder) (x any) {
 		noteTags = ne.Note.Tags
 		isPrivate = ne.Note.IsPrivate
 	}
-	
+
 	b.DivClass("note-editor").R(
 		// Editor header
 		b.DivClass("editor-header").R(
 			b.H2().T(ne.getPageTitle()),
 		),
-		
+
 		// Editor form
 		b.Form("id", "note-form",
 			"hx-"+formMethod, formAction,
 			"hx-trigger", "submit",
 			"hx-target", "body",
 			"hx-swap", "innerHTML").R(
-			
+
 			// Title input
 			b.DivClass("form-group").R(
 				b.Label("for", "title").T("Title"),
@@ -84,7 +84,7 @@ func (ne NoteEditContent) Render(b *element.Builder) (x any) {
 					"value", noteTitle,
 					"required", "required"),
 			),
-			
+
 			// Tags input
 			b.DivClass("form-group").R(
 				b.Label("for", "tags").T("Tags (comma-separated)"),
@@ -95,7 +95,7 @@ func (ne NoteEditContent) Render(b *element.Builder) (x any) {
 					"placeholder", "e.g., work, personal, ideas",
 					"value", noteTags),
 			),
-			
+
 			// Privacy toggle
 			b.DivClass("form-group").R(
 				b.Label("class", "checkbox-label").R(
@@ -107,7 +107,7 @@ func (ne NoteEditContent) Render(b *element.Builder) (x any) {
 					b.T(" Private note (encrypted)"),
 				),
 			),
-			
+
 			// Monaco Editor container
 			b.DivClass("form-group").R(
 				b.Label("for", "editor").T("Content (Markdown)"),
@@ -129,7 +129,7 @@ func (ne NoteEditContent) Render(b *element.Builder) (x any) {
 					"name", "body",
 					"style", "display: none").T(noteBody),
 			),
-			
+
 			// Action buttons
 			b.DivClass("form-actions").R(
 				b.Button("type", "submit", "class", "btn btn-primary").T("Save Note"),
@@ -138,11 +138,11 @@ func (ne NoteEditContent) Render(b *element.Builder) (x any) {
 				b.A("href", ne.getCancelUrl(),
 					"class", "btn btn-link").T("Cancel"),
 			),
-			
+
 			// Hidden field for GUID if editing
 			ne.renderGuidField(b, noteGUID),
 		),
-		
+
 		// Monaco Editor initialization script
 		b.Script().T(`
 			// Initialize Monaco Editor
@@ -168,7 +168,7 @@ func (ne NoteEditContent) Render(b *element.Builder) (x any) {
 					// Auto-save after 2 seconds of inactivity
 					clearTimeout(autoSaveTimeout);
 					autoSaveTimeout = setTimeout(() => {
-						if ('` + noteGUID + `' !== '') {
+						if ('`+noteGUID+`' !== '') {
 							saveDraft();
 						}
 					}, 2000);
@@ -191,7 +191,7 @@ func (ne NoteEditContent) Render(b *element.Builder) (x any) {
 			// Save draft function
 			function saveDraft() {
 				const formData = new FormData(document.getElementById('note-form'));
-				fetch('/api/notes/` + noteGUID + `/save', {
+				fetch('/api/notes/`+noteGUID+`/save', {
 					method: 'POST',
 					body: formData
 				}).then(response => {

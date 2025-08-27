@@ -3,9 +3,9 @@ package handlers
 import (
 	"github.com/rohanthewiz/logger"
 	"github.com/rohanthewiz/rweb"
-	"go_notes_web/models"
-	"go_notes_web/views/pages"
-	"go_notes_web/views/partials"
+	"gonotes/models"
+	"gonotes/views/pages"
+	"gonotes/views/partials"
 	"net/http"
 )
 
@@ -13,7 +13,7 @@ import (
 func SearchPage(c rweb.Context) error {
 	userGUID := getUserGUID(c)
 	query := c.Request().QueryParam("q")
-	
+
 	// If query provided, perform search
 	var results []models.Note
 	if query != "" {

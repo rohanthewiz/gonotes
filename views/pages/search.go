@@ -2,17 +2,17 @@ package pages
 
 import (
 	"github.com/rohanthewiz/element"
-	"go_notes_web/models"
-	"go_notes_web/views"
+	"gonotes/models"
+	"gonotes/views"
 )
 
 // RenderSearchPage renders the search page
 func RenderSearchPage(query string, results []models.Note, userGUID string) string {
 	return views.BaseLayout("", "", views.PageWithHeader{
-		UserGUID: userGUID,
+		UserGUID:   userGUID,
 		ActivePage: "search",
 		Content: SearchContent{
-			Query: query,
+			Query:   query,
 			Results: results,
 		},
 	})
@@ -30,14 +30,14 @@ func (sc SearchContent) Render(b *element.Builder) (x any) {
 		b.DivClass("search-header").R(
 			b.H2().T("Search Notes"),
 		),
-		
+
 		// Advanced search form
 		b.Form("id", "advanced-search",
 			"hx-get", "/api/search",
 			"hx-target", "#search-results",
 			"hx-trigger", "submit",
 			"class", "search-form-advanced").R(
-			
+
 			// Search input
 			b.DivClass("form-group").R(
 				b.Label("for", "search-query").T("Search Query"),
@@ -49,7 +49,7 @@ func (sc SearchContent) Render(b *element.Builder) (x any) {
 					"value", sc.Query,
 					"autofocus", "autofocus"),
 			),
-			
+
 			// Search type selector
 			b.DivClass("form-group").R(
 				b.Label("for", "search-type").T("Search In"),
@@ -62,7 +62,7 @@ func (sc SearchContent) Render(b *element.Builder) (x any) {
 					b.Option("value", "tags").T("Tags Only"),
 				),
 			),
-			
+
 			// Date range filters
 			b.DivClass("form-row").R(
 				b.DivClass("form-group col").R(
@@ -80,7 +80,7 @@ func (sc SearchContent) Render(b *element.Builder) (x any) {
 						"class", "form-control"),
 				),
 			),
-			
+
 			// Search button
 			b.DivClass("form-actions").R(
 				b.Button("type", "submit",
@@ -89,7 +89,7 @@ func (sc SearchContent) Render(b *element.Builder) (x any) {
 					"class", "btn btn-secondary").T("Clear"),
 			),
 		),
-		
+
 		// Search results
 		b.Div("id", "search-results", "class", "search-results").R(
 			sc.renderResults(b),
@@ -105,7 +105,7 @@ func (sc SearchContent) renderResults(b *element.Builder) (x any) {
 		)
 		return
 	}
-	
+
 	if len(sc.Results) == 0 {
 		b.DivClass("no-results").R(
 			b.H3().T("No results found"),
@@ -114,12 +114,12 @@ func (sc SearchContent) renderResults(b *element.Builder) (x any) {
 		)
 		return
 	}
-	
+
 	// Results header
 	b.DivClass("results-header").R(
 		b.H3().F("Found %d results for \"%s\"", len(sc.Results), sc.Query),
 	)
-	
+
 	// Results list
 	b.DivClass("results-list").R(
 		element.ForEach(sc.Results, func(note models.Note) {
@@ -128,6 +128,6 @@ func (sc SearchContent) renderResults(b *element.Builder) (x any) {
 			})
 		}),
 	)
-	
+
 	return
 }
