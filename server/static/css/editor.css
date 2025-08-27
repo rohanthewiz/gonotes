@@ -1,0 +1,256 @@
+/* Editor CSS - Monaco editor specific styles */
+
+/* Monaco Editor container */
+#editor-container {
+  position: relative;
+  width: 100%;
+  height: 500px;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: #1e1e1e; /* Dark background for editor */
+}
+
+/* Light theme override */
+.editor-light #editor-container {
+  background: #ffffff;
+}
+
+/* Monaco specific overrides */
+.monaco-editor {
+  border-radius: var(--radius-md);
+}
+
+.monaco-editor .margin {
+  background-color: transparent !important;
+}
+
+.monaco-editor .lines-content {
+  padding-top: var(--spacing-sm);
+}
+
+/* Editor toolbar */
+.editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-sm);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--spacing-sm);
+}
+
+.editor-toolbar .btn {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: 0.75rem;
+  min-width: auto;
+}
+
+.editor-toolbar .separator {
+  width: 1px;
+  background: var(--border-light);
+  margin: 0 var(--spacing-xs);
+}
+
+/* Markdown preview styles */
+.markdown-preview {
+  padding: var(--spacing-lg);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  min-height: 500px;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.markdown-preview h1,
+.markdown-preview h2,
+.markdown-preview h3,
+.markdown-preview h4,
+.markdown-preview h5,
+.markdown-preview h6 {
+  margin-top: var(--spacing-lg);
+  margin-bottom: var(--spacing-md);
+  font-weight: 600;
+}
+
+.markdown-preview h1 { 
+  font-size: 2rem; 
+  border-bottom: 2px solid var(--border-light);
+  padding-bottom: var(--spacing-sm);
+}
+
+.markdown-preview h2 { 
+  font-size: 1.5rem;
+  border-bottom: 1px solid var(--border-light);
+  padding-bottom: var(--spacing-xs);
+}
+
+.markdown-preview h3 { font-size: 1.25rem; }
+.markdown-preview h4 { font-size: 1.125rem; }
+.markdown-preview h5 { font-size: 1rem; }
+.markdown-preview h6 { font-size: 0.875rem; }
+
+.markdown-preview p {
+  margin-bottom: var(--spacing-md);
+  line-height: 1.7;
+}
+
+.markdown-preview ul,
+.markdown-preview ol {
+  margin-bottom: var(--spacing-md);
+  margin-left: var(--spacing-lg);
+}
+
+.markdown-preview li {
+  margin-bottom: var(--spacing-xs);
+}
+
+.markdown-preview code {
+  background: var(--bg-tertiary);
+  color: var(--danger);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.9em;
+}
+
+.markdown-preview pre {
+  background: #2d2d30;
+  color: #cccccc;
+  padding: var(--spacing-md);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  margin-bottom: var(--spacing-md);
+}
+
+.markdown-preview pre code {
+  background: none;
+  color: inherit;
+  padding: 0;
+}
+
+.markdown-preview blockquote {
+  border-left: 4px solid var(--primary);
+  padding-left: var(--spacing-md);
+  margin-left: 0;
+  margin-bottom: var(--spacing-md);
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.markdown-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: var(--spacing-md);
+}
+
+.markdown-preview th,
+.markdown-preview td {
+  padding: var(--spacing-sm);
+  border: 1px solid var(--border-light);
+  text-align: left;
+}
+
+.markdown-preview th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+}
+
+.markdown-preview img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+}
+
+.markdown-preview a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.markdown-preview a:hover {
+  text-decoration: underline;
+}
+
+/* Editor status bar */
+.editor-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-light);
+  border-top: none;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.editor-status .status-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.editor-status .status-saved {
+  color: var(--success);
+}
+
+.editor-status .status-modified {
+  color: var(--warning);
+}
+
+/* Split view for editor and preview */
+.editor-split-view {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-lg);
+  height: 500px;
+}
+
+.editor-split-view #editor-container {
+  height: 100%;
+}
+
+.editor-split-view .markdown-preview {
+  height: 100%;
+}
+
+/* Full screen mode */
+.editor-fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9999;
+  background: var(--bg-primary);
+  padding: var(--spacing-lg);
+}
+
+.editor-fullscreen #editor-container {
+  height: calc(100vh - 120px);
+}
+
+.editor-fullscreen-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-md);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .editor-split-view {
+    grid-template-columns: 1fr;
+  }
+  
+  .editor-split-view .markdown-preview {
+    display: none;
+  }
+  
+  #editor-container {
+    height: 400px;
+  }
+}
