@@ -5,9 +5,10 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"time"
-	"github.com/rohanthewiz/serr"
+	"fmt"
 	"github.com/rohanthewiz/logger"
+	"github.com/rohanthewiz/serr"
+	"time"
 )
 
 // Note represents a note in the system
@@ -62,27 +63,27 @@ func (n *Note) Save(userGUID string) error {
 	n.UpdatedBy = sql.NullString{String: userGUID, Valid: true}
 	n.CreatedAt = time.Now()
 	n.UpdatedAt = time.Now()
-	
+
 	// Use transaction for atomicity
 	tx, err := BeginDualTx()
 	if err != nil {
 		return serr.Wrap(err, "failed to begin transaction")
 	}
 	defer tx.Rollback()
-	
+
 	// Insert note
 	query := `
 		INSERT INTO notes (guid, title, description, body, tags, is_private,
 		                  created_by, updated_by, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	
+
 	err = tx.Exec(query, n.GUID, n.Title, n.Description, n.Body, n.Tags, n.IsPrivate,
-	              n.CreatedBy, n.UpdatedBy, n.CreatedAt, n.UpdatedAt)
+		n.CreatedBy, n.UpdatedBy, n.CreatedAt, n.UpdatedAt)
 	if err != nil {
 		return serr.Wrap(err, "failed to save note")
 	}
-	
+
 	// Create ownership record
 	err = tx.Exec(`
 		INSERT INTO note_users (note_guid, user_guid, permission, shared_by, shared_at)
@@ -91,7 +92,7 @@ func (n *Note) Save(userGUID string) error {
 	if err != nil {
 		return serr.Wrap(err, "failed to create ownership record")
 	}
-	
+
 	return tx.Commit()
 }
 
@@ -99,17 +100,17 @@ func (n *Note) Save(userGUID string) error {
 func (n *Note) Update(userGUID string) error {
 	n.UpdatedBy = sql.NullString{String: userGUID, Valid: true}
 	n.UpdatedAt = time.Now()
-	
+
 	query := `
 		UPDATE notes 
 		SET title = ?, description = ?, body = ?, tags = ?, is_private = ?,
 		    updated_by = ?, updated_at = ?
 		WHERE guid = ?
 	`
-	
+
 	// Use WriteThrough for dual-database consistency
 	err := WriteThrough(query, n.Title, n.Description, n.Body, n.Tags, n.IsPrivate,
-	                   n.UpdatedBy, n.UpdatedAt, n.GUID)
+		n.UpdatedBy, n.UpdatedAt, n.GUID)
 	return serr.Wrap(err, "failed to update note")
 }
 
@@ -120,7 +121,7 @@ func (n *Note) Delete(userGUID string) error {
 		SET deleted_at = ?, updated_by = ?, updated_at = ?
 		WHERE guid = ?
 	`
-	
+
 	now := time.Now()
 	err := WriteThrough(query, now, userGUID, now, n.GUID)
 	return serr.Wrap(err, "failed to delete note")
@@ -134,17 +135,17 @@ func GetNoteByGUID(guid string) (*Note, error) {
 		FROM notes
 		WHERE guid = ? AND deleted_at IS NULL
 	`
-	
+
 	note := &Note{}
 	row := QueryRowFromCache(query, guid)
 	err := row.Scan(&note.ID, &note.GUID, &note.Title, &note.Description,
-	               &note.Body, &note.Tags, &note.IsPrivate, &note.CreatedBy, 
-	               &note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, 
-	               &note.SyncedAt, &note.DeletedAt)
+		&note.Body, &note.Tags, &note.IsPrivate, &note.CreatedBy,
+		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt,
+		&note.SyncedAt, &note.DeletedAt)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to get note by GUID")
 	}
-	
+
 	return note, nil
 }
 
@@ -160,13 +161,13 @@ func GetNotesForUser(userGUID string, limit int, offset int) ([]Note, error) {
 		ORDER BY n.updated_at DESC
 		LIMIT ? OFFSET ?
 	`
-	
+
 	rows, err := ReadFromCache(query, userGUID, limit, offset)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to get notes")
 	}
 	defer rows.Close()
-	
+
 	return scanNotes(rows)
 }
 
@@ -188,13 +189,13 @@ func SearchByTitle(userGUID string, searchQuery string) ([]Note, error) {
 		  AND n.deleted_at IS NULL
 		ORDER BY n.updated_at DESC
 	`
-	
+
 	rows, err := ReadFromCache(query, userGUID, "%"+searchQuery+"%")
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to search notes by title")
 	}
 	defer rows.Close()
-	
+
 	return scanNotes(rows)
 }
 
@@ -211,13 +212,13 @@ func SearchByTag(userGUID string, tag string) ([]Note, error) {
 		  AND n.deleted_at IS NULL
 		ORDER BY n.updated_at DESC
 	`
-	
+
 	rows, err := ReadFromCache(query, userGUID, "%\""+tag+"\"%")
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to search notes by tag")
 	}
 	defer rows.Close()
-	
+
 	return scanNotes(rows)
 }
 
@@ -234,13 +235,13 @@ func SearchByBody(userGUID string, searchQuery string) ([]Note, error) {
 		  AND n.deleted_at IS NULL
 		ORDER BY n.updated_at DESC
 	`
-	
+
 	rows, err := ReadFromCache(query, userGUID, "%"+searchQuery+"%")
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to search notes by body")
 	}
 	defer rows.Close()
-	
+
 	return scanNotes(rows)
 }
 
@@ -257,14 +258,14 @@ func SearchAll(userGUID string, searchQuery string) ([]Note, error) {
 		  AND n.deleted_at IS NULL
 		ORDER BY n.updated_at DESC
 	`
-	
+
 	searchPattern := "%" + searchQuery + "%"
 	rows, err := ReadFromCache(query, userGUID, searchPattern, searchPattern, searchPattern)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to search all notes")
 	}
 	defer rows.Close()
-	
+
 	return scanNotes(rows)
 }
 
@@ -275,7 +276,7 @@ func UserCanEditNote(userGUID, noteGUID string) (bool, error) {
 		FROM note_users
 		WHERE user_guid = ? AND note_guid = ?
 	`
-	
+
 	var permission string
 	err := QueryRowFromCache(query, userGUID, noteGUID).Scan(&permission)
 	if err != nil {
@@ -284,7 +285,7 @@ func UserCanEditNote(userGUID, noteGUID string) (bool, error) {
 		}
 		return false, serr.Wrap(err, "failed to check edit permission")
 	}
-	
+
 	return permission == "write" || permission == "owner", nil
 }
 
@@ -295,13 +296,13 @@ func UserCanReadNote(userGUID, noteGUID string) (bool, error) {
 		FROM note_users
 		WHERE user_guid = ? AND note_guid = ?
 	`
-	
+
 	var count int
 	err := QueryRowFromCache(query, userGUID, noteGUID).Scan(&count)
 	if err != nil {
 		return false, serr.Wrap(err, "failed to check read permission")
 	}
-	
+
 	return count > 0, nil
 }
 
@@ -311,9 +312,9 @@ func scanNotes(rows *sql.Rows) ([]Note, error) {
 	for rows.Next() {
 		var note Note
 		err := rows.Scan(&note.ID, &note.GUID, &note.Title, &note.Description,
-		                &note.Body, &note.Tags, &note.IsPrivate, &note.CreatedBy, 
-		                &note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt,
-		                &note.SyncedAt, &note.DeletedAt)
+			&note.Body, &note.Tags, &note.IsPrivate, &note.CreatedBy,
+			&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt,
+			&note.SyncedAt, &note.DeletedAt)
 		if err != nil {
 			logger.LogErr(err, "failed to scan note")
 			continue
@@ -350,35 +351,58 @@ func GetAllUniqueTags(userGUID string) ([]string, error) {
 		JOIN note_users nu ON n.guid = nu.note_guid
 		WHERE nu.user_guid = ? AND n.deleted_at IS NULL
 	`
-	
+
 	rows, err := ReadFromCache(query, userGUID)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to get unique tags")
 	}
 	defer rows.Close()
-	
+
 	tagMap := make(map[string]bool)
 	for rows.Next() {
 		var tagsJSON string
 		if err := rows.Scan(&tagsJSON); err != nil {
 			continue
 		}
-		
+
 		var tags []string
 		if err := json.Unmarshal([]byte(tagsJSON), &tags); err != nil {
 			continue
 		}
-		
+
 		for _, tag := range tags {
 			tagMap[tag] = true
 		}
 	}
-	
+
 	// Convert map to slice
 	uniqueTags := make([]string, 0, len(tagMap))
 	for tag := range tagMap {
 		uniqueTags = append(uniqueTags, tag)
 	}
-	
+
 	return uniqueTags, nil
+}
+
+// CountNotesWithTag counts how many notes have a specific tag
+func CountNotesWithTag(userGUID, tag string) (int, error) {
+	query := `
+		SELECT COUNT(DISTINCT n.guid)
+		FROM notes n
+		JOIN note_users nu ON n.guid = nu.note_guid
+		WHERE nu.user_guid = ? 
+		AND n.deleted_at IS NULL
+		AND n.tags LIKE ?
+	`
+
+	// Use LIKE to search for tag in JSON array
+	tagPattern := fmt.Sprintf("%%%s%%", tag)
+
+	var count int
+	row := memDB.QueryRow(query, userGUID, tagPattern)
+	if err := row.Scan(&count); err != nil {
+		return 0, serr.Wrap(err, "failed to count notes with tag")
+	}
+
+	return count, nil
 }

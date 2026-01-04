@@ -2,48 +2,49 @@ package models
 
 import (
 	"database/sql"
+	_ "github.com/marcboeker/go-duckdb"
+	"github.com/rohanthewiz/logger"
+	"github.com/rohanthewiz/serr"
 	"sync"
 	"time"
-	_ "github.com/marcboeker/go-duckdb"
-	"github.com/rohanthewiz/serr"
-	"github.com/rohanthewiz/logger"
 )
 
 var (
-	memDB  *sql.DB  // In-memory cache for fast reads
-	diskDB *sql.DB  // Persistent storage
+	memDB  *sql.DB      // In-memory cache for fast reads
+	diskDB *sql.DB      // Persistent storage
 	dbMu   sync.RWMutex // Protect concurrent access during writes
 )
 
 // InitDB initializes both in-memory and disk-based databases
 func InitDB() error {
 	var err error
-	
+
 	// Initialize disk-based database for persistence
 	diskDB, err = sql.Open("duckdb", "./data/notes.db")
 	if err != nil {
 		return serr.Wrap(err, "failed to open disk database")
 	}
-	
+
 	// Initialize in-memory database for fast queries
-	memDB, err = sql.Open("duckdb", ":memory:")
+	// DuckDB's go driver uses empty string or ":memory:" for in-memory databases
+	memDB, err = sql.Open("duckdb", "")
 	if err != nil {
 		return serr.Wrap(err, "failed to open memory database")
 	}
-	
+
 	// Run migrations on both databases
 	if err := migrateBoth(); err != nil {
 		return serr.Wrap(err, "failed to migrate databases")
 	}
-	
+
 	// Load existing data from disk to memory
 	if err := syncDiskToMemory(); err != nil {
 		return serr.Wrap(err, "failed to sync data to memory")
 	}
-	
+
 	// Start background sync worker for periodic consistency checks
 	go startSyncWorker()
-	
+
 	return nil
 }
 
@@ -63,12 +64,12 @@ func migrateBoth() error {
 	if err := migrateDB(diskDB); err != nil {
 		return serr.Wrap(err, "disk migration failed")
 	}
-	
+
 	// Run migration on memory DB
 	if err := migrateDB(memDB); err != nil {
 		return serr.Wrap(err, "memory migration failed")
 	}
-	
+
 	return nil
 }
 
@@ -83,14 +84,14 @@ func syncDiskToMemory() error {
 		INSERT OR IGNORE INTO sessions SELECT * FROM disk_db.sessions;
 		DETACH disk_db;
 	`
-	
+
 	_, err := memDB.Exec(query)
 	if err != nil {
 		// If attach doesn't work, fall back to manual copy
 		logger.LogErr(err, "ATTACH failed, falling back to manual sync")
 		return manualSync()
 	}
-	
+
 	logger.Info("Successfully synced disk data to memory cache")
 	return nil
 }
@@ -98,7 +99,7 @@ func syncDiskToMemory() error {
 // manualSync performs manual table-by-table sync
 func manualSync() error {
 	tables := []string{"users", "notes", "note_users", "sessions"}
-	
+
 	for _, table := range tables {
 		// Check if table exists in disk DB
 		var count int
@@ -107,21 +108,21 @@ func manualSync() error {
 			logger.Debug("Table does not exist yet, skipping", "table", table)
 			continue
 		}
-		
+
 		// Read from disk
 		rows, err := diskDB.Query("SELECT * FROM " + table)
 		if err != nil {
 			logger.LogErr(err, "failed to read from disk", "table", table)
 			continue
 		}
-		
+
 		// Get column names
 		cols, err := rows.Columns()
 		if err != nil {
 			rows.Close()
 			continue
 		}
-		
+
 		// Prepare insert statement for memory DB
 		placeholders := ""
 		for i := range cols {
@@ -130,7 +131,7 @@ func manualSync() error {
 			}
 			placeholders += "?"
 		}
-		
+
 		stmt, err := memDB.Prepare(
 			"INSERT OR IGNORE INTO " + table + " VALUES (" + placeholders + ")")
 		if err != nil {
@@ -138,14 +139,14 @@ func manualSync() error {
 			logger.LogErr(err, "failed to prepare insert", "table", table)
 			continue
 		}
-		
+
 		// Copy rows
 		values := make([]interface{}, len(cols))
 		valuePtrs := make([]interface{}, len(cols))
 		for i := range values {
 			valuePtrs[i] = &values[i]
 		}
-		
+
 		for rows.Next() {
 			if err := rows.Scan(valuePtrs...); err != nil {
 				continue
@@ -154,11 +155,11 @@ func manualSync() error {
 				logger.LogErr(err, "failed to insert into memory", "table", table)
 			}
 		}
-		
+
 		stmt.Close()
 		rows.Close()
 	}
-	
+
 	return nil
 }
 
@@ -166,13 +167,13 @@ func manualSync() error {
 func WriteThrough(query string, args ...interface{}) error {
 	dbMu.Lock()
 	defer dbMu.Unlock()
-	
+
 	// Write to disk first for durability
 	_, err := diskDB.Exec(query, args...)
 	if err != nil {
 		return serr.Wrap(err, "failed to write to disk")
 	}
-	
+
 	// Then update memory cache
 	_, err = memDB.Exec(query, args...)
 	if err != nil {
@@ -181,7 +182,7 @@ func WriteThrough(query string, args ...interface{}) error {
 		// Mark cache as dirty for resync
 		markCacheDirty()
 	}
-	
+
 	return nil
 }
 
@@ -189,14 +190,14 @@ func WriteThrough(query string, args ...interface{}) error {
 func ReadFromCache(query string, args ...interface{}) (*sql.Rows, error) {
 	dbMu.RLock()
 	defer dbMu.RUnlock()
-	
+
 	rows, err := memDB.Query(query, args...)
 	if err != nil {
 		// Fallback to disk on cache miss
 		logger.LogErr(err, "cache read failed, falling back to disk")
 		return diskDB.Query(query, args...)
 	}
-	
+
 	return rows, nil
 }
 
@@ -204,33 +205,34 @@ func ReadFromCache(query string, args ...interface{}) (*sql.Rows, error) {
 func QueryRowFromCache(query string, args ...interface{}) *sql.Row {
 	dbMu.RLock()
 	defer dbMu.RUnlock()
-	
+
 	return memDB.QueryRow(query, args...)
 }
 
 // Transaction wrapper for dual-database writes
 type DualTx struct {
-	diskTx *sql.Tx
-	memTx  *sql.Tx
+	diskTx    *sql.Tx
+	memTx     *sql.Tx
+	committed bool // Track if transaction was committed to prevent double unlock
 }
 
 // BeginDualTx starts a transaction on both databases
 func BeginDualTx() (*DualTx, error) {
 	dbMu.Lock()
-	
+
 	diskTx, err := diskDB.Begin()
 	if err != nil {
 		dbMu.Unlock()
 		return nil, serr.Wrap(err, "failed to begin disk transaction")
 	}
-	
+
 	memTx, err := memDB.Begin()
 	if err != nil {
 		diskTx.Rollback()
 		dbMu.Unlock()
 		return nil, serr.Wrap(err, "failed to begin memory transaction")
 	}
-	
+
 	return &DualTx{
 		diskTx: diskTx,
 		memTx:  memTx,
@@ -243,42 +245,49 @@ func (dt *DualTx) Exec(query string, args ...interface{}) error {
 	if _, err := dt.diskTx.Exec(query, args...); err != nil {
 		return err
 	}
-	
+
 	// Then on memory
 	if _, err := dt.memTx.Exec(query, args...); err != nil {
 		// Log but don't fail
 		logger.LogErr(err, "memory tx exec failed")
 	}
-	
+
 	return nil
 }
 
 // Commit commits both transactions
 func (dt *DualTx) Commit() error {
-	defer dbMu.Unlock()
-	
+	// Ensure we only unlock once and mark as committed
+	defer func() {
+		dt.committed = true
+		dbMu.Unlock()
+	}()
+
 	// Commit disk first
 	if err := dt.diskTx.Commit(); err != nil {
 		dt.memTx.Rollback()
 		return serr.Wrap(err, "failed to commit disk transaction")
 	}
-	
+
 	// Then memory
 	if err := dt.memTx.Commit(); err != nil {
 		logger.LogErr(err, "failed to commit memory transaction")
 		markCacheDirty()
 	}
-	
+
 	return nil
 }
 
 // Rollback rolls back both transactions
 func (dt *DualTx) Rollback() error {
-	defer dbMu.Unlock()
-	
+	// Only unlock if we haven't committed (Commit unlocks the mutex)
+	if !dt.committed {
+		defer dbMu.Unlock()
+	}
+
 	dt.diskTx.Rollback()
 	dt.memTx.Rollback()
-	
+
 	return nil
 }
 
@@ -304,7 +313,7 @@ func isCacheDirty() bool {
 func startSyncWorker() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
-	
+
 	for range ticker.C {
 		if isCacheDirty() {
 			logger.Info("Cache marked dirty, resyncing...")
@@ -323,13 +332,13 @@ func startSyncWorker() {
 func resyncCache() error {
 	dbMu.Lock()
 	defer dbMu.Unlock()
-	
+
 	// Clear memory database
 	tables := []string{"notes", "users", "note_users", "sessions"}
 	for _, table := range tables {
 		_, _ = memDB.Exec("DELETE FROM " + table)
 	}
-	
+
 	// Reload from disk
 	return manualSync()
 }

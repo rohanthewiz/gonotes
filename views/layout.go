@@ -18,16 +18,18 @@ func BaseLayout(styles string, headContent string, bodyComponent element.Compone
 
 			// External libraries from CDN (can be changed to local vendor files)
 			b.Link("rel", "stylesheet", "href", "/static/css/main.css"),
+			b.Link("rel", "stylesheet", "href", "/static/css/layout.css"),
+			b.Link("rel", "stylesheet", "href", "/static/css/components.css"),
 			b.Link("rel", "stylesheet", "href", "/static/css/editor.css"),
-			b.Link("rel", "stylesheet", "href", "/static/vendor/monaco/editor/editor.main.css"),
+			b.Link("rel", "stylesheet", "href", "/static/vendor/monaco/min/vs/editor/editor.main.css"),
 
 			// Alpine.js and HTMX for interactivity
 			b.Script("src", "/static/vendor/alpine.min.js", "defer").R(),
 			b.Script("src", "/static/vendor/htmx.min.js").R(),
-			b.Script("src", "/static/vendor/msgpack.min.js").R(),
+			// b.Script("src", "/static/vendor/msgpack.min.js").R(), // Commented out - not currently used
 
 			// Monaco Editor loader
-			b.Script("src", "/static/vendor/monaco/loader.js").R(),
+			b.Script("src", "/static/vendor/monaco/min/vs/loader.js").R(),
 
 			// Custom styles if provided
 			b.Wrap(func() {
@@ -116,7 +118,7 @@ func (p PageWithHeader) Render(b *element.Builder) (x any) {
 			}),
 
 			// Content
-			b.DivClass("content-wrapper").R(
+			b.Div("id", "content-wrapper", "class", "content-wrapper").R(
 				element.RenderComponents(b, p.Content),
 			),
 		),

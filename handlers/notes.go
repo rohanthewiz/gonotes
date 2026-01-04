@@ -49,25 +49,42 @@ func ViewNote(c rweb.Context) error {
 	guid := c.Request().Param("guid")
 	userGUID := getUserGUID(c)
 
-	// Check permissions
-	canRead, err := models.UserCanReadNote(userGUID, guid)
-	if err != nil || !canRead {
-		c.SetStatus(http.StatusForbidden)
-		return nil
-	}
-
-	// Get the note
+	// Get the note first to check if it exists
 	note, err := models.GetNoteByGUID(guid)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			c.SetStatus(http.StatusNotFound)
 			return nil
 		}
-		return serr.Wrap(err, "failed to get note")
+		logger.LogErr(err, "failed to get note", "guid", guid)
+		c.SetStatus(http.StatusInternalServerError)
+		return nil
+	}
+
+	// Check permissions
+	canRead, err := models.UserCanReadNote(userGUID, guid)
+	if err != nil {
+		logger.LogErr(err, "failed to check read permission", "userGUID", userGUID, "noteGUID", guid)
+		// If there's an error checking permissions, check if user is the owner
+		if note.CreatedBy.Valid && note.CreatedBy.String == userGUID {
+			canRead = true // Creator can always read their own notes
+		} else {
+			c.SetStatus(http.StatusForbidden)
+			return nil
+		}
+	}
+	if !canRead {
+		c.SetStatus(http.StatusForbidden)
+		return nil
 	}
 
 	// Determine if user can edit
-	canEdit, _ := models.UserCanEditNote(userGUID, guid)
+	canEdit := false
+	if note.CreatedBy.Valid && note.CreatedBy.String == userGUID {
+		canEdit = true // Creator can always edit their own notes
+	} else {
+		canEdit, _ = models.UserCanEditNote(userGUID, guid)
+	}
 
 	// Render note view page
 	html := pages.RenderNoteView(note, canEdit, userGUID)

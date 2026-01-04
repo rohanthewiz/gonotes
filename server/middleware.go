@@ -1,11 +1,11 @@
 package server
 
 import (
+	"github.com/rohanthewiz/logger"
+	"github.com/rohanthewiz/rweb"
 	"net/http"
 	"strings"
 	"time"
-	"github.com/rohanthewiz/rweb"
-	"github.com/rohanthewiz/logger"
 )
 
 // CorsMiddleware handles CORS headers for cross-origin requests
@@ -14,13 +14,13 @@ func CorsMiddleware(c rweb.Context) error {
 	c.Response().SetHeader("Access-Control-Allow-Origin", "*")
 	c.Response().SetHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 	c.Response().SetHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
-	
+
 	// Handle preflight OPTIONS requests
 	if c.Request().Method() == "OPTIONS" {
 		c.SetStatus(http.StatusOK)
 		return nil
 	}
-	
+
 	return c.Next()
 }
 
@@ -28,7 +28,7 @@ func CorsMiddleware(c rweb.Context) error {
 func SessionMiddleware(c rweb.Context) error {
 	// Get session cookie from header
 	cookieValue, err := c.GetCookie("session_id")
-	
+
 	if err != nil {
 		// No session cookie - create one for anonymous users
 		sessionID := generateSessionID()
@@ -36,7 +36,7 @@ func SessionMiddleware(c rweb.Context) error {
 		if err != nil {
 			logger.LogErr(err, "failed to set session cookie")
 		}
-		
+
 		// Set default user in context
 		c.Set("user_guid", "default-user-guid")
 		c.Set("session_id", sessionID)
@@ -50,7 +50,7 @@ func SessionMiddleware(c rweb.Context) error {
 		c.Set("user_guid", userGUID)
 		c.Set("session_id", cookieValue)
 	}
-	
+
 	return c.Next()
 }
 
@@ -61,18 +61,18 @@ func SecurityHeadersMiddleware(c rweb.Context) error {
 	c.Response().SetHeader("X-Frame-Options", "DENY")
 	c.Response().SetHeader("X-XSS-Protection", "1; mode=block")
 	c.Response().SetHeader("Referrer-Policy", "strict-origin-when-cross-origin")
-	
+
 	// Content Security Policy - adjust as needed
 	csp := []string{
 		"default-src 'self'",
 		"script-src 'self' 'unsafe-inline' 'unsafe-eval'", // Monaco requires unsafe-eval
 		"style-src 'self' 'unsafe-inline'",
-		"img-src 'self' data: https:",
+		"img-src 'self' data: https: blob:",
 		"font-src 'self' data:",
 		"connect-src 'self'",
 	}
 	c.Response().SetHeader("Content-Security-Policy", strings.Join(csp, "; "))
-	
+
 	return c.Next()
 }
 
@@ -83,9 +83,9 @@ func RateLimitMiddleware(requestsPerMinute int) rweb.Handler {
 		lastSeen time.Time
 		count    int
 	}
-	
+
 	visitors := make(map[string]*visitor)
-	
+
 	return func(c rweb.Context) error {
 		ip := c.Request().Header("X-Forwarded-For")
 		if ip == "" {
@@ -95,7 +95,7 @@ func RateLimitMiddleware(requestsPerMinute int) rweb.Handler {
 			// Fallback to remote address from connection
 			ip = "unknown"
 		}
-		
+
 		// Clean up old entries periodically
 		now := time.Now()
 		for addr, v := range visitors {
@@ -103,7 +103,7 @@ func RateLimitMiddleware(requestsPerMinute int) rweb.Handler {
 				delete(visitors, addr)
 			}
 		}
-		
+
 		// Check rate limit for current IP
 		v, exists := visitors[ip]
 		if !exists {
@@ -121,7 +121,7 @@ func RateLimitMiddleware(requestsPerMinute int) rweb.Handler {
 				v.count = 1
 			}
 		}
-		
+
 		return c.Next()
 	}
 }
@@ -129,17 +129,17 @@ func RateLimitMiddleware(requestsPerMinute int) rweb.Handler {
 // LoggingMiddleware provides detailed request logging
 func LoggingMiddleware(c rweb.Context) error {
 	start := time.Now()
-	
+
 	// Log request details
 	logger.Debug("Request started",
 		"method", c.Request().Method(),
 		"path", c.Request().Path(),
 		"ip", c.Request().Header("X-Forwarded-For"),
 	)
-	
+
 	// Process request
 	err := c.Next()
-	
+
 	// Log response details
 	duration := time.Since(start)
 	logger.Debug("Request completed",
@@ -148,7 +148,7 @@ func LoggingMiddleware(c rweb.Context) error {
 		"duration", duration,
 		"error", err,
 	)
-	
+
 	return err
 }
 

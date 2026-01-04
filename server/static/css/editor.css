@@ -1,14 +1,21 @@
 /* Editor CSS - Monaco editor specific styles */
 
-/* Monaco Editor container */
+/* Monaco Editor container - Enhanced modern style */
 #editor-container {
   position: relative;
   width: 100%;
   height: 500px;
-  border: 1px solid var(--border-medium);
-  border-radius: var(--radius-md);
+  border: 2px solid var(--primary-light);
+  border-radius: 1rem;
   overflow: hidden;
   background: #1e1e1e; /* Dark background for editor */
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.1);
+  transition: all var(--transition-normal);
+}
+
+#editor-container:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.1), 0 4px 12px rgba(16, 185, 129, 0.2);
 }
 
 /* Light theme override */
@@ -29,22 +36,36 @@
   padding-top: var(--spacing-sm);
 }
 
-/* Editor toolbar */
+/* Editor toolbar - Glass morphism effect */
 .editor-toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--spacing-xs);
-  padding: var(--spacing-sm);
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  margin-bottom: var(--spacing-sm);
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  border-radius: 0.75rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 
 .editor-toolbar .btn {
-  padding: var(--spacing-xs) var(--spacing-sm);
-  font-size: 0.75rem;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
   min-width: auto;
+  background: linear-gradient(135deg, var(--bg-primary), var(--bg-tertiary));
+  border: 1px solid var(--primary-light);
+  color: var(--primary-dark);
+  transition: all var(--transition-fast);
+}
+
+.editor-toolbar .btn:hover {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+  transform: translateY(-1px);
 }
 
 .editor-toolbar .separator {
@@ -53,15 +74,16 @@
   margin: 0 var(--spacing-xs);
 }
 
-/* Markdown preview styles */
+/* Markdown preview styles - Enhanced design */
 .markdown-preview {
-  padding: var(--spacing-lg);
-  background: var(--bg-primary);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
+  padding: 1.5rem;
+  background: var(--bg-card);
+  border: 2px solid var(--primary-light);
+  border-radius: 1rem;
   min-height: 500px;
   max-height: 500px;
   overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.1);
 }
 
 .markdown-preview h1,
@@ -77,14 +99,19 @@
 
 .markdown-preview h1 { 
   font-size: 2rem; 
-  border-bottom: 2px solid var(--border-light);
-  padding-bottom: var(--spacing-sm);
+  border-bottom: 2px solid var(--primary-light);
+  padding-bottom: 0.5rem;
+  background: linear-gradient(135deg, var(--text-primary), var(--primary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .markdown-preview h2 { 
   font-size: 1.5rem;
-  border-bottom: 1px solid var(--border-light);
-  padding-bottom: var(--spacing-xs);
+  border-bottom: 1px solid var(--primary-light);
+  padding-bottom: 0.25rem;
+  color: var(--primary-dark);
 }
 
 .markdown-preview h3 { font-size: 1.25rem; }
@@ -108,21 +135,24 @@
 }
 
 .markdown-preview code {
-  background: var(--bg-tertiary);
-  color: var(--danger);
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, var(--surface-overlay), var(--bg-tertiary));
+  color: var(--primary-dark);
+  padding: 3px 8px;
+  border-radius: 0.375rem;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: 0.9em;
+  border: 1px solid var(--primary-light);
 }
 
 .markdown-preview pre {
-  background: #2d2d30;
-  color: #cccccc;
-  padding: var(--spacing-md);
-  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, #1a2f1a, #0d1f0d);
+  color: #10b981;
+  padding: 1rem;
+  border-radius: 0.75rem;
   overflow-x: auto;
-  margin-bottom: var(--spacing-md);
+  margin-bottom: 1rem;
+  border: 1px solid var(--primary-light);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 .markdown-preview pre code {
@@ -133,11 +163,13 @@
 
 .markdown-preview blockquote {
   border-left: 4px solid var(--primary);
-  padding-left: var(--spacing-md);
+  padding: 1rem 1.5rem;
   margin-left: 0;
-  margin-bottom: var(--spacing-md);
+  margin-bottom: 1.5rem;
   color: var(--text-secondary);
   font-style: italic;
+  background: var(--surface-overlay);
+  border-radius: 0 0.5rem 0.5rem 0;
 }
 
 .markdown-preview table {
@@ -154,8 +186,9 @@
 }
 
 .markdown-preview th {
-  background: var(--bg-tertiary);
+  background: linear-gradient(135deg, var(--surface-overlay), var(--bg-tertiary));
   font-weight: 600;
+  color: var(--primary-dark);
 }
 
 .markdown-preview img {
@@ -167,24 +200,30 @@
 .markdown-preview a {
   color: var(--primary);
   text-decoration: none;
+  font-weight: 500;
+  transition: all var(--transition-fast);
 }
 
 .markdown-preview a:hover {
+  color: var(--primary-dark);
   text-decoration: underline;
+  text-decoration-color: var(--primary-light);
+  text-underline-offset: 3px;
 }
 
-/* Editor status bar */
+/* Editor status bar - Modern design */
 .editor-status {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: var(--spacing-xs) var(--spacing-sm);
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-light);
+  padding: 0.5rem 1rem;
+  background: linear-gradient(90deg, var(--surface-overlay), var(--bg-tertiary));
+  border: 1px solid var(--primary-light);
   border-top: none;
-  border-radius: 0 0 var(--radius-md) var(--radius-md);
-  font-size: 0.75rem;
-  color: var(--text-secondary);
+  border-radius: 0 0 1rem 1rem;
+  font-size: 0.8125rem;
+  color: var(--primary);
+  font-weight: 500;
 }
 
 .editor-status .status-item {
@@ -194,11 +233,14 @@
 }
 
 .editor-status .status-saved {
-  color: var(--success);
+  color: var(--primary);
+  font-weight: 600;
 }
 
 .editor-status .status-modified {
-  color: var(--warning);
+  color: var(--accent);
+  font-weight: 600;
+  animation: pulse 2s infinite;
 }
 
 /* Split view for editor and preview */

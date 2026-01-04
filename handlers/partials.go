@@ -62,6 +62,6 @@ func RecentNotesPartial(c rweb.Context) error {
 		return c.WriteHTML("<div>Failed to load recent notes</div>")
 	}
 
-	html := partials.RenderRecentNotes(notes)
+	html := partials.RenderRecentNotes(notes, 10) // Show 10 recent notes
 	return c.WriteHTML(html)
 }

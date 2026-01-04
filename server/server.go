@@ -1,16 +1,17 @@
 package server
 
 import (
+	"gonotes/handlers"
+
 	"github.com/rohanthewiz/logger"
 	"github.com/rohanthewiz/rweb"
-	"gonotes/handlers"
 )
 
 // NewServer creates and configures the RWeb server
 func NewServer() *rweb.Server {
 	// Create server instance with options
 	s := rweb.NewServer(rweb.ServerOptions{
-		Address: ":8080",
+		Address: ":8000",
 		Verbose: true,
 	})
 
@@ -41,6 +42,6 @@ func NewServer() *rweb.Server {
 
 // Run starts the server
 func Run(s *rweb.Server) error {
-	logger.Info("GoNotes Web Server starting on", "address", ":8080")
+	logger.Info("GoNotes Web Server starting on", "address", ":8000")
 	return s.Run()
 }

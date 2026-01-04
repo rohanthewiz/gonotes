@@ -96,6 +96,15 @@ func TagsCloudPartial(c rweb.Context) error {
 		return c.WriteHTML("<div>Failed to load tags</div>")
 	}
 
-	html := partials.RenderTagsCloud(tags)
+	// Convert tags slice to a map with counts
+	// For now, we'll use placeholder counts - in production you'd count actual usage
+	tagCounts := make(map[string]int)
+	for _, tag := range tags {
+		// Get count for each tag (simplified for now)
+		count, _ := models.CountNotesWithTag(userGUID, tag)
+		tagCounts[tag] = count
+	}
+
+	html := partials.RenderTagsCloud(tagCounts)
 	return c.WriteHTML(html)
 }
