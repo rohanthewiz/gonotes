@@ -273,12 +273,9 @@ func RenderNoteEditor(note *models.Note) string {
 func RenderNotification(msgType, message string) string {
 	b := element.NewBuilder()
 
-	b.Div("class", fmt.Sprintf("notification notification-%s", msgType),
-		"x-data", "{ show: true }",
-		"x-show", "show",
-		"x-init", "setTimeout(() => show = false, 5000)").R(
+	b.Div("class", fmt.Sprintf("notification notification-%s auto-dismiss", msgType)).R(
 		b.Span("class", "notification-message").T(message),
-		b.Button("class", "notification-close", "@click", "show = false").T("×"),
+		b.Button("class", "notification-close", "onclick", "this.parentElement.remove()").T("×"),
 	)
 
 	return b.String()

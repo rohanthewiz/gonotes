@@ -41,9 +41,9 @@ func (nv NoteViewContent) Render(b *element.Builder) (x any) {
 		b.DivClass("note-actions-bar").R(
 			nv.renderEditButton(b),
 			b.Button("class", "btn btn-secondary",
-				"@click", "copyToClipboard()").T("📋 Copy"),
+				"onclick", "copyToClipboard()").T("📋 Copy"),
 			b.Button("class", "btn btn-secondary",
-				"@click", "exportNote()").T("💾 Export"),
+				"onclick", "exportNote()").T("💾 Export"),
 			nv.renderDeleteButton(b),
 		),
 

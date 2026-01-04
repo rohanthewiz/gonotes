@@ -23,8 +23,7 @@ func BaseLayout(styles string, headContent string, bodyComponent element.Compone
 			b.Link("rel", "stylesheet", "href", "/static/css/editor.css"),
 			b.Link("rel", "stylesheet", "href", "/static/vendor/monaco/min/vs/editor/editor.main.css"),
 
-			// Alpine.js and HTMX for interactivity
-			b.Script("src", "/static/vendor/alpine.min.js", "defer").R(),
+			// HTMX for server-driven interactivity
 			b.Script("src", "/static/vendor/htmx.min.js").R(),
 			// b.Script("src", "/static/vendor/msgpack.min.js").R(), // Commented out - not currently used
 
@@ -45,7 +44,7 @@ func BaseLayout(styles string, headContent string, bodyComponent element.Compone
 				}
 			}),
 		),
-		b.Body("x-data", "{sidebarOpen: true}").R(
+		b.Body().R(
 			element.RenderComponents(b, bodyComponent),
 
 			// Main application JavaScript

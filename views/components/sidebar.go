@@ -12,13 +12,12 @@ type Sidebar struct {
 }
 
 func (s Sidebar) Render(b *element.Builder) (x any) {
-	b.Aside("id", "sidebar", 
-		"class", "sidebar",
-		":class", "{'sidebar-collapsed': !sidebarOpen}").R(
-		
+	b.Aside("id", "sidebar",
+		"class", "sidebar").R(
+
 		// Toggle button
 		b.Button("class", "sidebar-toggle",
-			"@click", "sidebarOpen = !sidebarOpen").R(
+			"onclick", "toggleSidebar()").R(
 			b.T(`<svg width="20" height="20" fill="currentColor" viewBox="0 0 20 20">
 				<path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd"/>
 			</svg>`),
@@ -82,12 +81,12 @@ func (s Sidebar) Render(b *element.Builder) (x any) {
 				"hx-get", "/api/export",
 				"hx-swap", "none").T("Export Notes"),
 			b.Button("class", "btn btn-sm btn-secondary",
-				"@click", "$refs.importFile.click()").T("Import Notes"),
+				"onclick", "triggerImportFile()").T("Import Notes"),
 			b.Input("type", "file",
-				"x-ref", "importFile",
+				"id", "import-file-input",
 				"style", "display: none",
 				"accept", ".json,.md",
-				"@change", "handleImport($event)"),
+				"onchange", "handleImport(event)"),
 		),
 	)
 	return

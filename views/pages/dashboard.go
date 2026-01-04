@@ -59,10 +59,10 @@ func (d DashboardContent) Render(b *element.Builder) (x any) {
 			b.DivClass("view-controls").R(
 				b.Button("class", "btn-view active",
 					"data-view", "grid",
-					"@click", "switchView('grid')").T("Grid"),
+					"onclick", "switchView('grid')").T("Grid"),
 				b.Button("class", "btn-view",
 					"data-view", "list",
-					"@click", "switchView('list')").T("List"),
+					"onclick", "switchView('list')").T("List"),
 			),
 		),
 
@@ -142,7 +142,7 @@ func (nc NoteCard) Render(b *element.Builder) (x any) {
 				"hx-get", "/notes/"+nc.Note.GUID+"/edit",
 				"hx-target", "#content-wrapper",
 				"hx-push-url", "true",
-				"@click.stop", "").R(
+				"onclick", "event.stopPropagation()").R(
 				b.T("✏️"),
 			),
 			b.Button("class", "btn-icon",
@@ -150,7 +150,7 @@ func (nc NoteCard) Render(b *element.Builder) (x any) {
 				"hx-confirm", "Are you sure you want to delete this note?",
 				"hx-target", "closest .note-card",
 				"hx-swap", "outerHTML",
-				"@click.stop", "").R(
+				"onclick", "event.stopPropagation()").R(
 				b.T("🗑️"),
 			),
 		),

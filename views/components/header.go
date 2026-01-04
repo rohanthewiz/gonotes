@@ -25,12 +25,11 @@ func (h Header) Render(b *element.Builder) (x any) {
 					"hx-target", "#search-results",
 					"hx-trigger", "input changed delay:300ms, submit",
 					"class", "search-form").R(
-					b.Input("type", "search", 
+					b.Input("type", "search",
 						"name", "q",
 						"placeholder", "Search notes...",
 						"class", "search-input",
-						"x-data", "{}",
-						"@keydown.escape", "$el.value = ''"),
+						"onkeydown", "if(event.key==='Escape') this.value=''"),
 				),
 			),
 			
@@ -46,7 +45,7 @@ func (h Header) Render(b *element.Builder) (x any) {
 				
 				// Settings/preferences
 				b.Button("class", "btn btn-icon",
-					"@click", "showPreferences = true",
+					"onclick", "showPreferences()",
 					"title", "Settings").R(
 					// Settings icon SVG
 					b.T(`<svg width="20" height="20" fill="currentColor" viewBox="0 0 20 20">

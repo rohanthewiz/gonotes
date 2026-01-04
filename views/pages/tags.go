@@ -67,7 +67,7 @@ func (tc TagsContent) renderTags(b *element.Builder) (x any) {
 				b.DivClass("tag-actions").R(
 					b.Button("class", "btn-icon",
 						"title", "Rename tag",
-						"@click", "renameTag('"+tag.Name+"')").T("✏️"),
+						"onclick", "renameTag('"+tag.Name+"')").T("✏️"),
 					b.Button("class", "btn-icon",
 						"title", "Delete tag",
 						"hx-delete", "/api/tags/"+tag.Name,
