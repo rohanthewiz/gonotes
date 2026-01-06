@@ -1,6 +1,7 @@
 package main
 
 import (
+	"gonotes/models"
 	"gonotes/web"
 	"log"
 
@@ -11,11 +12,11 @@ func main() {
 	// Initialize logger
 	logger.SetLogLevel("info")
 
-	// Initialize database with dual-database architecture
-	// if err := models.InitDB(); err != nil {
-	// 	log.Fatal("Failed to initialize database:", err)
-	// }
-	// defer models.CloseDB()
+	// Initialize DuckDB database and create tables
+	if err := models.InitDB(); err != nil {
+		log.Fatal("Failed to initialize database:", err)
+	}
+	defer models.CloseDB()
 
 	// Start server
 	srv := web.NewServer()
