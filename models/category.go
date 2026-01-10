@@ -95,7 +95,7 @@ func (c *Category) ToOutput() CategoryOutput {
 // CreateCategory creates a new category in both disk and cache databases
 func CreateCategory(input CategoryInput) (*Category, error) {
 	if input.Name == "" {
-		return nil, serr.NewErr("category name is required")
+		return nil, serr.New("category name is required")
 	}
 
 	// Convert subcategories to JSON string
@@ -167,7 +167,7 @@ func GetCategory(id int64) (*Category, error) {
 		&category.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
-		return nil, serr.NewErr("category not found")
+		return nil, serr.New("category not found")
 	}
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to get category")
@@ -221,7 +221,7 @@ func ListCategories(limit, offset int) ([]Category, error) {
 // UpdateCategory updates a category in both disk and cache databases
 func UpdateCategory(id int64, input CategoryInput) (*Category, error) {
 	if input.Name == "" {
-		return nil, serr.NewErr("category name is required")
+		return nil, serr.New("category name is required")
 	}
 
 	// Verify category exists
@@ -318,7 +318,7 @@ type NoteCategory struct {
 // AddCategoryToNote adds a category to a note
 func AddCategoryToNote(noteID, categoryID int64) error {
 	// Verify note exists
-	_, err := GetNote(noteID)
+	_, err := GetNoteByID(noteID)
 	if err != nil {
 		return err
 	}
@@ -337,7 +337,7 @@ func AddCategoryToNote(noteID, categoryID int64) error {
 		return serr.Wrap(err, "failed to check existing relationship")
 	}
 	if count > 0 {
-		return serr.NewErr("category already added to this note")
+		return serr.New("category already added to this note")
 	}
 
 	// Insert into disk database first
@@ -371,7 +371,7 @@ func RemoveCategoryFromNote(noteID, categoryID int64) error {
 		return serr.Wrap(err, "failed to get rows affected")
 	}
 	if rowsAffected == 0 {
-		return serr.NewErr("relationship not found")
+		return serr.New("relationship not found")
 	}
 
 	// Delete from cache database

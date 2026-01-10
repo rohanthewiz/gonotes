@@ -3,6 +3,8 @@ package models
 import (
 	"database/sql"
 	"time"
+
+	"github.com/rohanthewiz/serr"
 )
 
 // Note represents a note in the system. The model is designed to support:
