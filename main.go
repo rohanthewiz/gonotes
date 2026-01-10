@@ -3,7 +3,7 @@ package main
 import (
 	"gonotes/models"
 	"gonotes/web"
-	"log"
+	"os"
 
 	"github.com/rohanthewiz/logger"
 )
@@ -14,12 +14,14 @@ func main() {
 
 	// Initialize DuckDB database and create tables
 	if err := models.InitDB(); err != nil {
-		log.Fatal("Failed to initialize database:", err)
+		logger.LogErr(err, "Failed to initialize database")
+		os.Exit(1)
 	}
 	defer models.CloseDB()
 
 	// Start server
 	srv := web.NewServer()
 	logger.Info("Starting GoNotes Web on port 8080")
-	log.Fatal(web.Run(srv))
+
+	logger.LogErr(web.Run(srv))
 }
