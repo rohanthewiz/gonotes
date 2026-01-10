@@ -138,7 +138,8 @@ func initCacheDB() error {
 	var err error
 
 	// Open in-memory DuckDB connection
-	cacheDB, err = sql.Open("duckdb", ":memory:")
+	// Note: Empty string creates an in-memory database in go-duckdb
+	cacheDB, err = sql.Open("duckdb", "")
 	if err != nil {
 		return serr.Wrap(err, "failed to open in-memory DuckDB connection")
 	}
