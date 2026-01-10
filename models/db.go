@@ -221,20 +221,8 @@ func syncCacheFromDisk() error {
 		return serr.Wrap(err, "error iterating notes from disk")
 	}
 
-	// Sync the sequence to match the disk database's next value
-	// Query the current sequence value from disk
-	var nextVal int64
-	err = db.QueryRow("SELECT nextval('notes_id_seq')").Scan(&nextVal)
-	if err != nil {
-		return serr.Wrap(err, "failed to get next sequence value from disk")
-	}
-
-	// Set the cache sequence to the same value
-	// We need to set it to nextVal - 1 because we just consumed a value by calling nextval
-	_, err = cacheDB.Exec("SELECT setval('notes_id_seq', ?)", nextVal-1)
-	if err != nil {
-		return serr.Wrap(err, "failed to sync sequence in cache")
-	}
+	// Note: Sequence syncing is not needed for the cache since all inserts
+	// use explicit IDs from the disk database (source of truth)
 
 	logger.Info("Cache synchronized from disk", "notes_count", count)
 
@@ -299,17 +287,8 @@ func syncCategoriesFromDisk() (int, error) {
 		return 0, serr.Wrap(err, "error iterating categories from disk")
 	}
 
-	// Sync the sequence
-	var nextVal int64
-	err = db.QueryRow("SELECT nextval('categories_id_seq')").Scan(&nextVal)
-	if err != nil {
-		return 0, serr.Wrap(err, "failed to get next sequence value for categories from disk")
-	}
-
-	_, err = cacheDB.Exec("SELECT setval('categories_id_seq', ?)", nextVal-1)
-	if err != nil {
-		return 0, serr.Wrap(err, "failed to sync categories sequence in cache")
-	}
+	// Note: Sequence syncing is not needed for the cache since all inserts
+	// use explicit IDs from the disk database (source of truth)
 
 	return count, nil
 }
