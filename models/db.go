@@ -71,6 +71,17 @@ func createTables() error {
 	if err != nil {
 		return serr.Wrap(err, "failed to create notes table")
 	}
+
+	_, err = db.Exec(CreateCategoriesTableSQL)
+	if err != nil {
+		return serr.Wrap(err, "failed to create categories table")
+	}
+
+	_, err = db.Exec(CreateNoteCategoriesTableSQL)
+	if err != nil {
+		return serr.Wrap(err, "failed to create note_categories table")
+	}
+
 	return nil
 }
 
@@ -141,6 +152,16 @@ func initCacheDB() error {
 	_, err = cacheDB.Exec(CreateNotesTableSQL)
 	if err != nil {
 		return serr.Wrap(err, "failed to create notes table in cache")
+	}
+
+	_, err = cacheDB.Exec(CreateCategoriesTableSQL)
+	if err != nil {
+		return serr.Wrap(err, "failed to create categories table in cache")
+	}
+
+	_, err = cacheDB.Exec(CreateNoteCategoriesTableSQL)
+	if err != nil {
+		return serr.Wrap(err, "failed to create note_categories table in cache")
 	}
 
 	logger.Info("Cache database initialized")
@@ -215,7 +236,126 @@ func syncCacheFromDisk() error {
 	}
 
 	logger.Info("Cache synchronized from disk", "notes_count", count)
+
+	// Sync categories
+	categoriesCount, err := syncCategoriesFromDisk()
+	if err != nil {
+		return serr.Wrap(err, "failed to sync categories from disk")
+	}
+	logger.Info("Categories synchronized from disk", "categories_count", categoriesCount)
+
+	// Sync note_categories relationships
+	noteCategoriesCount, err := syncNoteCategoriesFromDisk()
+	if err != nil {
+		return serr.Wrap(err, "failed to sync note_categories from disk")
+	}
+	logger.Info("Note-category relationships synchronized from disk", "relationships_count", noteCategoriesCount)
+
 	return nil
+}
+
+// syncCategoriesFromDisk loads all categories from the disk database into the cache.
+func syncCategoriesFromDisk() (int, error) {
+	query := `
+		SELECT id, name, description, subcategories, created_at, updated_at
+		FROM categories
+	`
+
+	rows, err := db.Query(query)
+	if err != nil {
+		return 0, serr.Wrap(err, "failed to query categories from disk")
+	}
+	defer rows.Close()
+
+	insertQuery := `
+		INSERT INTO categories (id, name, description, subcategories, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`
+
+	count := 0
+	for rows.Next() {
+		var category Category
+
+		err := rows.Scan(
+			&category.ID, &category.Name, &category.Description,
+			&category.Subcategories, &category.CreatedAt, &category.UpdatedAt,
+		)
+		if err != nil {
+			return 0, serr.Wrap(err, "failed to scan category from disk")
+		}
+
+		_, err = cacheDB.Exec(insertQuery,
+			category.ID, category.Name, category.Description,
+			category.Subcategories, category.CreatedAt, category.UpdatedAt,
+		)
+		if err != nil {
+			return 0, serr.Wrap(err, "failed to insert category into cache")
+		}
+		count++
+	}
+
+	if err = rows.Err(); err != nil {
+		return 0, serr.Wrap(err, "error iterating categories from disk")
+	}
+
+	// Sync the sequence
+	var nextVal int64
+	err = db.QueryRow("SELECT nextval('categories_id_seq')").Scan(&nextVal)
+	if err != nil {
+		return 0, serr.Wrap(err, "failed to get next sequence value for categories from disk")
+	}
+
+	_, err = cacheDB.Exec("SELECT setval('categories_id_seq', ?)", nextVal-1)
+	if err != nil {
+		return 0, serr.Wrap(err, "failed to sync categories sequence in cache")
+	}
+
+	return count, nil
+}
+
+// syncNoteCategoriesFromDisk loads all note-category relationships from the disk database into the cache.
+func syncNoteCategoriesFromDisk() (int, error) {
+	query := `
+		SELECT note_id, category_id, created_at
+		FROM note_categories
+	`
+
+	rows, err := db.Query(query)
+	if err != nil {
+		return 0, serr.Wrap(err, "failed to query note_categories from disk")
+	}
+	defer rows.Close()
+
+	insertQuery := `
+		INSERT INTO note_categories (note_id, category_id, created_at)
+		VALUES (?, ?, ?)
+	`
+
+	count := 0
+	for rows.Next() {
+		var noteCategory NoteCategory
+
+		err := rows.Scan(
+			&noteCategory.NoteID, &noteCategory.CategoryID, &noteCategory.CreatedAt,
+		)
+		if err != nil {
+			return 0, serr.Wrap(err, "failed to scan note_category from disk")
+		}
+
+		_, err = cacheDB.Exec(insertQuery,
+			noteCategory.NoteID, noteCategory.CategoryID, noteCategory.CreatedAt,
+		)
+		if err != nil {
+			return 0, serr.Wrap(err, "failed to insert note_category into cache")
+		}
+		count++
+	}
+
+	if err = rows.Err(); err != nil {
+		return 0, serr.Wrap(err, "error iterating note_categories from disk")
+	}
+
+	return count, nil
 }
 
 // InitTestDB initializes the database with a custom path for testing.

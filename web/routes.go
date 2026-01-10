@@ -34,4 +34,17 @@ func setupRoutes(s *rweb.Server) {
 	s.Get("/api/v1/notes/:id", api.GetNote)       // Get a single note by ID
 	s.Put("/api/v1/notes/:id", api.UpdateNote)    // Update a note by ID
 	s.Delete("/api/v1/notes/:id", api.DeleteNote) // Soft delete a note by ID
+
+	// Categories CRUD endpoints following RESTful conventions
+	s.Post("/api/v1/categories", api.CreateCategory)       // Create a new category
+	s.Get("/api/v1/categories", api.ListCategories)        // List all categories (with pagination)
+	s.Get("/api/v1/categories/:id", api.GetCategory)       // Get a single category by ID
+	s.Put("/api/v1/categories/:id", api.UpdateCategory)    // Update a category by ID
+	s.Delete("/api/v1/categories/:id", api.DeleteCategory) // Delete a category by ID
+
+	// Note-Category relationship endpoints
+	s.Post("/api/v1/notes/:id/categories/:category_id", api.AddCategoryToNote)       // Add a category to a note
+	s.Delete("/api/v1/notes/:id/categories/:category_id", api.RemoveCategoryFromNote) // Remove a category from a note
+	s.Get("/api/v1/notes/:id/categories", api.GetNoteCategories)                     // Get all categories for a note
+	s.Get("/api/v1/categories/:id/notes", api.GetCategoryNotes)                       // Get all notes for a category
 }
