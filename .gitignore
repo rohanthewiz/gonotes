@@ -12,6 +12,7 @@ test_db/
 
 *.sqlite
 *.ddb
+data/
 
 gonotes.exe
 gonotes
