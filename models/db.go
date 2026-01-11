@@ -172,6 +172,11 @@ func initCacheDB() error {
 // syncCacheFromDisk loads all data from the disk database into the cache.
 // This ensures the cache is up-to-date with the source of truth.
 // Critical: We must preserve the exact IDs from disk to maintain consistency.
+//
+// Encryption handling:
+// - Private notes are stored encrypted on disk (body + encryption_iv)
+// - When syncing to cache, we decrypt the body so cache has plaintext
+// - This enables fast reads from cache without decryption overhead
 func syncCacheFromDisk() error {
 	// Query all notes from disk (including soft-deleted ones for complete sync)
 	query := `
@@ -206,8 +211,23 @@ func syncCacheFromDisk() error {
 			return serr.Wrap(err, "failed to scan note from disk")
 		}
 
+		// For private notes with encryption enabled, decrypt the body before caching
+		// This keeps the cache in plaintext for fast reads
+		cacheBody := note.Body
+		if note.IsPrivate && IsEncryptionEnabled() && note.Body.Valid && note.EncryptionIV.Valid {
+			decryptedBody, err := DecryptNoteBody(note.Body.String, note.EncryptionIV.String)
+			if err != nil {
+				// Log error but continue - corrupted notes shouldn't block entire sync
+				// The note will have encrypted body in cache (readable but garbled)
+				logger.LogErr(err, "failed to decrypt private note body during cache sync",
+					"note_id", note.ID, "guid", note.GUID)
+			} else {
+				cacheBody = sql.NullString{String: decryptedBody, Valid: true}
+			}
+		}
+
 		_, err = cacheDB.Exec(insertQuery,
-			note.ID, note.GUID, note.Title, note.Description, note.Body,
+			note.ID, note.GUID, note.Title, note.Description, cacheBody,
 			note.Tags, note.IsPrivate, note.EncryptionIV, note.CreatedBy,
 			note.UpdatedBy, note.CreatedAt, note.UpdatedAt, note.SyncedAt, note.DeletedAt,
 		)
