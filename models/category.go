@@ -24,11 +24,14 @@ CREATE TABLE IF NOT EXISTS categories (
 `
 
 // CreateNoteCategoriesTableSQL returns the DDL statement for creating the note_categories join table.
+// The subcategories column stores a JSON array of subcategory names that apply to this note-category
+// relationship, enabling queries like {"category": "k8s", "subcategories": ["pod", "replicaset"]}.
 const CreateNoteCategoriesTableSQL = `
 CREATE TABLE IF NOT EXISTS note_categories (
-    note_id     BIGINT NOT NULL,
-    category_id BIGINT NOT NULL,
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    note_id       BIGINT NOT NULL,
+    category_id   BIGINT NOT NULL,
+    subcategories VARCHAR,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (note_id, category_id),
     FOREIGN KEY (note_id) REFERENCES notes(id),
     FOREIGN KEY (category_id) REFERENCES categories(id)
@@ -317,15 +320,51 @@ func DeleteCategory(id int64) error {
 	return nil
 }
 
-// NoteCategory represents the many-to-many relationship between notes and categories
+// NoteCategory represents the many-to-many relationship between notes and categories.
+// Subcategories is a JSON array stored as a string, allowing a note to be associated
+// with specific subcategories within a category.
 type NoteCategory struct {
-	NoteID     int64     `json:"note_id"`
-	CategoryID int64     `json:"category_id"`
-	CreatedAt  time.Time `json:"created_at"`
+	NoteID        int64          `json:"note_id"`
+	CategoryID    int64          `json:"category_id"`
+	Subcategories sql.NullString `json:"subcategories,omitempty"` // JSON array of subcategory names
+	CreatedAt     time.Time      `json:"created_at"`
 }
 
-// AddCategoryToNote adds a category to a note
+// NoteCategoryOutput is used for API responses with proper null handling
+type NoteCategoryOutput struct {
+	NoteID        int64     `json:"note_id"`
+	CategoryID    int64     `json:"category_id"`
+	Subcategories []string  `json:"subcategories,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// ToOutput converts a NoteCategory to NoteCategoryOutput for API responses
+func (nc *NoteCategory) ToOutput() NoteCategoryOutput {
+	output := NoteCategoryOutput{
+		NoteID:     nc.NoteID,
+		CategoryID: nc.CategoryID,
+		CreatedAt:  nc.CreatedAt,
+	}
+
+	if nc.Subcategories.Valid && nc.Subcategories.String != "" {
+		var subcats []string
+		if err := json.Unmarshal([]byte(nc.Subcategories.String), &subcats); err == nil {
+			output.Subcategories = subcats
+		}
+	}
+
+	return output
+}
+
+// AddCategoryToNote adds a category to a note without subcategories.
+// For adding with subcategories, use AddCategoryToNoteWithSubcategories.
 func AddCategoryToNote(noteID, categoryID int64) error {
+	return AddCategoryToNoteWithSubcategories(noteID, categoryID, nil)
+}
+
+// AddCategoryToNoteWithSubcategories adds a category to a note with optional subcategories.
+// The subcategories slice can be nil or empty for no subcategories.
+func AddCategoryToNoteWithSubcategories(noteID, categoryID int64, subcategories []string) error {
 	// Verify note exists (GetNoteByID returns nil, nil if not found)
 	note, err := GetNoteByID(noteID)
 	if err != nil {
@@ -352,18 +391,67 @@ func AddCategoryToNote(noteID, categoryID int64) error {
 		return serr.New("category already added to this note")
 	}
 
+	// Convert subcategories to JSON string
+	var subcatsJSON sql.NullString
+	if len(subcategories) > 0 {
+		jsonBytes, err := json.Marshal(subcategories)
+		if err != nil {
+			return serr.Wrap(err, "failed to marshal subcategories")
+		}
+		subcatsJSON = sql.NullString{String: string(jsonBytes), Valid: true}
+	}
+
 	// Insert into disk database first
-	query := `INSERT INTO note_categories (note_id, category_id, created_at)
-		VALUES (?, ?, CURRENT_TIMESTAMP)`
-	_, err = db.Exec(query, noteID, categoryID)
+	query := `INSERT INTO note_categories (note_id, category_id, subcategories, created_at)
+		VALUES (?, ?, ?, CURRENT_TIMESTAMP)`
+	_, err = db.Exec(query, noteID, categoryID, subcatsJSON)
 	if err != nil {
 		return serr.Wrap(err, "failed to add category to note in disk database")
 	}
 
 	// Insert into cache database
-	_, cacheErr := cacheDB.Exec(query, noteID, categoryID)
+	_, cacheErr := cacheDB.Exec(query, noteID, categoryID, subcatsJSON)
 	if cacheErr != nil {
 		return serr.Wrap(cacheErr, "relationship created on disk but cache update failed")
+	}
+
+	return nil
+}
+
+// UpdateNoteCategorySubcategories updates the subcategories for an existing note-category relationship.
+func UpdateNoteCategorySubcategories(noteID, categoryID int64, subcategories []string) error {
+	// Check if relationship exists
+	var count int
+	checkQuery := `SELECT COUNT(*) FROM note_categories WHERE note_id = ? AND category_id = ?`
+	err := cacheDB.QueryRow(checkQuery, noteID, categoryID).Scan(&count)
+	if err != nil {
+		return serr.Wrap(err, "failed to check existing relationship")
+	}
+	if count == 0 {
+		return serr.New("relationship not found")
+	}
+
+	// Convert subcategories to JSON string
+	var subcatsJSON sql.NullString
+	if len(subcategories) > 0 {
+		jsonBytes, err := json.Marshal(subcategories)
+		if err != nil {
+			return serr.Wrap(err, "failed to marshal subcategories")
+		}
+		subcatsJSON = sql.NullString{String: string(jsonBytes), Valid: true}
+	}
+
+	// Update disk database first
+	query := `UPDATE note_categories SET subcategories = ? WHERE note_id = ? AND category_id = ?`
+	_, err = db.Exec(query, subcatsJSON, noteID, categoryID)
+	if err != nil {
+		return serr.Wrap(err, "failed to update subcategories in disk database")
+	}
+
+	// Update cache database
+	_, cacheErr := cacheDB.Exec(query, subcatsJSON, noteID, categoryID)
+	if cacheErr != nil {
+		return serr.Wrap(cacheErr, "subcategories updated on disk but cache update failed")
 	}
 
 	return nil
@@ -476,6 +564,154 @@ func GetCategoryNotes(categoryID int64) ([]Note, error) {
 
 	if err := rows.Err(); err != nil {
 		return nil, serr.Wrap(err, "error iterating category notes")
+	}
+
+	return notes, nil
+}
+
+// GetCategoryByName retrieves a category by its name from cache.
+// Returns nil, nil if the category doesn't exist.
+func GetCategoryByName(name string) (*Category, error) {
+	query := `SELECT id, name, description, subcategories, created_at, updated_at
+		FROM categories WHERE name = ?`
+
+	var category Category
+	err := cacheDB.QueryRow(query, name).Scan(
+		&category.ID,
+		&category.Name,
+		&category.Description,
+		&category.Subcategories,
+		&category.CreatedAt,
+		&category.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, serr.Wrap(err, "failed to get category by name")
+	}
+
+	return &category, nil
+}
+
+// GetNotesByCategoryName retrieves all notes that belong to the specified category name.
+// Returns empty slice if the category doesn't exist or has no notes.
+func GetNotesByCategoryName(categoryName string) ([]Note, error) {
+	query := `SELECT n.id, n.guid, n.title, n.description, n.body, n.tags,
+		n.is_private, n.encryption_iv, n.created_by, n.updated_by,
+		n.created_at, n.updated_at, n.synced_at, n.deleted_at
+		FROM notes n
+		INNER JOIN note_categories nc ON n.id = nc.note_id
+		INNER JOIN categories c ON nc.category_id = c.id
+		WHERE c.name = ? AND n.deleted_at IS NULL
+		ORDER BY n.created_at DESC`
+
+	rows, err := cacheDB.Query(query, categoryName)
+	if err != nil {
+		return nil, serr.Wrap(err, "failed to get notes by category name")
+	}
+	defer rows.Close()
+
+	var notes []Note
+	for rows.Next() {
+		var note Note
+		err := rows.Scan(
+			&note.ID,
+			&note.GUID,
+			&note.Title,
+			&note.Description,
+			&note.Body,
+			&note.Tags,
+			&note.IsPrivate,
+			&note.EncryptionIV,
+			&note.CreatedBy,
+			&note.UpdatedBy,
+			&note.CreatedAt,
+			&note.UpdatedAt,
+			&note.SyncedAt,
+			&note.DeletedAt,
+		)
+		if err != nil {
+			return nil, serr.Wrap(err, "failed to scan note")
+		}
+		notes = append(notes, note)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, serr.Wrap(err, "error iterating notes")
+	}
+
+	return notes, nil
+}
+
+// GetNotesByCategoryAndSubcategories retrieves notes that belong to the specified category
+// and have ALL the specified subcategories. This uses DuckDB's JSON functions to query
+// the subcategories array stored in the note_categories table.
+// Returns empty slice if no matching notes are found.
+func GetNotesByCategoryAndSubcategories(categoryName string, subcategories []string) ([]Note, error) {
+	if len(subcategories) == 0 {
+		return GetNotesByCategoryName(categoryName)
+	}
+
+	// Build the query with JSON array contains checks for each subcategory.
+	// DuckDB supports list_contains for checking if an array contains a value.
+	// Since subcategories is stored as JSON string, we need to parse it first.
+	query := `SELECT n.id, n.guid, n.title, n.description, n.body, n.tags,
+		n.is_private, n.encryption_iv, n.created_by, n.updated_by,
+		n.created_at, n.updated_at, n.synced_at, n.deleted_at
+		FROM notes n
+		INNER JOIN note_categories nc ON n.id = nc.note_id
+		INNER JOIN categories c ON nc.category_id = c.id
+		WHERE c.name = ? AND n.deleted_at IS NULL AND nc.subcategories IS NOT NULL`
+
+	// Add a condition for each subcategory to ensure ALL are present.
+	// Using DuckDB's json_extract_string with list_contains.
+	for range subcategories {
+		query += ` AND list_contains(json_extract_string(nc.subcategories, '$[*]')::VARCHAR[], ?)`
+	}
+
+	query += ` ORDER BY n.created_at DESC`
+
+	// Build args: category name first, then each subcategory
+	args := make([]interface{}, 0, len(subcategories)+1)
+	args = append(args, categoryName)
+	for _, subcat := range subcategories {
+		args = append(args, subcat)
+	}
+
+	rows, err := cacheDB.Query(query, args...)
+	if err != nil {
+		return nil, serr.Wrap(err, "failed to get notes by category and subcategories")
+	}
+	defer rows.Close()
+
+	var notes []Note
+	for rows.Next() {
+		var note Note
+		err := rows.Scan(
+			&note.ID,
+			&note.GUID,
+			&note.Title,
+			&note.Description,
+			&note.Body,
+			&note.Tags,
+			&note.IsPrivate,
+			&note.EncryptionIV,
+			&note.CreatedBy,
+			&note.UpdatedBy,
+			&note.CreatedAt,
+			&note.UpdatedAt,
+			&note.SyncedAt,
+			&note.DeletedAt,
+		)
+		if err != nil {
+			return nil, serr.Wrap(err, "failed to scan note")
+		}
+		notes = append(notes, note)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, serr.Wrap(err, "error iterating notes")
 	}
 
 	return notes, nil
