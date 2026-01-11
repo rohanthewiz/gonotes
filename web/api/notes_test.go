@@ -361,3 +361,179 @@ func TestNotesAPI(t *testing.T) {
 		}
 	})
 }
+
+// TestNotesCategoryFiltering tests the cat and subcats[] query parameters
+func TestNotesCategoryFiltering(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.cleanup()
+
+	var k8sNoteID, awsNoteID float64
+	var k8sCategoryID, awsCategoryID float64
+
+	// Setup: Create categories
+	t.Run("setup: create categories", func(t *testing.T) {
+		// Create k8s category
+		input := map[string]interface{}{
+			"name":          "k8s",
+			"subcategories": []string{"pod", "service", "deployment"},
+		}
+		status, resp := ts.request("POST", "/api/v1/categories", input)
+		if status != http.StatusCreated {
+			t.Fatalf("failed to create k8s category: status %d", status)
+		}
+		data := resp["data"].(map[string]interface{})
+		k8sCategoryID = data["id"].(float64)
+
+		// Create aws category
+		input2 := map[string]interface{}{
+			"name":          "aws",
+			"subcategories": []string{"ec2", "s3", "lambda"},
+		}
+		status2, resp2 := ts.request("POST", "/api/v1/categories", input2)
+		if status2 != http.StatusCreated {
+			t.Fatalf("failed to create aws category: status %d", status2)
+		}
+		data2 := resp2["data"].(map[string]interface{})
+		awsCategoryID = data2["id"].(float64)
+	})
+
+	// Setup: Create notes
+	t.Run("setup: create notes", func(t *testing.T) {
+		// Create k8s note
+		input := map[string]interface{}{
+			"guid":  "k8s-pod-note",
+			"title": "Kubernetes Pod Guide",
+		}
+		status, resp := ts.request("POST", "/api/v1/notes", input)
+		if status != http.StatusCreated {
+			t.Fatalf("failed to create k8s note: status %d", status)
+		}
+		data := resp["data"].(map[string]interface{})
+		k8sNoteID = data["id"].(float64)
+
+		// Create aws note
+		input2 := map[string]interface{}{
+			"guid":  "aws-ec2-note",
+			"title": "AWS EC2 Guide",
+		}
+		status2, resp2 := ts.request("POST", "/api/v1/notes", input2)
+		if status2 != http.StatusCreated {
+			t.Fatalf("failed to create aws note: status %d", status2)
+		}
+		data2 := resp2["data"].(map[string]interface{})
+		awsNoteID = data2["id"].(float64)
+	})
+
+	// Setup: Add categories to notes with subcategories
+	t.Run("setup: add categories with subcategories", func(t *testing.T) {
+		// Add k8s/pod to first note
+		url1 := fmt.Sprintf("/api/v1/notes/%.0f/categories/%.0f", k8sNoteID, k8sCategoryID)
+		status1, _ := ts.request("POST", url1, nil)
+		if status1 != http.StatusCreated {
+			t.Fatalf("failed to add k8s to note: status %d", status1)
+		}
+
+		// Update subcategories for the relationship
+		err := models.UpdateNoteCategorySubcategories(int64(k8sNoteID), int64(k8sCategoryID), []string{"pod", "deployment"})
+		if err != nil {
+			t.Fatalf("failed to update subcategories: %v", err)
+		}
+
+		// Add aws/ec2 to second note
+		url2 := fmt.Sprintf("/api/v1/notes/%.0f/categories/%.0f", awsNoteID, awsCategoryID)
+		status2, _ := ts.request("POST", url2, nil)
+		if status2 != http.StatusCreated {
+			t.Fatalf("failed to add aws to note: status %d", status2)
+		}
+
+		err = models.UpdateNoteCategorySubcategories(int64(awsNoteID), int64(awsCategoryID), []string{"ec2"})
+		if err != nil {
+			t.Fatalf("failed to update subcategories: %v", err)
+		}
+	})
+
+	// Test: Filter by category only
+	t.Run("filter by category only", func(t *testing.T) {
+		status, resp := ts.request("GET", "/api/v1/notes?cat=k8s", nil)
+		if status != http.StatusOK {
+			t.Errorf("expected status %d, got %d", http.StatusOK, status)
+		}
+
+		data := resp["data"].([]interface{})
+		if len(data) != 1 {
+			t.Errorf("expected 1 note in k8s category, got %d", len(data))
+		}
+
+		if len(data) > 0 {
+			note := data[0].(map[string]interface{})
+			if note["id"].(float64) != k8sNoteID {
+				t.Errorf("expected k8s note, got note ID %.0f", note["id"].(float64))
+			}
+		}
+	})
+
+	// Test: Filter by category and single subcategory
+	t.Run("filter by category and single subcategory", func(t *testing.T) {
+		status, resp := ts.request("GET", "/api/v1/notes?cat=k8s&subcats[]=pod", nil)
+		if status != http.StatusOK {
+			t.Errorf("expected status %d, got %d", http.StatusOK, status)
+		}
+
+		data := resp["data"].([]interface{})
+		if len(data) != 1 {
+			t.Errorf("expected 1 note with k8s/pod, got %d", len(data))
+		}
+	})
+
+	// Test: Filter by category and multiple subcategories
+	t.Run("filter by category and multiple subcategories", func(t *testing.T) {
+		status, resp := ts.request("GET", "/api/v1/notes?cat=k8s&subcats[]=pod&subcats[]=deployment", nil)
+		if status != http.StatusOK {
+			t.Errorf("expected status %d, got %d", http.StatusOK, status)
+		}
+
+		data := resp["data"].([]interface{})
+		if len(data) != 1 {
+			t.Errorf("expected 1 note with k8s/pod+deployment, got %d", len(data))
+		}
+	})
+
+	// Test: Filter by category and non-matching subcategory
+	t.Run("filter by category and non-matching subcategory", func(t *testing.T) {
+		status, resp := ts.request("GET", "/api/v1/notes?cat=k8s&subcats[]=service", nil)
+		if status != http.StatusOK {
+			t.Errorf("expected status %d, got %d", http.StatusOK, status)
+		}
+
+		data := resp["data"].([]interface{})
+		if len(data) != 0 {
+			t.Errorf("expected 0 notes with k8s/service, got %d", len(data))
+		}
+	})
+
+	// Test: Filter by non-existent category
+	t.Run("filter by non-existent category", func(t *testing.T) {
+		status, resp := ts.request("GET", "/api/v1/notes?cat=nonexistent", nil)
+		if status != http.StatusOK {
+			t.Errorf("expected status %d, got %d", http.StatusOK, status)
+		}
+
+		data := resp["data"].([]interface{})
+		if len(data) != 0 {
+			t.Errorf("expected 0 notes for non-existent category, got %d", len(data))
+		}
+	})
+
+	// Test: No filter returns all notes
+	t.Run("no filter returns all notes", func(t *testing.T) {
+		status, resp := ts.request("GET", "/api/v1/notes", nil)
+		if status != http.StatusOK {
+			t.Errorf("expected status %d, got %d", http.StatusOK, status)
+		}
+
+		data := resp["data"].([]interface{})
+		if len(data) < 2 {
+			t.Errorf("expected at least 2 notes without filter, got %d", len(data))
+		}
+	})
+}

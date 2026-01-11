@@ -294,9 +294,10 @@ func syncCategoriesFromDisk() (int, error) {
 }
 
 // syncNoteCategoriesFromDisk loads all note-category relationships from the disk database into the cache.
+// Includes the subcategories JSON array column for category/subcategory filtering.
 func syncNoteCategoriesFromDisk() (int, error) {
 	query := `
-		SELECT note_id, category_id, created_at
+		SELECT note_id, category_id, subcategories, created_at
 		FROM note_categories
 	`
 
@@ -307,8 +308,8 @@ func syncNoteCategoriesFromDisk() (int, error) {
 	defer rows.Close()
 
 	insertQuery := `
-		INSERT INTO note_categories (note_id, category_id, created_at)
-		VALUES (?, ?, ?)
+		INSERT INTO note_categories (note_id, category_id, subcategories, created_at)
+		VALUES (?, ?, ?, ?)
 	`
 
 	count := 0
@@ -316,14 +317,14 @@ func syncNoteCategoriesFromDisk() (int, error) {
 		var noteCategory NoteCategory
 
 		err := rows.Scan(
-			&noteCategory.NoteID, &noteCategory.CategoryID, &noteCategory.CreatedAt,
+			&noteCategory.NoteID, &noteCategory.CategoryID, &noteCategory.Subcategories, &noteCategory.CreatedAt,
 		)
 		if err != nil {
 			return 0, serr.Wrap(err, "failed to scan note_category from disk")
 		}
 
 		_, err = cacheDB.Exec(insertQuery,
-			noteCategory.NoteID, noteCategory.CategoryID, noteCategory.CreatedAt,
+			noteCategory.NoteID, noteCategory.CategoryID, noteCategory.Subcategories, noteCategory.CreatedAt,
 		)
 		if err != nil {
 			return 0, serr.Wrap(err, "failed to insert note_category into cache")

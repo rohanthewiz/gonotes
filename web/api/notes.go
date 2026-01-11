@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"gonotes/models"
@@ -96,10 +97,20 @@ func GetNote(ctx rweb.Context) error {
 }
 
 // ListNotes handles GET /api/v1/notes
-// Returns all notes with optional pagination via limit/offset query params.
+// Returns all notes with optional filtering and pagination.
+//
+// Query parameters:
+//   - limit: Maximum number of results (default: no limit)
+//   - offset: Number of results to skip (default: 0)
+//   - cat: Filter by category name (e.g., ?cat=k8s)
+//   - subcats[]: Filter by subcategories within the category (e.g., ?cat=k8s&subcats[]=pod&subcats[]=replicaset)
+//
+// When cat is provided, returns only notes in that category.
+// When both cat and subcats[] are provided, returns notes that match the category
+// AND have ALL the specified subcategories.
 func ListNotes(ctx rweb.Context) error {
 	// Parse pagination parameters with sensible defaults
-	limit := 0  // 0 means no limit
+	limit := 0 // 0 means no limit
 	offset := 0
 
 	if limitStr := ctx.Request().QueryParam("limit"); limitStr != "" {
@@ -118,10 +129,51 @@ func ListNotes(ctx rweb.Context) error {
 		offset = parsedOffset
 	}
 
-	notes, err := models.ListNotes(limit, offset)
-	if err != nil {
-		logger.LogErr(serr.Wrap(err, "failed to list notes"), "database error")
-		return writeError(ctx, http.StatusInternalServerError, "database error")
+	// Check for category filter
+	categoryName := ctx.Request().QueryParam("cat")
+
+	// Parse subcats[] array from query string
+	var subcategories []string
+	if queryStr := ctx.Request().Query(); queryStr != "" {
+		queryValues, err := url.ParseQuery(queryStr)
+		if err == nil {
+			// Look for subcats[] parameter (array notation)
+			subcategories = queryValues["subcats[]"]
+		}
+	}
+
+	var notes []models.Note
+	var err error
+
+	if categoryName != "" {
+		// Filter by category (and optionally subcategories)
+		if len(subcategories) > 0 {
+			notes, err = models.GetNotesByCategoryAndSubcategories(categoryName, subcategories)
+		} else {
+			notes, err = models.GetNotesByCategoryName(categoryName)
+		}
+		if err != nil {
+			logger.LogErr(serr.Wrap(err, "failed to get notes by category"), "database error")
+			return writeError(ctx, http.StatusInternalServerError, "database error")
+		}
+
+		// Apply pagination manually for category-filtered results
+		// (The category query functions don't support pagination directly)
+		if offset > 0 && offset < len(notes) {
+			notes = notes[offset:]
+		} else if offset >= len(notes) {
+			notes = []models.Note{}
+		}
+		if limit > 0 && limit < len(notes) {
+			notes = notes[:limit]
+		}
+	} else {
+		// No category filter - use standard ListNotes with pagination
+		notes, err = models.ListNotes(limit, offset)
+		if err != nil {
+			logger.LogErr(serr.Wrap(err, "failed to list notes"), "database error")
+			return writeError(ctx, http.StatusInternalServerError, "database error")
+		}
 	}
 
 	// Convert to output format for clean JSON serialization

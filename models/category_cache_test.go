@@ -493,3 +493,247 @@ func TestCategoryEdgeCases(t *testing.T) {
 		}
 	})
 }
+
+// TestCategorySubcategoryQueries tests querying notes by category and subcategories
+func TestCategorySubcategoryQueries(t *testing.T) {
+	cleanup := setupCategoryTestDB(t)
+	defer cleanup()
+
+	// Setup: Create categories and notes for testing
+	var k8sCategory, awsCategory *models.Category
+	var note1, note2, note3 *models.Note
+
+	t.Run("setup: create categories and notes", func(t *testing.T) {
+		// Create categories
+		k8sInput := models.CategoryInput{
+			Name:          "k8s",
+			Subcategories: []string{"pod", "service", "deployment", "replicaset"},
+		}
+		var err error
+		k8sCategory, err = models.CreateCategory(k8sInput)
+		if err != nil {
+			t.Fatalf("failed to create k8s category: %v", err)
+		}
+
+		awsInput := models.CategoryInput{
+			Name:          "aws",
+			Subcategories: []string{"ec2", "s3", "lambda"},
+		}
+		awsCategory, err = models.CreateCategory(awsInput)
+		if err != nil {
+			t.Fatalf("failed to create aws category: %v", err)
+		}
+
+		// Create notes - Body is a pointer type
+		body1 := "A pod is the smallest deployable unit in Kubernetes"
+		note1Input := models.NoteInput{
+			GUID:  "k8s-pod-note",
+			Title: "Kubernetes Pod Basics",
+			Body:  &body1,
+		}
+		note1, err = models.CreateNote(note1Input)
+		if err != nil {
+			t.Fatalf("failed to create note1: %v", err)
+		}
+
+		body2 := "Deployments manage ReplicaSets"
+		note2Input := models.NoteInput{
+			GUID:  "k8s-deployment-note",
+			Title: "Kubernetes Deployments",
+			Body:  &body2,
+		}
+		note2, err = models.CreateNote(note2Input)
+		if err != nil {
+			t.Fatalf("failed to create note2: %v", err)
+		}
+
+		body3 := "EC2 provides virtual servers"
+		note3Input := models.NoteInput{
+			GUID:  "aws-ec2-note",
+			Title: "AWS EC2 Instances",
+			Body:  &body3,
+		}
+		note3, err = models.CreateNote(note3Input)
+		if err != nil {
+			t.Fatalf("failed to create note3: %v", err)
+		}
+
+		// Add categories to notes with subcategories
+		err = models.AddCategoryToNoteWithSubcategories(note1.ID, k8sCategory.ID, []string{"pod"})
+		if err != nil {
+			t.Fatalf("failed to add k8s/pod to note1: %v", err)
+		}
+
+		err = models.AddCategoryToNoteWithSubcategories(note2.ID, k8sCategory.ID, []string{"deployment", "replicaset"})
+		if err != nil {
+			t.Fatalf("failed to add k8s/deployment,replicaset to note2: %v", err)
+		}
+
+		err = models.AddCategoryToNoteWithSubcategories(note3.ID, awsCategory.ID, []string{"ec2"})
+		if err != nil {
+			t.Fatalf("failed to add aws/ec2 to note3: %v", err)
+		}
+	})
+
+	t.Run("query notes by category name only", func(t *testing.T) {
+		notes, err := models.GetNotesByCategoryName("k8s")
+		if err != nil {
+			t.Fatalf("failed to get notes by category name: %v", err)
+		}
+
+		if len(notes) != 2 {
+			t.Errorf("expected 2 notes in k8s category, got %d", len(notes))
+		}
+
+		// Verify notes are the expected ones
+		noteIDs := make(map[int64]bool)
+		for _, n := range notes {
+			noteIDs[n.ID] = true
+		}
+		if !noteIDs[note1.ID] || !noteIDs[note2.ID] {
+			t.Error("expected note1 and note2 in k8s category")
+		}
+	})
+
+	t.Run("query notes by category name - aws", func(t *testing.T) {
+		notes, err := models.GetNotesByCategoryName("aws")
+		if err != nil {
+			t.Fatalf("failed to get notes by category name: %v", err)
+		}
+
+		if len(notes) != 1 {
+			t.Errorf("expected 1 note in aws category, got %d", len(notes))
+		}
+
+		if len(notes) > 0 && notes[0].ID != note3.ID {
+			t.Errorf("expected note3 in aws category, got note ID %d", notes[0].ID)
+		}
+	})
+
+	t.Run("query notes by non-existent category", func(t *testing.T) {
+		notes, err := models.GetNotesByCategoryName("nonexistent")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(notes) != 0 {
+			t.Errorf("expected 0 notes for non-existent category, got %d", len(notes))
+		}
+	})
+
+	t.Run("query notes by category and single subcategory", func(t *testing.T) {
+		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{"pod"})
+		if err != nil {
+			t.Fatalf("failed to get notes by category and subcategory: %v", err)
+		}
+
+		if len(notes) != 1 {
+			t.Errorf("expected 1 note with k8s/pod, got %d", len(notes))
+		}
+
+		if len(notes) > 0 && notes[0].ID != note1.ID {
+			t.Errorf("expected note1 with k8s/pod, got note ID %d", notes[0].ID)
+		}
+	})
+
+	t.Run("query notes by category and multiple subcategories", func(t *testing.T) {
+		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{"deployment", "replicaset"})
+		if err != nil {
+			t.Fatalf("failed to get notes by category and subcategories: %v", err)
+		}
+
+		if len(notes) != 1 {
+			t.Errorf("expected 1 note with k8s/deployment+replicaset, got %d", len(notes))
+		}
+
+		if len(notes) > 0 && notes[0].ID != note2.ID {
+			t.Errorf("expected note2 with k8s/deployment+replicaset, got note ID %d", notes[0].ID)
+		}
+	})
+
+	t.Run("query notes by category and partial subcategory match", func(t *testing.T) {
+		// note2 has deployment and replicaset, query for deployment only
+		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{"deployment"})
+		if err != nil {
+			t.Fatalf("failed to get notes by category and subcategory: %v", err)
+		}
+
+		if len(notes) != 1 {
+			t.Errorf("expected 1 note with k8s/deployment, got %d", len(notes))
+		}
+
+		if len(notes) > 0 && notes[0].ID != note2.ID {
+			t.Errorf("expected note2 with k8s/deployment, got note ID %d", notes[0].ID)
+		}
+	})
+
+	t.Run("query notes by category and non-matching subcategory", func(t *testing.T) {
+		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{"service"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(notes) != 0 {
+			t.Errorf("expected 0 notes with k8s/service (none assigned), got %d", len(notes))
+		}
+	})
+
+	t.Run("query with empty subcategories returns all category notes", func(t *testing.T) {
+		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{})
+		if err != nil {
+			t.Fatalf("failed to get notes: %v", err)
+		}
+
+		if len(notes) != 2 {
+			t.Errorf("expected 2 notes for k8s with empty subcategories, got %d", len(notes))
+		}
+	})
+
+	t.Run("update note subcategories", func(t *testing.T) {
+		// Update note1's subcategories from ["pod"] to ["pod", "service"]
+		err := models.UpdateNoteCategorySubcategories(note1.ID, k8sCategory.ID, []string{"pod", "service"})
+		if err != nil {
+			t.Fatalf("failed to update subcategories: %v", err)
+		}
+
+		// Now query for service should return note1
+		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{"service"})
+		if err != nil {
+			t.Fatalf("failed to get notes: %v", err)
+		}
+
+		if len(notes) != 1 {
+			t.Errorf("expected 1 note with k8s/service after update, got %d", len(notes))
+		}
+
+		if len(notes) > 0 && notes[0].ID != note1.ID {
+			t.Errorf("expected note1 with k8s/service, got note ID %d", notes[0].ID)
+		}
+	})
+
+	t.Run("get category by name", func(t *testing.T) {
+		category, err := models.GetCategoryByName("k8s")
+		if err != nil {
+			t.Fatalf("failed to get category by name: %v", err)
+		}
+
+		if category == nil {
+			t.Fatal("expected k8s category, got nil")
+		}
+
+		if category.Name != "k8s" {
+			t.Errorf("expected category name 'k8s', got '%s'", category.Name)
+		}
+	})
+
+	t.Run("get non-existent category by name", func(t *testing.T) {
+		category, err := models.GetCategoryByName("nonexistent")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if category != nil {
+			t.Errorf("expected nil for non-existent category, got %v", category)
+		}
+	})
+}
