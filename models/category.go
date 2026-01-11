@@ -134,7 +134,7 @@ func CreateCategory(input CategoryInput) (*Category, error) {
 
 	// Insert into cache database
 	cacheQuery := `INSERT INTO categories (id, name, description, subcategories, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?)`
+		VALUES (?, ?, ?, ?, ?, ?)`
 	_, cacheErr := cacheDB.Exec(cacheQuery,
 		category.ID,
 		category.Name,
@@ -246,14 +246,23 @@ func UpdateCategory(id int64, input CategoryInput) (*Category, error) {
 		description = sql.NullString{String: *input.Description, Valid: true}
 	}
 
-	// Update disk database first
-	query := `UPDATE categories
+	// Update disk database first (using separate UPDATE and SELECT since DuckDB can have
+	// issues with UPDATE...RETURNING when sequences are involved)
+	updateQuery := `UPDATE categories
 		SET name = ?, description = ?, subcategories = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-		RETURNING id, name, description, subcategories, created_at, updated_at`
+		WHERE id = ?`
+
+	_, err = db.Exec(updateQuery, input.Name, description, subcatsJSON, id)
+	if err != nil {
+		return nil, serr.Wrap(err, "failed to update category in disk database")
+	}
+
+	// Fetch the updated record
+	selectQuery := `SELECT id, name, description, subcategories, created_at, updated_at
+		FROM categories WHERE id = ?`
 
 	var category Category
-	err = db.QueryRow(query, input.Name, description, subcatsJSON, id).Scan(
+	err = db.QueryRow(selectQuery, id).Scan(
 		&category.ID,
 		&category.Name,
 		&category.Description,
@@ -262,7 +271,7 @@ func UpdateCategory(id int64, input CategoryInput) (*Category, error) {
 		&category.UpdatedAt,
 	)
 	if err != nil {
-		return nil, serr.Wrap(err, "failed to update category in disk database")
+		return nil, serr.Wrap(err, "failed to retrieve updated category from disk database")
 	}
 
 	// Update cache database
@@ -317,10 +326,13 @@ type NoteCategory struct {
 
 // AddCategoryToNote adds a category to a note
 func AddCategoryToNote(noteID, categoryID int64) error {
-	// Verify note exists
-	_, err := GetNoteByID(noteID)
+	// Verify note exists (GetNoteByID returns nil, nil if not found)
+	note, err := GetNoteByID(noteID)
 	if err != nil {
 		return err
+	}
+	if note == nil {
+		return serr.New("note not found")
 	}
 
 	// Verify category exists
