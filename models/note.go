@@ -25,17 +25,44 @@ type Note struct {
 	UpdatedBy    sql.NullString `json:"updated_by"`    // User who last updated the note
 	CreatedAt    time.Time      `json:"created_at"`    // Timestamp of creation
 	UpdatedAt    time.Time      `json:"updated_at"`    // Timestamp of last update
+	AuthoredAt   sql.NullTime   `json:"authored_at"`   // Last human authoring timestamp (disk only, not in cache)
 	SyncedAt     sql.NullTime   `json:"synced_at"`     // Last sync timestamp for distributed scenarios
 	DeletedAt    sql.NullTime   `json:"deleted_at"`    // Soft delete timestamp, null if not deleted
 }
 
-// CreateNotesTableSQL returns the DDL statement for creating the notes table.
+// CreateNotesTableSQL returns the DDL statement for creating the notes table (disk DB).
 // Design notes:
 // - id is a BIGINT with auto-increment via SEQUENCE for primary key
 // - guid has a UNIQUE constraint for external reference integrity
 // - is_private defaults to false (public visibility)
 // - timestamps use CURRENT_TIMESTAMP defaults where appropriate
+// - authored_at tracks when a person last created/updated the note (for peer-to-peer sync)
 const CreateNotesTableSQL = `
+CREATE SEQUENCE IF NOT EXISTS notes_id_seq START 1;
+
+CREATE TABLE IF NOT EXISTS notes (
+    id            BIGINT PRIMARY KEY DEFAULT nextval('notes_id_seq'),
+    guid          VARCHAR NOT NULL UNIQUE,
+    title         VARCHAR NOT NULL,
+    description   VARCHAR,
+    body          VARCHAR,
+    tags          VARCHAR,
+    is_private    BOOLEAN DEFAULT false,
+    encryption_iv VARCHAR,
+    created_by    VARCHAR,
+    updated_by    VARCHAR,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    authored_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    synced_at     TIMESTAMP,
+    deleted_at    TIMESTAMP
+);
+`
+
+// CreateNotesCacheTableSQL returns the DDL for the in-memory cache notes table.
+// This schema intentionally excludes authored_at since the cache is for fast reads
+// and authored_at is only relevant for the disk database (peer-to-peer sync scenarios).
+const CreateNotesCacheTableSQL = `
 CREATE SEQUENCE IF NOT EXISTS notes_id_seq START 1;
 
 CREATE TABLE IF NOT EXISTS notes (
@@ -94,6 +121,7 @@ type NoteOutput struct {
 	UpdatedBy    *string `json:"updated_by,omitempty"`
 	CreatedAt    string  `json:"created_at"`
 	UpdatedAt    string  `json:"updated_at"`
+	AuthoredAt   *string `json:"authored_at,omitempty"` // Last human authoring timestamp (disk only)
 	SyncedAt     *string `json:"synced_at,omitempty"`
 	DeletedAt    *string `json:"deleted_at,omitempty"`
 }
@@ -131,6 +159,10 @@ func (n *Note) ToOutput() NoteOutput {
 	}
 
 	// Convert sql.NullTime fields to *string
+	if n.AuthoredAt.Valid {
+		s := n.AuthoredAt.Time.Format(time.RFC3339)
+		out.AuthoredAt = &s
+	}
 	if n.SyncedAt.Valid {
 		s := n.SyncedAt.Time.Format(time.RFC3339)
 		out.SyncedAt = &s
@@ -168,11 +200,12 @@ func CreateNote(input NoteInput) (*Note, error) {
 		diskEncryptionIV = toNullString(&iv)
 	}
 
+	// authored_at uses DEFAULT CURRENT_TIMESTAMP, so no need to include in INSERT VALUES
 	query := `
 		INSERT INTO notes (guid, title, description, body, tags, is_private, encryption_iv, created_by, updated_by)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		RETURNING id, guid, title, description, body, tags, is_private, encryption_iv,
-		          created_by, updated_by, created_at, updated_at, synced_at, deleted_at
+		          created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at
 	`
 
 	note := &Note{}
@@ -190,7 +223,7 @@ func CreateNote(input NoteInput) (*Note, error) {
 	).Scan(
 		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
 		&note.Tags, &note.IsPrivate, &note.EncryptionIV, &note.CreatedBy,
-		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.SyncedAt, &note.DeletedAt,
+		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.AuthoredAt, &note.SyncedAt, &note.DeletedAt,
 	)
 
 	if err != nil {
@@ -368,10 +401,12 @@ func UpdateNote(id int64, input NoteInput) (*Note, error) {
 	}
 
 	// Perform the update on disk DB first (source of truth)
+	// authored_at is updated to track last human modification (for peer-to-peer sync)
 	diskUpdateQuery := `
 		UPDATE notes
 		SET title = ?, description = ?, body = ?, tags = ?, is_private = ?,
-		    encryption_iv = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+		    encryption_iv = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP,
+		    authored_at = CURRENT_TIMESTAMP
 		WHERE id = ? AND deleted_at IS NULL
 	`
 

@@ -66,10 +66,25 @@ func InitDB() error {
 
 // createTables executes DDL statements to set up the database schema.
 // Each table creation is idempotent via IF NOT EXISTS clauses.
+// Also runs migrations for schema changes (e.g., adding new columns).
 func createTables() error {
 	_, err := db.Exec(CreateNotesTableSQL)
 	if err != nil {
 		return serr.Wrap(err, "failed to create notes table")
+	}
+
+	// Migration: add authored_at column for existing databases
+	// This column tracks when a person last created/updated a note (for peer-to-peer sync)
+	_, err = db.Exec(`ALTER TABLE notes ADD COLUMN IF NOT EXISTS authored_at TIMESTAMP`)
+	if err != nil {
+		return serr.Wrap(err, "failed to add authored_at column")
+	}
+
+	// Initialize authored_at for existing notes that don't have it
+	// Using updated_at as the best approximation of last human modification
+	_, err = db.Exec(`UPDATE notes SET authored_at = updated_at WHERE authored_at IS NULL`)
+	if err != nil {
+		return serr.Wrap(err, "failed to initialize authored_at for existing notes")
 	}
 
 	_, err = db.Exec(CreateCategoriesTableSQL)
@@ -133,7 +148,7 @@ func CacheDB() *sql.DB {
 }
 
 // initCacheDB initializes the in-memory DuckDB database for caching.
-// Creates the same schema as the disk database.
+// Uses cache-specific schema that excludes authored_at (only needed on disk for sync).
 func initCacheDB() error {
 	var err error
 
@@ -149,8 +164,8 @@ func initCacheDB() error {
 		return serr.Wrap(err, "failed to ping in-memory DuckDB")
 	}
 
-	// Create tables in cache - we need to use cacheDB instead of db here
-	_, err = cacheDB.Exec(CreateNotesTableSQL)
+	// Create tables in cache - uses cache schema without authored_at column
+	_, err = cacheDB.Exec(CreateNotesCacheTableSQL)
 	if err != nil {
 		return serr.Wrap(err, "failed to create notes table in cache")
 	}
@@ -179,9 +194,10 @@ func initCacheDB() error {
 // - This enables fast reads from cache without decryption overhead
 func syncCacheFromDisk() error {
 	// Query all notes from disk (including soft-deleted ones for complete sync)
+	// Note: authored_at is read from disk but NOT inserted into cache (cache schema lacks it)
 	query := `
 		SELECT id, guid, title, description, body, tags, is_private, encryption_iv,
-		       created_by, updated_by, created_at, updated_at, synced_at, deleted_at
+		       created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at
 		FROM notes
 	`
 
@@ -192,6 +208,7 @@ func syncCacheFromDisk() error {
 	defer rows.Close()
 
 	// Insert each note into cache preserving the ID
+	// Note: cache schema does not include authored_at column
 	insertQuery := `
 		INSERT INTO notes (id, guid, title, description, body, tags, is_private, encryption_iv,
 		                   created_by, updated_by, created_at, updated_at, synced_at, deleted_at)
@@ -205,7 +222,7 @@ func syncCacheFromDisk() error {
 		err := rows.Scan(
 			&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
 			&note.Tags, &note.IsPrivate, &note.EncryptionIV, &note.CreatedBy,
-			&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.SyncedAt, &note.DeletedAt,
+			&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.AuthoredAt, &note.SyncedAt, &note.DeletedAt,
 		)
 		if err != nil {
 			return serr.Wrap(err, "failed to scan note from disk")
