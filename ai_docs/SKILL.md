@@ -1,3 +1,8 @@
+---
+name: GoNotes
+description: Note-taking application with user authentication, categories, encryption, and peer-to-peer sync support
+---
+
 # GoNotes API Reference
 
 GoNotes is a note-taking application with user authentication, categories, and peer-to-peer sync support. This document describes the API capabilities for UI development.
