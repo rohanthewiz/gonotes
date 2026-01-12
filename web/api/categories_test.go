@@ -20,9 +20,51 @@ import (
 // categoryTestServer manages a running server instance for integration testing.
 // Uses ReadyChan pattern for proper server ready signaling (no arbitrary sleep).
 type categoryTestServer struct {
-	baseURL string
-	client  *http.Client
-	server  *rweb.Server
+	baseURL   string
+	client    *http.Client
+	server    *rweb.Server
+	authToken string // JWT token for authenticated requests
+}
+
+// createAuthenticatedRequest creates an HTTP request with the Authorization header set.
+func (s *categoryTestServer) createAuthenticatedRequest(method, url string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	if s.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.authToken)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return req, nil
+}
+
+// registerAndLogin registers a test user and obtains a JWT token.
+// This token is stored in the server struct for use in authenticated requests.
+func (s *categoryTestServer) registerAndLogin(t *testing.T) {
+	t.Helper()
+
+	// Register a test user
+	regInput := map[string]string{
+		"username": "testuser",
+		"password": "testpassword123",
+	}
+	body, _ := json.Marshal(regInput)
+	resp, err := http.Post(s.baseURL+"/api/v1/auth/register", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		t.Fatalf("failed to register user: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		t.Fatalf("failed to register user, status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var result api.APIResponse
+	json.NewDecoder(resp.Body).Decode(&result)
+	data := result.Data.(map[string]interface{})
+	s.authToken = data["token"].(string)
 }
 
 // setupCategoryTestServer creates a test server with a fresh database.
@@ -37,6 +79,12 @@ func setupCategoryTestServer(t *testing.T) (*categoryTestServer, func()) {
 	// Initialize test database
 	if err := models.InitTestDB("./data/test_categories.ddb"); err != nil {
 		t.Fatalf("failed to initialize test database: %v", err)
+	}
+
+	// Initialize JWT for auth tests
+	os.Setenv("GONOTES_JWT_SECRET", "test-secret-key-for-jwt-testing-32chars")
+	if err := models.InitJWT(); err != nil {
+		t.Fatalf("failed to initialize JWT: %v", err)
 	}
 
 	// Create ready channel for server startup signaling
@@ -436,20 +484,32 @@ func TestNoteCategoryRelationshipAPI(t *testing.T) {
 	server, cleanup := setupCategoryTestServer(t)
 	defer cleanup()
 
+	// Register and authenticate a test user
+	server.registerAndLogin(t)
+
 	var noteID, categoryID1, categoryID2 int64
 
 	t.Run("setup: create note and categories", func(t *testing.T) {
-		// Create a note
+		// Create a note (requires authentication)
 		noteInput := models.NoteInput{
 			GUID:  "test-note-rel",
 			Title: "Test Note for Relationships",
 		}
 		body, _ := json.Marshal(noteInput)
-		resp, err := http.Post(server.baseURL+"/api/v1/notes", "application/json", bytes.NewBuffer(body))
+		req, err := server.createAuthenticatedRequest("POST", server.baseURL+"/api/v1/notes", bytes.NewBuffer(body))
+		if err != nil {
+			t.Fatalf("failed to create request: %v", err)
+		}
+		resp, err := server.client.Do(req)
 		if err != nil {
 			t.Fatalf("failed to create note: %v", err)
 		}
 		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusCreated {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			t.Fatalf("failed to create note, status %d: %s", resp.StatusCode, string(bodyBytes))
+		}
 
 		var result api.APIResponse
 		json.NewDecoder(resp.Body).Decode(&result)

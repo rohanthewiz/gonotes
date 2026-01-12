@@ -364,13 +364,12 @@ func AddCategoryToNote(noteID, categoryID int64) error {
 
 // AddCategoryToNoteWithSubcategories adds a category to a note with optional subcategories.
 // The subcategories slice can be nil or empty for no subcategories.
+// Note: The caller (API layer) should verify note ownership before calling this function.
 func AddCategoryToNoteWithSubcategories(noteID, categoryID int64, subcategories []string) error {
-	// Verify note exists (GetNoteByID returns nil, nil if not found)
-	note, err := GetNoteByID(noteID)
+	// Verify note exists using a simple existence check (ownership verified by API layer)
+	var exists int
+	err := cacheDB.QueryRow(`SELECT 1 FROM notes WHERE id = ? AND deleted_at IS NULL`, noteID).Scan(&exists)
 	if err != nil {
-		return err
-	}
-	if note == nil {
 		return serr.New("note not found")
 	}
 
@@ -595,18 +594,19 @@ func GetCategoryByName(name string) (*Category, error) {
 }
 
 // GetNotesByCategoryName retrieves all notes that belong to the specified category name.
+// The userGUID parameter filters to notes owned by that user.
 // Returns empty slice if the category doesn't exist or has no notes.
-func GetNotesByCategoryName(categoryName string) ([]Note, error) {
+func GetNotesByCategoryName(categoryName string, userGUID string) ([]Note, error) {
 	query := `SELECT n.id, n.guid, n.title, n.description, n.body, n.tags,
 		n.is_private, n.encryption_iv, n.created_by, n.updated_by,
 		n.created_at, n.updated_at, n.synced_at, n.deleted_at
 		FROM notes n
 		INNER JOIN note_categories nc ON n.id = nc.note_id
 		INNER JOIN categories c ON nc.category_id = c.id
-		WHERE c.name = ? AND n.deleted_at IS NULL
+		WHERE c.name = ? AND n.created_by = ? AND n.deleted_at IS NULL
 		ORDER BY n.created_at DESC`
 
-	rows, err := cacheDB.Query(query, categoryName)
+	rows, err := cacheDB.Query(query, categoryName, userGUID)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to get notes by category name")
 	}
@@ -647,10 +647,11 @@ func GetNotesByCategoryName(categoryName string) ([]Note, error) {
 // GetNotesByCategoryAndSubcategories retrieves notes that belong to the specified category
 // and have ALL the specified subcategories. This uses DuckDB's JSON functions to query
 // the subcategories array stored in the note_categories table.
+// The userGUID parameter filters to notes owned by that user.
 // Returns empty slice if no matching notes are found.
-func GetNotesByCategoryAndSubcategories(categoryName string, subcategories []string) ([]Note, error) {
+func GetNotesByCategoryAndSubcategories(categoryName string, subcategories []string, userGUID string) ([]Note, error) {
 	if len(subcategories) == 0 {
-		return GetNotesByCategoryName(categoryName)
+		return GetNotesByCategoryName(categoryName, userGUID)
 	}
 
 	// Build the query with JSON array contains checks for each subcategory.
@@ -662,7 +663,7 @@ func GetNotesByCategoryAndSubcategories(categoryName string, subcategories []str
 		FROM notes n
 		INNER JOIN note_categories nc ON n.id = nc.note_id
 		INNER JOIN categories c ON nc.category_id = c.id
-		WHERE c.name = ? AND n.deleted_at IS NULL AND nc.subcategories IS NOT NULL`
+		WHERE c.name = ? AND n.created_by = ? AND n.deleted_at IS NULL AND nc.subcategories IS NOT NULL`
 
 	// Add a condition for each subcategory to ensure ALL are present.
 	// Using DuckDB's json_extract_string with list_contains.
@@ -672,9 +673,10 @@ func GetNotesByCategoryAndSubcategories(categoryName string, subcategories []str
 
 	query += ` ORDER BY n.created_at DESC`
 
-	// Build args: category name first, then each subcategory
-	args := make([]interface{}, 0, len(subcategories)+1)
+	// Build args: category name first, userGUID second, then each subcategory
+	args := make([]interface{}, 0, len(subcategories)+2)
 	args = append(args, categoryName)
+	args = append(args, userGUID)
 	for _, subcat := range subcategories {
 		args = append(args, subcat)
 	}

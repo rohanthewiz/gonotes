@@ -7,6 +7,9 @@ import (
 	"gonotes/models"
 )
 
+// ncTestUserGUID is a constant user GUID used for note change tests to simulate an authenticated user.
+const ncTestUserGUID = "nc-test-user-guid-001"
+
 // setupNoteChangeTestDB initializes a clean test database for note change tests
 func setupNoteChangeTestDB(t *testing.T) func() {
 	t.Helper()
@@ -46,7 +49,7 @@ func TestNoteChangeOnCreate(t *testing.T) {
 		IsPrivate:   false,
 	}
 
-	note, err := models.CreateNote(input)
+	note, err := models.CreateNote(input, ncTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to create note: %v", err)
 	}
@@ -131,7 +134,7 @@ func TestNoteChangeOnUpdate(t *testing.T) {
 		IsPrivate:   false,
 	}
 
-	note, err := models.CreateNote(input)
+	note, err := models.CreateNote(input, ncTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to create note: %v", err)
 	}
@@ -151,7 +154,7 @@ func TestNoteChangeOnUpdate(t *testing.T) {
 		IsPrivate:   false, // Same privacy
 	}
 
-	_, err = models.UpdateNote(note.ID, updateInput)
+	_, err = models.UpdateNote(note.ID, updateInput, ncTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to update note: %v", err)
 	}
@@ -217,7 +220,7 @@ func TestNoteChangeOnDelete(t *testing.T) {
 		Title: "To Be Deleted",
 	}
 
-	note, err := models.CreateNote(input)
+	note, err := models.CreateNote(input, ncTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to create note: %v", err)
 	}
@@ -229,7 +232,7 @@ func TestNoteChangeOnDelete(t *testing.T) {
 	}
 
 	// Delete the note
-	deleted, err := models.DeleteNote(note.ID)
+	deleted, err := models.DeleteNote(note.ID, ncTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to delete note: %v", err)
 	}
@@ -271,7 +274,7 @@ func TestUnsentChangesForPeer(t *testing.T) {
 			GUID:  "note-" + string(rune('0'+i)),
 			Title: "Test Note " + string(rune('0'+i)),
 		}
-		_, err := models.CreateNote(input)
+		_, err := models.CreateNote(input, ncTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create note %d: %v", i, err)
 		}
@@ -331,7 +334,7 @@ func TestMarkChangeSyncedToPeer(t *testing.T) {
 		Title: "Sync Test",
 	}
 
-	_, err := models.CreateNote(input)
+	_, err := models.CreateNote(input, ncTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to create note: %v", err)
 	}
@@ -399,7 +402,7 @@ func TestChangeBitmaskComputation(t *testing.T) {
 		IsPrivate:   false,
 	}
 
-	note, err := models.CreateNote(input)
+	note, err := models.CreateNote(input, ncTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to create note: %v", err)
 	}
@@ -418,7 +421,7 @@ func TestChangeBitmaskComputation(t *testing.T) {
 		Tags:        &tags,
 		IsPrivate:   false,
 	}
-	_, err = models.UpdateNote(note.ID, updateInput1)
+	_, err = models.UpdateNote(note.ID, updateInput1, ncTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to update note (case 1): %v", err)
 	}
@@ -440,7 +443,7 @@ func TestChangeBitmaskComputation(t *testing.T) {
 		Tags:        &tags,
 		IsPrivate:   true, // Changed
 	}
-	_, err = models.UpdateNote(note.ID, updateInput2)
+	_, err = models.UpdateNote(note.ID, updateInput2, ncTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to update note (case 2): %v", err)
 	}
@@ -464,7 +467,7 @@ func TestChangeBitmaskComputation(t *testing.T) {
 		Tags:        &tags,       // Same
 		IsPrivate:   true,        // Same
 	}
-	_, err = models.UpdateNote(note.ID, updateInput3)
+	_, err = models.UpdateNote(note.ID, updateInput3, ncTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to update note (case 3): %v", err)
 	}
@@ -492,7 +495,7 @@ func TestGetNoteChangeWithFragment(t *testing.T) {
 		Body:  &body,
 	}
 
-	_, err := models.CreateNote(input)
+	_, err := models.CreateNote(input, ncTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to create note: %v", err)
 	}

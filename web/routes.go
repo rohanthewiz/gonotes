@@ -27,7 +27,23 @@ func setupRoutes(s *rweb.Server) {
 	// Health check endpoint
 	// s.Get("/health", handlers.HealthCheck)
 
+	// =========================================
+	// Authentication routes - public endpoints
+	// =========================================
+	// Note: JWT middleware is applied globally, but these endpoints don't require auth
+	s.Post("/api/v1/auth/register", api.Register) // Create new account
+	s.Post("/api/v1/auth/login", api.Login)       // Authenticate user
+
+	// Protected auth routes - handlers check authentication
+	s.Get("/api/v1/auth/me", api.GetCurrentUser)     // Get current user profile
+	s.Post("/api/v1/auth/refresh", api.RefreshToken) // Refresh JWT token
+
+	// =========================================
 	// API v1 routes - JSON responses
+	// =========================================
+	// Note: Authentication is enforced within handlers via api.GetCurrentUserGUID()
+	// This allows handlers to return proper 401 errors with JSON responses
+
 	// Notes CRUD endpoints following RESTful conventions
 	s.Post("/api/v1/notes", api.CreateNote)       // Create a new note
 	s.Get("/api/v1/notes", api.ListNotes)         // List all notes (with pagination)
@@ -43,8 +59,14 @@ func setupRoutes(s *rweb.Server) {
 	s.Delete("/api/v1/categories/:id", api.DeleteCategory) // Delete a category by ID
 
 	// Note-Category relationship endpoints
-	s.Post("/api/v1/notes/:id/categories/:category_id", api.AddCategoryToNote)       // Add a category to a note
+	s.Post("/api/v1/notes/:id/categories/:category_id", api.AddCategoryToNote)        // Add a category to a note
 	s.Delete("/api/v1/notes/:id/categories/:category_id", api.RemoveCategoryFromNote) // Remove a category from a note
-	s.Get("/api/v1/notes/:id/categories", api.GetNoteCategories)                     // Get all categories for a note
+	s.Get("/api/v1/notes/:id/categories", api.GetNoteCategories)                      // Get all categories for a note
 	s.Get("/api/v1/categories/:id/notes", api.GetCategoryNotes)                       // Get all notes for a category
+
+	// =========================================
+	// Sync endpoints
+	// =========================================
+	// Used for peer-to-peer synchronization between devices/clients
+	s.Get("/api/v1/sync/changes", api.GetUserChanges) // Get user's changes since timestamp
 }

@@ -1,16 +1,18 @@
 module gonotes
 
-go 1.23.0
+go 1.24.0
 
 toolchain go1.24.4
 
 require (
+	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/marcboeker/go-duckdb v1.8.3
 	github.com/rohanthewiz/element v0.5.5-0.20250730211845-a097f2feeb11
 	github.com/rohanthewiz/logger v1.2.20
 	github.com/rohanthewiz/rweb v0.1.21-0.20250827011452-5ff5413205fc
 	github.com/rohanthewiz/serr v1.2.16
+	golang.org/x/crypto v0.46.0
 )
 
 require (
@@ -28,7 +30,7 @@ require (
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
 	golang.org/x/mod v0.21.0 // indirect
 	golang.org/x/sync v0.8.0 // indirect
-	golang.org/x/sys v0.34.0 // indirect
+	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/tools v0.26.0 // indirect
 	golang.org/x/xerrors v0.0.0-20231012003039-104605ab7028 // indirect
 )

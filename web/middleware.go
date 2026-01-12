@@ -1,11 +1,14 @@
 package web
 
 import (
-	"github.com/rohanthewiz/logger"
-	"github.com/rohanthewiz/rweb"
 	"net/http"
 	"strings"
 	"time"
+
+	"gonotes/models"
+
+	"github.com/rohanthewiz/logger"
+	"github.com/rohanthewiz/rweb"
 )
 
 // CorsMiddleware handles CORS headers for cross-origin requests
@@ -51,6 +54,57 @@ func SessionMiddleware(c rweb.Context) error {
 		c.Set("session_id", cookieValue)
 	}
 
+	return c.Next()
+}
+
+// JWTAuthMiddleware validates JWT tokens and populates user context.
+// This middleware extracts the Bearer token from the Authorization header,
+// validates it, and sets user_guid and authenticated in the context.
+// If no token is present or token is invalid, the request continues
+// unauthenticated (middleware doesn't block - use RequireAuth for that).
+func JWTAuthMiddleware(c rweb.Context) error {
+	// Extract token from Authorization header
+	authHeader := c.Request().Header("Authorization")
+
+	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		// No token provided - continue as unauthenticated
+		c.Set("user_guid", "")
+		c.Set("authenticated", false)
+		return c.Next()
+	}
+
+	// Parse and validate the token
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	claims, err := models.ValidateToken(tokenString)
+
+	if err != nil {
+		// Invalid token - continue as unauthenticated
+		// Don't log every invalid token attempt (could be attack)
+		c.Set("user_guid", "")
+		c.Set("authenticated", false)
+		return c.Next()
+	}
+
+	// Valid token - set user context
+	c.Set("user_guid", claims.UserGUID)
+	c.Set("username", claims.Username)
+	c.Set("authenticated", true)
+
+	return c.Next()
+}
+
+// RequireAuth is a middleware that blocks unauthenticated requests.
+// Use this after JWTAuthMiddleware for protected endpoints.
+// Returns 401 Unauthorized if not authenticated.
+func RequireAuth(c rweb.Context) error {
+	authenticated, _ := c.Get("authenticated").(bool)
+	if !authenticated {
+		c.SetStatus(http.StatusUnauthorized)
+		return c.WriteJSON(map[string]interface{}{
+			"success": false,
+			"error":   "authentication required",
+		})
+	}
 	return c.Next()
 }
 

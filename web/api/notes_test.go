@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"testing"
@@ -16,8 +17,9 @@ import (
 // testServer manages a running server instance for integration testing.
 // This approach tests the full HTTP stack including middleware.
 type testServer struct {
-	baseURL string
-	client  *http.Client
+	baseURL   string
+	client    *http.Client
+	authToken string // JWT token for authenticated requests
 }
 
 // newTestServer creates a test server with a fresh database on a random port.
@@ -34,6 +36,12 @@ func newTestServer(t *testing.T) *testServer {
 		t.Fatalf("failed to initialize test database: %v", err)
 	}
 
+	// Initialize JWT for auth tests
+	os.Setenv("GONOTES_JWT_SECRET", "test-secret-key-for-jwt-testing-32chars")
+	if err := models.InitJWT(); err != nil {
+		t.Fatalf("failed to initialize JWT: %v", err)
+	}
+
 	// Create and start server on a test port
 	srv := web.NewServer()
 
@@ -45,10 +53,41 @@ func newTestServer(t *testing.T) *testServer {
 	// Wait for server to be ready
 	time.Sleep(100 * time.Millisecond)
 
-	return &testServer{
+	ts := &testServer{
 		baseURL: "http://localhost:8000",
 		client:  &http.Client{Timeout: 5 * time.Second},
 	}
+
+	// Register a test user and get auth token
+	ts.registerTestUser(t)
+
+	return ts
+}
+
+// registerTestUser registers a test user and stores the auth token.
+func (ts *testServer) registerTestUser(t *testing.T) {
+	t.Helper()
+
+	regInput := map[string]string{
+		"username": "notetest",
+		"password": "testpassword123",
+	}
+	body, _ := json.Marshal(regInput)
+	resp, err := http.Post(ts.baseURL+"/api/v1/auth/register", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		t.Fatalf("failed to register test user: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		t.Fatalf("failed to register test user, status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var result map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+	data := result["data"].(map[string]interface{})
+	ts.authToken = data["token"].(string)
 }
 
 // cleanup stops the server and removes test database
@@ -58,7 +97,7 @@ func (ts *testServer) cleanup() {
 	os.Remove("./data/test_notes.ddb.wal")
 }
 
-// request makes an HTTP request and returns status code and parsed JSON response
+// request makes an HTTP request with auth token and returns status code and parsed JSON response
 func (ts *testServer) request(method, path string, body interface{}) (int, map[string]interface{}) {
 	var reqBody *bytes.Buffer
 	if body != nil {
@@ -73,6 +112,10 @@ func (ts *testServer) request(method, path string, body interface{}) (int, map[s
 		return 0, nil
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// Add auth token for authenticated requests
+	if ts.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+ts.authToken)
+	}
 
 	resp, err := ts.client.Do(req)
 	if err != nil {

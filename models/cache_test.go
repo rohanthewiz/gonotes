@@ -10,6 +10,10 @@ import (
 	"gonotes/models"
 )
 
+// testUserGUID is a constant user GUID used for tests to simulate an authenticated user.
+// All note operations require a user GUID for ownership filtering.
+const testUserGUID = "test-user-guid-001"
+
 // setupTestDB initializes a clean test database for each test
 func setupTestDB(t *testing.T) func() {
 	t.Helper()
@@ -42,13 +46,13 @@ func TestCacheSync(t *testing.T) {
 		Title: "Cache Test Note",
 	}
 
-	note, err := models.CreateNote(input)
+	note, err := models.CreateNote(input, testUserGUID)
 	if err != nil {
 		t.Fatalf("failed to create note: %v", err)
 	}
 
 	// Verify note is readable (from cache)
-	retrieved, err := models.GetNoteByID(note.ID)
+	retrieved, err := models.GetNoteByID(note.ID, testUserGUID)
 	if err != nil {
 		t.Fatalf("failed to get note by ID: %v", err)
 	}
@@ -87,7 +91,7 @@ func TestCacheUpdate(t *testing.T) {
 		Title: "Original Title",
 	}
 
-	note, err := models.CreateNote(input)
+	note, err := models.CreateNote(input, testUserGUID)
 	if err != nil {
 		t.Fatalf("failed to create note: %v", err)
 	}
@@ -97,7 +101,7 @@ func TestCacheUpdate(t *testing.T) {
 		Title: "Updated Title",
 	}
 
-	updated, err := models.UpdateNote(note.ID, updateInput)
+	updated, err := models.UpdateNote(note.ID, updateInput, testUserGUID)
 	if err != nil {
 		t.Fatalf("failed to update note: %v", err)
 	}
@@ -107,7 +111,7 @@ func TestCacheUpdate(t *testing.T) {
 	}
 
 	// Verify the update is in cache
-	retrieved, err := models.GetNoteByID(note.ID)
+	retrieved, err := models.GetNoteByID(note.ID, testUserGUID)
 	if err != nil {
 		t.Fatalf("failed to get updated note: %v", err)
 	}
@@ -128,13 +132,13 @@ func TestCacheDelete(t *testing.T) {
 		Title: "To Be Deleted",
 	}
 
-	note, err := models.CreateNote(input)
+	note, err := models.CreateNote(input, testUserGUID)
 	if err != nil {
 		t.Fatalf("failed to create note: %v", err)
 	}
 
 	// Delete the note
-	deleted, err := models.DeleteNote(note.ID)
+	deleted, err := models.DeleteNote(note.ID, testUserGUID)
 	if err != nil {
 		t.Fatalf("failed to delete note: %v", err)
 	}
@@ -144,7 +148,7 @@ func TestCacheDelete(t *testing.T) {
 	}
 
 	// Verify the note is not retrievable from cache
-	retrieved, err := models.GetNoteByID(note.ID)
+	retrieved, err := models.GetNoteByID(note.ID, testUserGUID)
 	if err != nil {
 		t.Fatalf("failed to query deleted note: %v", err)
 	}
@@ -165,7 +169,7 @@ func TestCacheHardDelete(t *testing.T) {
 		Title: "To Be Hard Deleted",
 	}
 
-	note, err := models.CreateNote(input)
+	note, err := models.CreateNote(input, testUserGUID)
 	if err != nil {
 		t.Fatalf("failed to create note: %v", err)
 	}
@@ -181,7 +185,7 @@ func TestCacheHardDelete(t *testing.T) {
 	}
 
 	// Verify the note is not retrievable from cache
-	retrieved, err := models.GetNoteByID(note.ID)
+	retrieved, err := models.GetNoteByID(note.ID, testUserGUID)
 	if err != nil {
 		t.Fatalf("failed to query hard deleted note: %v", err)
 	}
@@ -202,14 +206,14 @@ func TestCacheList(t *testing.T) {
 			GUID:  fmt.Sprintf("list-test-%d", i),
 			Title: "List Test Note",
 		}
-		_, err := models.CreateNote(input)
+		_, err := models.CreateNote(input, testUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create note %d: %v", i, err)
 		}
 	}
 
 	// List all notes
-	notes, err := models.ListNotes(0, 0)
+	notes, err := models.ListNotes(testUserGUID, 0, 0)
 	if err != nil {
 		t.Fatalf("failed to list notes: %v", err)
 	}
@@ -219,7 +223,7 @@ func TestCacheList(t *testing.T) {
 	}
 
 	// Test pagination
-	limited, err := models.ListNotes(2, 0)
+	limited, err := models.ListNotes(testUserGUID, 2, 0)
 	if err != nil {
 		t.Fatalf("failed to list notes with limit: %v", err)
 	}
@@ -229,7 +233,7 @@ func TestCacheList(t *testing.T) {
 	}
 
 	// Test offset
-	offset, err := models.ListNotes(2, 2)
+	offset, err := models.ListNotes(testUserGUID, 2, 2)
 	if err != nil {
 		t.Fatalf("failed to list notes with offset: %v", err)
 	}
@@ -257,7 +261,7 @@ func TestCachePrimaryKeySync(t *testing.T) {
 			Title: "Primary Key Test",
 		}
 
-		note, err := models.CreateNote(input)
+		note, err := models.CreateNote(input, testUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create note %d: %v", i, err)
 		}
@@ -269,7 +273,7 @@ func TestCachePrimaryKeySync(t *testing.T) {
 		lastID = note.ID
 
 		// Verify note can be retrieved with the same ID
-		retrieved, err := models.GetNoteByID(note.ID)
+		retrieved, err := models.GetNoteByID(note.ID, testUserGUID)
 		if err != nil {
 			t.Fatalf("failed to retrieve note %d: %v", i, err)
 		}
@@ -287,7 +291,7 @@ func TestCacheEdgeCases(t *testing.T) {
 
 	// Test 1: Get non-existent note
 	t.Run("GetNonExistent", func(t *testing.T) {
-		note, err := models.GetNoteByID(999)
+		note, err := models.GetNoteByID(999, testUserGUID)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -301,7 +305,7 @@ func TestCacheEdgeCases(t *testing.T) {
 		input := models.NoteInput{
 			Title: "Update Non-Existent",
 		}
-		updated, err := models.UpdateNote(999, input)
+		updated, err := models.UpdateNote(999, input, testUserGUID)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -312,7 +316,7 @@ func TestCacheEdgeCases(t *testing.T) {
 
 	// Test 3: Delete non-existent note
 	t.Run("DeleteNonExistent", func(t *testing.T) {
-		deleted, err := models.DeleteNote(999)
+		deleted, err := models.DeleteNote(999, testUserGUID)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -327,7 +331,7 @@ func TestCacheEdgeCases(t *testing.T) {
 			GUID:  "duplicate-test",
 			Title: "First Note",
 		}
-		_, err := models.CreateNote(input1)
+		_, err := models.CreateNote(input1, testUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create first note: %v", err)
 		}
@@ -337,7 +341,7 @@ func TestCacheEdgeCases(t *testing.T) {
 			GUID:  "duplicate-test",
 			Title: "Second Note",
 		}
-		_, err = models.CreateNote(input2)
+		_, err = models.CreateNote(input2, testUserGUID)
 		if err == nil {
 			t.Error("expected error when creating note with duplicate GUID")
 		}
@@ -349,7 +353,7 @@ func TestCacheEdgeCases(t *testing.T) {
 			GUID:  "update-delete-test",
 			Title: "Original",
 		}
-		note, err := models.CreateNote(input)
+		note, err := models.CreateNote(input, testUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create note: %v", err)
 		}
@@ -358,7 +362,7 @@ func TestCacheEdgeCases(t *testing.T) {
 		updateInput := models.NoteInput{
 			Title: "Updated",
 		}
-		updated, err := models.UpdateNote(note.ID, updateInput)
+		updated, err := models.UpdateNote(note.ID, updateInput, testUserGUID)
 		if err != nil {
 			t.Fatalf("failed to update note: %v", err)
 		}
@@ -367,7 +371,7 @@ func TestCacheEdgeCases(t *testing.T) {
 		}
 
 		// Delete
-		deleted, err := models.DeleteNote(note.ID)
+		deleted, err := models.DeleteNote(note.ID, testUserGUID)
 		if err != nil {
 			t.Fatalf("failed to delete note: %v", err)
 		}
@@ -376,7 +380,7 @@ func TestCacheEdgeCases(t *testing.T) {
 		}
 
 		// Verify not retrievable
-		retrieved, err := models.GetNoteByID(note.ID)
+		retrieved, err := models.GetNoteByID(note.ID, testUserGUID)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -398,7 +402,7 @@ func TestAuthoredAtBehavior(t *testing.T) {
 			Title: "Authored At Create Test",
 		}
 
-		note, err := models.CreateNote(input)
+		note, err := models.CreateNote(input, testUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create note: %v", err)
 		}
@@ -428,7 +432,7 @@ func TestAuthoredAtBehavior(t *testing.T) {
 			Title: "Original Title",
 		}
 
-		note, err := models.CreateNote(input)
+		note, err := models.CreateNote(input, testUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create note: %v", err)
 		}
@@ -444,7 +448,7 @@ func TestAuthoredAtBehavior(t *testing.T) {
 		}
 
 		// Note: UpdateNote doesn't return authored_at since it reads from cache
-		_, err = models.UpdateNote(note.ID, updateInput)
+		_, err = models.UpdateNote(note.ID, updateInput, testUserGUID)
 		if err != nil {
 			t.Fatalf("failed to update note: %v", err)
 		}
@@ -466,13 +470,13 @@ func TestAuthoredAtBehavior(t *testing.T) {
 			Title: "Cache Schema Test",
 		}
 
-		note, err := models.CreateNote(input)
+		note, err := models.CreateNote(input, testUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create note: %v", err)
 		}
 
 		// GetNoteByID reads from cache, which doesn't have authored_at column
-		retrieved, err := models.GetNoteByID(note.ID)
+		retrieved, err := models.GetNoteByID(note.ID, testUserGUID)
 		if err != nil {
 			t.Fatalf("failed to get note: %v", err)
 		}

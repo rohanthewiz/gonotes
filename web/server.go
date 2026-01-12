@@ -16,7 +16,7 @@ func NewServer() *rweb.Server {
 	// Apply middleware
 	s.Use(rweb.RequestInfo)          // Logs request info
 	s.Use(CorsMiddleware)            // Custom CORS middleware
-	s.Use(SessionMiddleware)         // Session management
+	s.Use(JWTAuthMiddleware)         // JWT token validation and user context
 	s.Use(SecurityHeadersMiddleware) // Security headers
 	s.Use(LoggingMiddleware)         // Request logging
 
@@ -43,7 +43,7 @@ func NewTestServer(opts rweb.ServerOptions) *rweb.Server {
 	// Apply the same middleware as production server
 	s.Use(rweb.RequestInfo)
 	s.Use(CorsMiddleware)
-	s.Use(SessionMiddleware)
+	s.Use(JWTAuthMiddleware)
 	s.Use(SecurityHeadersMiddleware)
 	s.Use(LoggingMiddleware)
 

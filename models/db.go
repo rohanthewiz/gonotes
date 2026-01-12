@@ -87,6 +87,12 @@ func createTables() error {
 		return serr.Wrap(err, "failed to initialize authored_at for existing notes")
 	}
 
+	// Create users table for authentication
+	_, err = db.Exec(CreateUsersTableSQL)
+	if err != nil {
+		return serr.Wrap(err, "failed to create users table")
+	}
+
 	_, err = db.Exec(CreateCategoriesTableSQL)
 	if err != nil {
 		return serr.Wrap(err, "failed to create categories table")

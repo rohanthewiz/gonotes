@@ -19,6 +19,13 @@ func main() {
 	}
 	defer models.CloseDB()
 
+	// Initialize JWT token signing
+	// In production, set GONOTES_JWT_SECRET environment variable
+	if err := models.InitJWT(); err != nil {
+		logger.LogErr(err, "Failed to initialize JWT")
+		os.Exit(1)
+	}
+
 	// Start server
 	srv := web.NewServer()
 	logger.Info("Starting GoNotes Web on port 8080")

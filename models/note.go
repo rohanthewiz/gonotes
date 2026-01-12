@@ -186,7 +186,9 @@ func (n *Note) ToOutput() NoteOutput {
 // - The cache stores the UNENCRYPTED body for fast reads.
 // - This means disk contains encrypted data (secure at rest) while memory has
 //   plaintext for performance.
-func CreateNote(input NoteInput) (*Note, error) {
+// CreateNote creates a new note in both disk and cache databases.
+// The userGUID parameter is required to set note ownership (created_by).
+func CreateNote(input NoteInput, userGUID string) (*Note, error) {
 	// Prepare body and IV for disk storage
 	// For private notes, we encrypt the body; for public notes, we store plainly
 	diskBody := toNullString(input.Body)
@@ -200,6 +202,10 @@ func CreateNote(input NoteInput) (*Note, error) {
 		diskBody = toNullString(&encryptedBody)
 		diskEncryptionIV = toNullString(&iv)
 	}
+
+	// Set ownership from the authenticated user
+	createdBy := sql.NullString{String: userGUID, Valid: userGUID != ""}
+	updatedBy := sql.NullString{String: userGUID, Valid: userGUID != ""}
 
 	// authored_at uses DEFAULT CURRENT_TIMESTAMP, so no need to include in INSERT VALUES
 	query := `
@@ -219,8 +225,8 @@ func CreateNote(input NoteInput) (*Note, error) {
 		toNullString(input.Tags),
 		input.IsPrivate,
 		diskEncryptionIV,
-		toNullString(input.CreatedBy),
-		toNullString(input.UpdatedBy),
+		createdBy,
+		updatedBy,
 	).Scan(
 		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
 		&note.Tags, &note.IsPrivate, &note.EncryptionIV, &note.CreatedBy,
@@ -237,7 +243,7 @@ func CreateNote(input NoteInput) (*Note, error) {
 	if fragmentID, err := insertNoteFragment(fragment); err != nil {
 		logger.LogErr(err, "failed to record note fragment", "note_guid", input.GUID)
 	} else {
-		if err := insertNoteChange(GenerateChangeGUID(), input.GUID, OperationCreate, sql.NullInt64{Int64: fragmentID, Valid: true}, ""); err != nil {
+		if err := insertNoteChange(GenerateChangeGUID(), input.GUID, OperationCreate, sql.NullInt64{Int64: fragmentID, Valid: true}, userGUID); err != nil {
 			logger.LogErr(err, "failed to record note change", "note_guid", input.GUID)
 		}
 	}
@@ -275,18 +281,19 @@ func CreateNote(input NoteInput) (*Note, error) {
 }
 
 // GetNoteByID retrieves a single note by its primary key from the cache.
-// Returns nil, nil if the note doesn't exist (soft-deleted notes are excluded).
-func GetNoteByID(id int64) (*Note, error) {
+// The userGUID parameter filters to notes owned by that user.
+// Returns nil, nil if the note doesn't exist or isn't owned by the user.
+func GetNoteByID(id int64, userGUID string) (*Note, error) {
 	query := `
 		SELECT id, guid, title, description, body, tags, is_private, encryption_iv,
 		       created_by, updated_by, created_at, updated_at, synced_at, deleted_at
 		FROM notes
-		WHERE id = ? AND deleted_at IS NULL
+		WHERE id = ? AND created_by = ? AND deleted_at IS NULL
 	`
 
 	note := &Note{}
 	// Read from cache for better performance
-	err := cacheDB.QueryRow(query, id).Scan(
+	err := cacheDB.QueryRow(query, id, userGUID).Scan(
 		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
 		&note.Tags, &note.IsPrivate, &note.EncryptionIV, &note.CreatedBy,
 		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.SyncedAt, &note.DeletedAt,
@@ -328,15 +335,16 @@ func GetNoteByGUID(guid string) (*Note, error) {
 	return note, nil
 }
 
-// ListNotes retrieves all non-deleted notes with pagination from the cache.
+// ListNotes retrieves all non-deleted notes owned by a user with pagination.
+// The userGUID parameter filters to notes owned by that user.
 // Ordered by created_at descending (newest first).
 // limit=0 returns all notes, offset skips the first N results.
-func ListNotes(limit, offset int) ([]Note, error) {
+func ListNotes(userGUID string, limit, offset int) ([]Note, error) {
 	query := `
 		SELECT id, guid, title, description, body, tags, is_private, encryption_iv,
 		       created_by, updated_by, created_at, updated_at, synced_at, deleted_at
 		FROM notes
-		WHERE deleted_at IS NULL
+		WHERE created_by = ? AND deleted_at IS NULL
 		ORDER BY created_at DESC
 	`
 
@@ -350,9 +358,9 @@ func ListNotes(limit, offset int) ([]Note, error) {
 
 	// Read from cache for better performance
 	if limit > 0 {
-		rows, err = cacheDB.Query(query, limit, offset)
+		rows, err = cacheDB.Query(query, userGUID, limit, offset)
 	} else {
-		rows, err = cacheDB.Query(query)
+		rows, err = cacheDB.Query(query, userGUID)
 	}
 
 	if err != nil {
@@ -388,15 +396,19 @@ func ListNotes(limit, offset int) ([]Note, error) {
 //   before being written to disk. A new IV is generated for each update.
 // - The cache stores the UNENCRYPTED body for fast reads.
 // - If a note changes from private to public, the body is stored unencrypted.
-func UpdateNote(id int64, input NoteInput) (*Note, error) {
-	// First verify the note exists and isn't deleted (reads from cache)
-	existing, err := GetNoteByID(id)
+// The userGUID parameter is used to verify ownership and set updated_by.
+func UpdateNote(id int64, input NoteInput, userGUID string) (*Note, error) {
+	// First verify the note exists, isn't deleted, and is owned by this user
+	existing, err := GetNoteByID(id, userGUID)
 	if err != nil {
 		return nil, err
 	}
 	if existing == nil {
-		return nil, nil
+		return nil, nil // Not found or not owned by user
 	}
+
+	// Set updated_by from the authenticated user
+	updatedBy := sql.NullString{String: userGUID, Valid: userGUID != ""}
 
 	// Prepare body and IV for disk storage
 	// For private notes, we encrypt the body; for public notes, we store plainly
@@ -414,12 +426,13 @@ func UpdateNote(id int64, input NoteInput) (*Note, error) {
 
 	// Perform the update on disk DB first (source of truth)
 	// authored_at is updated to track last human modification (for peer-to-peer sync)
+	// Also filter by created_by to enforce ownership
 	diskUpdateQuery := `
 		UPDATE notes
 		SET title = ?, description = ?, body = ?, tags = ?, is_private = ?,
 		    encryption_iv = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP,
 		    authored_at = CURRENT_TIMESTAMP
-		WHERE id = ? AND deleted_at IS NULL
+		WHERE id = ? AND created_by = ? AND deleted_at IS NULL
 	`
 
 	result, err := db.Exec(diskUpdateQuery,
@@ -429,8 +442,9 @@ func UpdateNote(id int64, input NoteInput) (*Note, error) {
 		toNullString(input.Tags),
 		input.IsPrivate,
 		diskEncryptionIV,
-		toNullString(input.UpdatedBy),
+		updatedBy,
 		id,
+		userGUID,
 	)
 	if err != nil {
 		return nil, err
@@ -452,7 +466,7 @@ func UpdateNote(id int64, input NoteInput) (*Note, error) {
 		if fragmentID, err := insertNoteFragment(fragment); err != nil {
 			logger.LogErr(err, "failed to record update fragment", "note_id", id)
 		} else {
-			if err := insertNoteChange(GenerateChangeGUID(), existing.GUID, OperationUpdate, sql.NullInt64{Int64: fragmentID, Valid: true}, ""); err != nil {
+			if err := insertNoteChange(GenerateChangeGUID(), existing.GUID, OperationUpdate, sql.NullInt64{Int64: fragmentID, Valid: true}, userGUID); err != nil {
 				logger.LogErr(err, "failed to record update change", "note_id", id)
 			}
 		}
@@ -483,16 +497,17 @@ func UpdateNote(id int64, input NoteInput) (*Note, error) {
 	}
 
 	// Fetch the updated note from cache (will have unencrypted body)
-	return GetNoteByID(id)
+	return GetNoteByID(id, userGUID)
 }
 
 // DeleteNote performs a soft delete by setting deleted_at timestamp in both databases.
 // The note remains in the database but is excluded from normal queries.
-// Returns true if a note was deleted, false if not found.
-func DeleteNote(id int64) (bool, error) {
-	// First get the note GUID for change tracking
+// The userGUID parameter verifies ownership before deletion.
+// Returns true if a note was deleted, false if not found or not owned by user.
+func DeleteNote(id int64, userGUID string) (bool, error) {
+	// First get the note GUID for change tracking, also verify ownership
 	var noteGUID string
-	err := db.QueryRow(`SELECT guid FROM notes WHERE id = ? AND deleted_at IS NULL`, id).Scan(&noteGUID)
+	err := db.QueryRow(`SELECT guid FROM notes WHERE id = ? AND created_by = ? AND deleted_at IS NULL`, id, userGUID).Scan(&noteGUID)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -503,11 +518,11 @@ func DeleteNote(id int64) (bool, error) {
 	query := `
 		UPDATE notes
 		SET deleted_at = CURRENT_TIMESTAMP
-		WHERE id = ? AND deleted_at IS NULL
+		WHERE id = ? AND created_by = ? AND deleted_at IS NULL
 	`
 
 	// Delete from disk DB first (source of truth)
-	result, err := db.Exec(query, id)
+	result, err := db.Exec(query, id, userGUID)
 	if err != nil {
 		return false, err
 	}
@@ -523,12 +538,12 @@ func DeleteNote(id int64) (bool, error) {
 
 	// Record change for sync (non-blocking)
 	// Delete operations don't have a fragment (null fragment ID)
-	if err := insertNoteChange(GenerateChangeGUID(), noteGUID, OperationDelete, sql.NullInt64{}, ""); err != nil {
+	if err := insertNoteChange(GenerateChangeGUID(), noteGUID, OperationDelete, sql.NullInt64{}, userGUID); err != nil {
 		logger.LogErr(err, "failed to record delete change", "note_id", id)
 	}
 
 	// Also delete from cache
-	_, err = cacheDB.Exec(query, id)
+	_, err = cacheDB.Exec(`UPDATE notes SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL`, id)
 	if err != nil {
 		// Cache delete failed - disk is updated but cache is out of sync
 		return true, serr.Wrap(err, "note deleted in disk DB but failed to update cache")
