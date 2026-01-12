@@ -36,7 +36,14 @@ func writeError(ctx rweb.Context, status int, message string) error {
 
 // CreateNote handles POST /api/v1/notes
 // Creates a new note from JSON body and returns the created note.
+// Requires authentication - note is owned by the authenticated user.
 func CreateNote(ctx rweb.Context) error {
+	// Authentication check - all note operations require auth
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
 	var input models.NoteInput
 
 	// Decode JSON body into input struct
@@ -64,27 +71,34 @@ func CreateNote(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusConflict, "note with this guid already exists")
 	}
 
-	// Create the note
-	note, err := models.CreateNote(input)
+	// Create the note with user ownership
+	note, err := models.CreateNote(input, userGUID)
 	if err != nil {
 		logger.LogErr(serr.Wrap(err, "failed to create note"), "database error")
 		return writeError(ctx, http.StatusInternalServerError, "failed to create note")
 	}
 
-	logger.Info("Note created", "id", note.ID, "guid", note.GUID)
+	logger.Info("Note created", "id", note.ID, "guid", note.GUID, "user", userGUID)
 	return writeSuccess(ctx, http.StatusCreated, note.ToOutput())
 }
 
 // GetNote handles GET /api/v1/notes/:id
-// Retrieves a single note by ID.
+// Retrieves a single note by ID. Only returns notes owned by the authenticated user.
 func GetNote(ctx rweb.Context) error {
+	// Authentication check - all note operations require auth
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
 	idStr := ctx.Request().Param("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		return writeError(ctx, http.StatusBadRequest, "invalid note id")
 	}
 
-	note, err := models.GetNoteByID(id)
+	// GetNoteByID filters by user ownership
+	note, err := models.GetNoteByID(id, userGUID)
 	if err != nil {
 		logger.LogErr(serr.Wrap(err, "failed to get note"), "database error")
 		return writeError(ctx, http.StatusInternalServerError, "database error")
@@ -97,7 +111,7 @@ func GetNote(ctx rweb.Context) error {
 }
 
 // ListNotes handles GET /api/v1/notes
-// Returns all notes with optional filtering and pagination.
+// Returns all notes owned by the authenticated user with optional filtering and pagination.
 //
 // Query parameters:
 //   - limit: Maximum number of results (default: no limit)
@@ -109,6 +123,12 @@ func GetNote(ctx rweb.Context) error {
 // When both cat and subcats[] are provided, returns notes that match the category
 // AND have ALL the specified subcategories.
 func ListNotes(ctx rweb.Context) error {
+	// Authentication check - all note operations require auth
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
 	// Parse pagination parameters with sensible defaults
 	limit := 0 // 0 means no limit
 	offset := 0
@@ -146,11 +166,11 @@ func ListNotes(ctx rweb.Context) error {
 	var err error
 
 	if categoryName != "" {
-		// Filter by category (and optionally subcategories)
+		// Filter by category (and optionally subcategories) with user scoping
 		if len(subcategories) > 0 {
-			notes, err = models.GetNotesByCategoryAndSubcategories(categoryName, subcategories)
+			notes, err = models.GetNotesByCategoryAndSubcategories(categoryName, subcategories, userGUID)
 		} else {
-			notes, err = models.GetNotesByCategoryName(categoryName)
+			notes, err = models.GetNotesByCategoryName(categoryName, userGUID)
 		}
 		if err != nil {
 			logger.LogErr(serr.Wrap(err, "failed to get notes by category"), "database error")
@@ -168,8 +188,8 @@ func ListNotes(ctx rweb.Context) error {
 			notes = notes[:limit]
 		}
 	} else {
-		// No category filter - use standard ListNotes with pagination
-		notes, err = models.ListNotes(limit, offset)
+		// No category filter - use standard ListNotes with pagination and user scoping
+		notes, err = models.ListNotes(userGUID, limit, offset)
 		if err != nil {
 			logger.LogErr(serr.Wrap(err, "failed to list notes"), "database error")
 			return writeError(ctx, http.StatusInternalServerError, "database error")
@@ -187,7 +207,14 @@ func ListNotes(ctx rweb.Context) error {
 
 // UpdateNote handles PUT /api/v1/notes/:id
 // Updates an existing note with the provided JSON body.
+// Only updates notes owned by the authenticated user.
 func UpdateNote(ctx rweb.Context) error {
+	// Authentication check - all note operations require auth
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
 	idStr := ctx.Request().Param("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
@@ -205,7 +232,8 @@ func UpdateNote(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusBadRequest, "title is required")
 	}
 
-	note, err := models.UpdateNote(id, input)
+	// UpdateNote verifies ownership via userGUID
+	note, err := models.UpdateNote(id, input, userGUID)
 	if err != nil {
 		logger.LogErr(serr.Wrap(err, "failed to update note"), "database error")
 		return writeError(ctx, http.StatusInternalServerError, "failed to update note")
@@ -214,20 +242,28 @@ func UpdateNote(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusNotFound, "note not found")
 	}
 
-	logger.Info("Note updated", "id", note.ID)
+	logger.Info("Note updated", "id", note.ID, "user", userGUID)
 	return writeSuccess(ctx, http.StatusOK, note.ToOutput())
 }
 
 // DeleteNote handles DELETE /api/v1/notes/:id
 // Performs a soft delete on the note (sets deleted_at timestamp).
+// Only deletes notes owned by the authenticated user.
 func DeleteNote(ctx rweb.Context) error {
+	// Authentication check - all note operations require auth
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
 	idStr := ctx.Request().Param("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		return writeError(ctx, http.StatusBadRequest, "invalid note id")
 	}
 
-	deleted, err := models.DeleteNote(id)
+	// DeleteNote verifies ownership via userGUID
+	deleted, err := models.DeleteNote(id, userGUID)
 	if err != nil {
 		logger.LogErr(serr.Wrap(err, "failed to delete note"), "database error")
 		return writeError(ctx, http.StatusInternalServerError, "failed to delete note")
@@ -236,6 +272,6 @@ func DeleteNote(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusNotFound, "note not found")
 	}
 
-	logger.Info("Note deleted", "id", id)
+	logger.Info("Note deleted", "id", id, "user", userGUID)
 	return writeSuccess(ctx, http.StatusOK, map[string]interface{}{"deleted": true, "id": id})
 }

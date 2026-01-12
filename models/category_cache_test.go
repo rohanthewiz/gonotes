@@ -7,6 +7,9 @@ import (
 	"gonotes/models"
 )
 
+// catTestUserGUID is a constant user GUID used for category tests to simulate an authenticated user.
+const catTestUserGUID = "cat-test-user-guid-001"
+
 // setupCategoryTestDB initializes a clean test database for category tests
 func setupCategoryTestDB(t *testing.T) func() {
 	t.Helper()
@@ -192,7 +195,7 @@ func TestNoteCategoryRelationshipSync(t *testing.T) {
 			GUID:  "test-note-001",
 			Title: "Test Note",
 		}
-		note, err := models.CreateNote(noteInput)
+		note, err := models.CreateNote(noteInput, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create note: %v", err)
 		}
@@ -233,7 +236,7 @@ func TestNoteCategoryRelationshipSync(t *testing.T) {
 			GUID:  "test-note-002",
 			Title: "Test Note 2",
 		}
-		note, err := models.CreateNote(noteInput)
+		note, err := models.CreateNote(noteInput, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create note: %v", err)
 		}
@@ -286,7 +289,7 @@ func TestNoteCategoryRelationshipSync(t *testing.T) {
 				GUID:  "test-note-shared-" + string(rune('0'+i)),
 				Title: "Shared Note " + string(rune('0'+i)),
 			}
-			note, err := models.CreateNote(noteInput)
+			note, err := models.CreateNote(noteInput, catTestUserGUID)
 			if err != nil {
 				t.Fatalf("failed to create note: %v", err)
 			}
@@ -314,7 +317,7 @@ func TestNoteCategoryRelationshipSync(t *testing.T) {
 			GUID:  "test-note-dup",
 			Title: "Test Note Dup",
 		}
-		note, err := models.CreateNote(noteInput)
+		note, err := models.CreateNote(noteInput, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create note: %v", err)
 		}
@@ -396,7 +399,7 @@ func TestCategoryEdgeCases(t *testing.T) {
 			GUID:  "test-note-edge",
 			Title: "Test Note Edge",
 		}
-		note, err := models.CreateNote(noteInput)
+		note, err := models.CreateNote(noteInput, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create note: %v", err)
 		}
@@ -413,7 +416,7 @@ func TestCategoryEdgeCases(t *testing.T) {
 			GUID:  "test-note-nolink",
 			Title: "Test Note No Link",
 		}
-		note, err := models.CreateNote(noteInput)
+		note, err := models.CreateNote(noteInput, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create note: %v", err)
 		}
@@ -531,7 +534,7 @@ func TestCategorySubcategoryQueries(t *testing.T) {
 			Title: "Kubernetes Pod Basics",
 			Body:  &body1,
 		}
-		note1, err = models.CreateNote(note1Input)
+		note1, err = models.CreateNote(note1Input, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create note1: %v", err)
 		}
@@ -542,7 +545,7 @@ func TestCategorySubcategoryQueries(t *testing.T) {
 			Title: "Kubernetes Deployments",
 			Body:  &body2,
 		}
-		note2, err = models.CreateNote(note2Input)
+		note2, err = models.CreateNote(note2Input, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create note2: %v", err)
 		}
@@ -553,7 +556,7 @@ func TestCategorySubcategoryQueries(t *testing.T) {
 			Title: "AWS EC2 Instances",
 			Body:  &body3,
 		}
-		note3, err = models.CreateNote(note3Input)
+		note3, err = models.CreateNote(note3Input, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create note3: %v", err)
 		}
@@ -576,7 +579,7 @@ func TestCategorySubcategoryQueries(t *testing.T) {
 	})
 
 	t.Run("query notes by category name only", func(t *testing.T) {
-		notes, err := models.GetNotesByCategoryName("k8s")
+		notes, err := models.GetNotesByCategoryName("k8s", catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to get notes by category name: %v", err)
 		}
@@ -596,7 +599,7 @@ func TestCategorySubcategoryQueries(t *testing.T) {
 	})
 
 	t.Run("query notes by category name - aws", func(t *testing.T) {
-		notes, err := models.GetNotesByCategoryName("aws")
+		notes, err := models.GetNotesByCategoryName("aws", catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to get notes by category name: %v", err)
 		}
@@ -611,7 +614,7 @@ func TestCategorySubcategoryQueries(t *testing.T) {
 	})
 
 	t.Run("query notes by non-existent category", func(t *testing.T) {
-		notes, err := models.GetNotesByCategoryName("nonexistent")
+		notes, err := models.GetNotesByCategoryName("nonexistent", catTestUserGUID)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -622,7 +625,7 @@ func TestCategorySubcategoryQueries(t *testing.T) {
 	})
 
 	t.Run("query notes by category and single subcategory", func(t *testing.T) {
-		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{"pod"})
+		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{"pod"}, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to get notes by category and subcategory: %v", err)
 		}
@@ -637,7 +640,7 @@ func TestCategorySubcategoryQueries(t *testing.T) {
 	})
 
 	t.Run("query notes by category and multiple subcategories", func(t *testing.T) {
-		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{"deployment", "replicaset"})
+		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{"deployment", "replicaset"}, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to get notes by category and subcategories: %v", err)
 		}
@@ -653,7 +656,7 @@ func TestCategorySubcategoryQueries(t *testing.T) {
 
 	t.Run("query notes by category and partial subcategory match", func(t *testing.T) {
 		// note2 has deployment and replicaset, query for deployment only
-		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{"deployment"})
+		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{"deployment"}, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to get notes by category and subcategory: %v", err)
 		}
@@ -668,7 +671,7 @@ func TestCategorySubcategoryQueries(t *testing.T) {
 	})
 
 	t.Run("query notes by category and non-matching subcategory", func(t *testing.T) {
-		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{"service"})
+		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{"service"}, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -679,7 +682,7 @@ func TestCategorySubcategoryQueries(t *testing.T) {
 	})
 
 	t.Run("query with empty subcategories returns all category notes", func(t *testing.T) {
-		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{})
+		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{}, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to get notes: %v", err)
 		}
@@ -697,7 +700,7 @@ func TestCategorySubcategoryQueries(t *testing.T) {
 		}
 
 		// Now query for service should return note1
-		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{"service"})
+		notes, err := models.GetNotesByCategoryAndSubcategories("k8s", []string{"service"}, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to get notes: %v", err)
 		}

@@ -8,6 +8,9 @@ import (
 	"gonotes/models"
 )
 
+// encTestUserGUID is a constant user GUID used for encryption tests to simulate an authenticated user.
+const encTestUserGUID = "enc-test-user-guid-001"
+
 // setupEncryptionTestDB initializes a test database with encryption enabled
 // The encryption key must be exactly 32 characters for AES-256
 func setupEncryptionTestDB(t *testing.T) func() {
@@ -152,7 +155,7 @@ func TestPrivateNoteEncryptedOnDisk(t *testing.T) {
 	}
 
 	// Create private note
-	note, err := models.CreateNote(input)
+	note, err := models.CreateNote(input, encTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to create private note: %v", err)
 	}
@@ -206,7 +209,7 @@ func TestPublicNoteNotEncrypted(t *testing.T) {
 	}
 
 	// Create public note
-	note, err := models.CreateNote(input)
+	note, err := models.CreateNote(input, encTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to create public note: %v", err)
 	}
@@ -242,13 +245,13 @@ func TestCacheContainsDecryptedContent(t *testing.T) {
 	}
 
 	// Create private note
-	note, err := models.CreateNote(input)
+	note, err := models.CreateNote(input, encTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to create note: %v", err)
 	}
 
 	// Read from cache (via GetNoteByID)
-	cachedNote, err := models.GetNoteByID(note.ID)
+	cachedNote, err := models.GetNoteByID(note.ID, encTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to get note by ID: %v", err)
 	}
@@ -285,7 +288,7 @@ func TestUpdatePrivateNoteReencrypts(t *testing.T) {
 	}
 
 	// Create private note
-	note, err := models.CreateNote(input)
+	note, err := models.CreateNote(input, encTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to create note: %v", err)
 	}
@@ -302,7 +305,7 @@ func TestUpdatePrivateNoteReencrypts(t *testing.T) {
 		IsPrivate: true,
 	}
 
-	updatedNote, err := models.UpdateNote(note.ID, updateInput)
+	updatedNote, err := models.UpdateNote(note.ID, updateInput, encTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to update note: %v", err)
 	}
@@ -341,7 +344,7 @@ func TestPrivateToPublicRemovesEncryption(t *testing.T) {
 	}
 
 	// Create private note
-	note, err := models.CreateNote(input)
+	note, err := models.CreateNote(input, encTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to create note: %v", err)
 	}
@@ -360,7 +363,7 @@ func TestPrivateToPublicRemovesEncryption(t *testing.T) {
 		IsPrivate: false, // Now public
 	}
 
-	_, err = models.UpdateNote(note.ID, updateInput)
+	_, err = models.UpdateNote(note.ID, updateInput, encTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to update note: %v", err)
 	}
@@ -411,7 +414,7 @@ func TestCacheSyncDecryptsOnRestart(t *testing.T) {
 	}
 
 	// Create private note
-	note, err := models.CreateNote(input)
+	note, err := models.CreateNote(input, encTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to create note: %v", err)
 	}
@@ -432,7 +435,7 @@ func TestCacheSyncDecryptsOnRestart(t *testing.T) {
 	}
 
 	// Read note - should be decrypted in cache after sync
-	retrievedNote, err := models.GetNoteByID(noteID)
+	retrievedNote, err := models.GetNoteByID(noteID, encTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to get note after restart: %v", err)
 	}

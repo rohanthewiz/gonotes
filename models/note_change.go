@@ -406,3 +406,69 @@ func GetNoteChangeWithFragment(changeID int64) (*NoteChangeOutput, error) {
 
 	return change, nil
 }
+
+// GetUserChangesSince retrieves all changes for a user since the specified timestamp.
+// Used for sync operations where a client needs to fetch changes made after their last sync.
+// The userGUID parameter filters to changes made by that user.
+// Returns changes ordered by created_at ascending (oldest first) for proper replay order.
+func GetUserChangesSince(userGUID string, since time.Time, limit int) ([]NoteChangeOutput, error) {
+	query := `
+		SELECT id, guid, note_guid, operation, note_fragment_id, user, created_at
+		FROM note_changes
+		WHERE user = ? AND created_at > ?
+		ORDER BY created_at ASC
+	`
+
+	// Add limit if specified
+	if limit > 0 {
+		query += " LIMIT ?"
+	}
+
+	var rows *sql.Rows
+	var err error
+
+	if limit > 0 {
+		rows, err = db.Query(query, userGUID, since, limit)
+	} else {
+		rows, err = db.Query(query, userGUID, since)
+	}
+
+	if err != nil {
+		return nil, serr.Wrap(err, "failed to query user changes")
+	}
+	defer rows.Close()
+
+	var changes []NoteChangeOutput
+	for rows.Next() {
+		var change NoteChangeOutput
+		err := rows.Scan(
+			&change.ID,
+			&change.GUID,
+			&change.NoteGUID,
+			&change.Operation,
+			&change.NoteFragmentID,
+			&change.User,
+			&change.CreatedAt,
+		)
+		if err != nil {
+			return nil, serr.Wrap(err, "failed to scan change row")
+		}
+
+		// Load fragment if present
+		if change.NoteFragmentID.Valid {
+			fragment, err := GetNoteFragment(change.NoteFragmentID.Int64)
+			if err != nil {
+				return nil, serr.Wrap(err, "failed to get associated fragment")
+			}
+			change.Fragment = fragment
+		}
+
+		changes = append(changes, change)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, serr.Wrap(err, "error iterating user changes")
+	}
+
+	return changes, nil
+}
