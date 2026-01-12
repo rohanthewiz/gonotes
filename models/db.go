@@ -97,6 +97,50 @@ func createTables() error {
 		return serr.Wrap(err, "failed to create note_categories table")
 	}
 
+	// Create note change tracking tables for peer-to-peer sync
+	// Order matters: note_fragments first (referenced by note_changes)
+	_, err = db.Exec(DDLCreateNoteFragmentsSequence)
+	if err != nil {
+		return serr.Wrap(err, "failed to create note_fragments sequence")
+	}
+
+	_, err = db.Exec(DDLCreateNoteFragmentsTable)
+	if err != nil {
+		return serr.Wrap(err, "failed to create note_fragments table")
+	}
+
+	// Create note_changes table (references note_fragments)
+	_, err = db.Exec(DDLCreateNoteChangesSequence)
+	if err != nil {
+		return serr.Wrap(err, "failed to create note_changes sequence")
+	}
+
+	_, err = db.Exec(DDLCreateNoteChangesTable)
+	if err != nil {
+		return serr.Wrap(err, "failed to create note_changes table")
+	}
+
+	_, err = db.Exec(DDLCreateNoteChangesIndexNoteGUID)
+	if err != nil {
+		return serr.Wrap(err, "failed to create note_changes note_guid index")
+	}
+
+	_, err = db.Exec(DDLCreateNoteChangesIndexCreatedAt)
+	if err != nil {
+		return serr.Wrap(err, "failed to create note_changes created_at index")
+	}
+
+	// Create note_change_sync_peers table (references note_changes)
+	_, err = db.Exec(DDLCreateNoteChangeSyncPeersTable)
+	if err != nil {
+		return serr.Wrap(err, "failed to create note_change_sync_peers table")
+	}
+
+	_, err = db.Exec(DDLCreateNoteChangeSyncPeersIndexPeerID)
+	if err != nil {
+		return serr.Wrap(err, "failed to create note_change_sync_peers peer_id index")
+	}
+
 	return nil
 }
 

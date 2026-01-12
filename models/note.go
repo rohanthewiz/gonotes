@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/rohanthewiz/logger"
 	"github.com/rohanthewiz/serr"
 )
 
@@ -230,6 +231,17 @@ func CreateNote(input NoteInput) (*Note, error) {
 		return nil, err
 	}
 
+	// Record change for sync (non-blocking)
+	// Track all fields as changed for create operations
+	fragment := createFragmentFromInput(input, FragmentTitle|FragmentDescription|FragmentBody|FragmentTags|FragmentIsPrivate)
+	if fragmentID, err := insertNoteFragment(fragment); err != nil {
+		logger.LogErr(err, "failed to record note fragment", "note_guid", input.GUID)
+	} else {
+		if err := insertNoteChange(GenerateChangeGUID(), input.GUID, OperationCreate, sql.NullInt64{Int64: fragmentID, Valid: true}, ""); err != nil {
+			logger.LogErr(err, "failed to record note change", "note_guid", input.GUID)
+		}
+	}
+
 	// For private notes, the note.Body from disk is encrypted.
 	// We need to store the UNENCRYPTED body in cache for fast reads.
 	cacheBody := note.Body
@@ -432,6 +444,20 @@ func UpdateNote(id int64, input NoteInput) (*Note, error) {
 		return nil, nil
 	}
 
+	// Record change for sync (non-blocking)
+	// Only track fields that actually changed
+	bitmask := computeChangeBitmask(existing, input)
+	if bitmask != 0 {
+		fragment := createDeltaFragment(input, bitmask)
+		if fragmentID, err := insertNoteFragment(fragment); err != nil {
+			logger.LogErr(err, "failed to record update fragment", "note_id", id)
+		} else {
+			if err := insertNoteChange(GenerateChangeGUID(), existing.GUID, OperationUpdate, sql.NullInt64{Int64: fragmentID, Valid: true}, ""); err != nil {
+				logger.LogErr(err, "failed to record update change", "note_id", id)
+			}
+		}
+	}
+
 	// Update cache with UNENCRYPTED body for fast reads
 	cacheUpdateQuery := `
 		UPDATE notes
@@ -464,6 +490,16 @@ func UpdateNote(id int64, input NoteInput) (*Note, error) {
 // The note remains in the database but is excluded from normal queries.
 // Returns true if a note was deleted, false if not found.
 func DeleteNote(id int64) (bool, error) {
+	// First get the note GUID for change tracking
+	var noteGUID string
+	err := db.QueryRow(`SELECT guid FROM notes WHERE id = ? AND deleted_at IS NULL`, id).Scan(&noteGUID)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, serr.Wrap(err, "failed to get note GUID for delete tracking")
+	}
+
 	query := `
 		UPDATE notes
 		SET deleted_at = CURRENT_TIMESTAMP
@@ -483,6 +519,12 @@ func DeleteNote(id int64) (bool, error) {
 
 	if rowsAffected == 0 {
 		return false, nil
+	}
+
+	// Record change for sync (non-blocking)
+	// Delete operations don't have a fragment (null fragment ID)
+	if err := insertNoteChange(GenerateChangeGUID(), noteGUID, OperationDelete, sql.NullInt64{}, ""); err != nil {
+		logger.LogErr(err, "failed to record delete change", "note_id", id)
 	}
 
 	// Also delete from cache

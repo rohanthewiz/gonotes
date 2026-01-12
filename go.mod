@@ -5,6 +5,7 @@ go 1.23.0
 toolchain go1.24.4
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/marcboeker/go-duckdb v1.8.3
 	github.com/rohanthewiz/element v0.5.5-0.20250730211845-a097f2feeb11
 	github.com/rohanthewiz/logger v1.2.20
