@@ -23,7 +23,7 @@ func (p LoginPage) Render() string {
 		p.renderBody(b),
 	)
 
-	return "<!DOCTYPE html>" + b.String()
+	return b.String()
 }
 
 func (p LoginPage) renderHead(b *element.Builder) any {
@@ -37,32 +37,32 @@ func (p LoginPage) renderHead(b *element.Builder) any {
 
 func (p LoginPage) renderBody(b *element.Builder) any {
 	return b.Body().R(
-		b.Div("class", "auth-container").R(
-			b.Div("class", "auth-card").R(
+		b.DivClass("auth-container").R(
+			b.DivClass("auth-card").R(
 				// Logo
-				b.Div("class", "auth-logo").R(
+				b.DivClass("auth-logo").R(
 					b.H1().T("GoNotes"),
 				),
 
 				// Title
-				b.H2("class", "auth-title").T("Sign in to your account"),
+				b.H2Class("auth-title").T("Sign in to your account"),
 
-				// Error message container
-				b.Div("class", "auth-error hidden", "id", "error-message"),
+				// Error message container - empty div needs R() termination
+				b.Div("class", "auth-error hidden", "id", "error-message").R(),
 
 				// Login form
 				b.Form("class", "auth-form", "id", "login-form", "onsubmit", "return handleLogin(event)").R(
 					// Username field
-					b.Div("class", "form-group").R(
-						b.Label("class", "form-label", "for", "username").T("Username"),
+					b.DivClass("form-group").R(
+						b.LabelClass("form-label", "for", "username").T("Username"),
 						b.Input("type", "text", "class", "form-input", "id", "username",
 							"name", "username", "required", "required", "autocomplete", "username",
 							"placeholder", "Enter your username"),
 					),
 
 					// Password field
-					b.Div("class", "form-group").R(
-						b.Label("class", "form-label", "for", "password").T("Password"),
+					b.DivClass("form-group").R(
+						b.LabelClass("form-label", "for", "password").T("Password"),
 						b.Input("type", "password", "class", "form-input", "id", "password",
 							"name", "password", "required", "required", "autocomplete", "current-password",
 							"placeholder", "Enter your password"),
@@ -73,7 +73,7 @@ func (p LoginPage) renderBody(b *element.Builder) any {
 				),
 
 				// Footer with register link
-				b.Div("class", "auth-footer").R(
+				b.DivClass("auth-footer").R(
 					b.Span().T("Don't have an account? "),
 					b.A("href", "/register").T("Create one"),
 				),
@@ -81,6 +81,6 @@ func (p LoginPage) renderBody(b *element.Builder) any {
 		),
 
 		// Auth JavaScript
-		b.Script("src", "/static/js/auth.js"),
+		b.Script("src", "/static/js/auth.js").R(),
 	)
 }

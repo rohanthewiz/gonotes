@@ -24,7 +24,7 @@ func (p Page) Render() string {
 		p.renderBody(b),
 	)
 
-	return "<!DOCTYPE html>" + b.String()
+	return b.String()
 }
 
 func (p Page) renderHead(b *element.Builder) any {
@@ -35,9 +35,9 @@ func (p Page) renderHead(b *element.Builder) any {
 		// CSS
 		b.Link("rel", "stylesheet", "href", "/static/css/app.css"),
 		// Marked.js for Markdown rendering
-		b.Script("src", "https://cdn.jsdelivr.net/npm/marked/marked.min.js"),
+		b.Script("src", "https://cdn.jsdelivr.net/npm/marked/marked.min.js").R(),
 		// DOMPurify for XSS prevention
-		b.Script("src", "https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"),
+		b.Script("src", "https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js").R(),
 	)
 }
 
@@ -49,7 +49,7 @@ func (p Page) renderBody(b *element.Builder) any {
 			element.RenderComponents(b, Toolbar{}),
 
 			// Main content area with three panes
-			b.Div("class", "app-main").R(
+			b.DivClass("app-main").R(
 				element.RenderComponents(b,
 					FilterPanel{},
 					NoteList{},
@@ -61,17 +61,18 @@ func (p Page) renderBody(b *element.Builder) any {
 			element.RenderComponents(b, StatusBar{}),
 		),
 
-		// Toast notifications container
-		b.Div("class", "toast-container", "id", "toast-container"),
+		// Toast notifications container - empty div needs R() termination
+		b.Div("class", "toast-container", "id", "toast-container").R(),
 
 		// Modal overlay
 		b.Div("class", "modal-overlay", "id", "modal-overlay", "onclick", "app.closeModal()").R(
 			b.Div("class", "modal", "id", "modal", "onclick", "event.stopPropagation()").R(
-				b.Div("class", "modal-header").R(
+				b.DivClass("modal-header").R(
 					b.H2("class", "modal-title", "id", "modal-title").T("Modal"),
-					b.Button("class", "modal-close", "onclick", "app.closeModal()").T("×"),
+					b.ButtonClass("modal-close", "onclick", "app.closeModal()").T("×"),
 				),
-				b.Div("class", "modal-body", "id", "modal-body"),
+				// Empty modal body container needs R() termination
+				b.Div("class", "modal-body", "id", "modal-body").R(),
 				b.Div("class", "modal-footer", "id", "modal-footer").R(
 					b.Button("class", "btn btn-secondary", "onclick", "app.closeModal()").T("Cancel"),
 					b.Button("class", "btn btn-primary", "id", "modal-confirm", "onclick", "app.confirmModal()").T("Confirm"),
@@ -80,6 +81,6 @@ func (p Page) renderBody(b *element.Builder) any {
 		),
 
 		// Application JavaScript
-		b.Script("src", "/static/js/app.js"),
+		b.Script("src", "/static/js/app.js").R(),
 	)
 }

@@ -11,16 +11,16 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 		// Preview mode
 		b.Div("class", "preview-panel", "id", "preview-mode").R(
 			// Preview header
-			b.Div("class", "preview-header").R(
+			b.DivClass("preview-header").R(
 				b.H1("class", "preview-title", "id", "preview-title").T("Select a note"),
 				b.Div("class", "preview-meta", "id", "preview-meta").R(
 					// Meta information will be populated by JavaScript
 				),
 			),
 			// Preview body
-			b.Div("class", "preview-body").R(
+			b.DivClass("preview-body").R(
 				b.Div("class", "markdown-content", "id", "preview-content").R(
-					b.P("class", "text-muted").T("Select a note from the list to preview its content."),
+					b.PClass("text-muted").T("Select a note from the list to preview its content."),
 				),
 			),
 			// Preview footer
@@ -39,28 +39,28 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 				b.Input("type", "hidden", "id", "edit-guid", "name", "guid"),
 
 				// Title input
-				b.Div("class", "edit-header").R(
+				b.DivClass("edit-header").R(
 					b.Input("type", "text", "class", "edit-title-input", "id", "edit-title",
 						"name", "title", "placeholder", "Note title...", "required", "required"),
 				),
 
 				// Meta fields
-				b.Div("class", "edit-meta").R(
+				b.DivClass("edit-meta").R(
 					// Tags input
-					b.Div("class", "edit-field").R(
-						b.Label("class", "edit-label", "for", "edit-tags").T("Tags"),
+					b.DivClass("edit-field").R(
+						b.LabelClass("edit-label", "for", "edit-tags").T("Tags"),
 						b.Input("type", "text", "class", "edit-input", "id", "edit-tags",
 							"name", "tags", "placeholder", "tag1, tag2, tag3"),
 					),
 					// Description input
-					b.Div("class", "edit-field").R(
-						b.Label("class", "edit-label", "for", "edit-description").T("Description"),
+					b.DivClass("edit-field").R(
+						b.LabelClass("edit-label", "for", "edit-description").T("Description"),
 						b.Input("type", "text", "class", "edit-input", "id", "edit-description",
 							"name", "description", "placeholder", "Brief description..."),
 					),
 					// Category select (populated by JavaScript)
-					b.Div("class", "edit-field").R(
-						b.Label("class", "edit-label", "for", "edit-category").T("Category"),
+					b.DivClass("edit-field").R(
+						b.LabelClass("edit-label", "for", "edit-category").T("Category"),
 						b.Select("class", "edit-input", "id", "edit-category", "name", "category").R(
 							b.Option("value", "").T("Select category..."),
 						),
@@ -68,18 +68,18 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 				),
 
 				// Body textarea
-				b.Div("class", "edit-body-wrapper").R(
-					b.Textarea("class", "edit-body", "id", "edit-body", "name", "body",
-						"placeholder", "Write your note in Markdown..."),
+				b.DivClass("edit-body-wrapper").R(
+					b.TextArea("class", "edit-body", "id", "edit-body", "name", "body",
+						"placeholder", "Write your note in Markdown...").R(),
 				),
 
 				// Footer with actions
-				b.Div("class", "edit-footer").R(
-					b.Label("class", "privacy-toggle").R(
+				b.DivClass("edit-footer").R(
+					b.LabelClass("privacy-toggle").R(
 						b.Input("type", "checkbox", "class", "privacy-checkbox", "id", "edit-private", "name", "is_private"),
 						b.Span().T("Private (Encrypt this note)"),
 					),
-					b.Div("class", "edit-actions").R(
+					b.DivClass("edit-actions").R(
 						b.Button("type", "button", "class", "btn btn-secondary", "onclick", "app.cancelEdit()").T("Cancel"),
 						b.Button("type", "submit", "class", "btn btn-primary", "id", "btn-save").T("Save"),
 					),
