@@ -2,7 +2,8 @@ package web
 
 import (
 	"gonotes/web/api"
-	"gonotes/web/pages"
+	"gonotes/web/pages/auth"
+	"gonotes/web/pages/landing"
 
 	"github.com/rohanthewiz/rweb"
 )
@@ -11,17 +12,25 @@ import (
 func setupRoutes(s *rweb.Server) {
 	// Page routes - HTML responses
 
+	// Main landing page (requires authentication via JavaScript)
 	s.Get("/", func(ctx rweb.Context) error {
-		// METHOD CHAINING: ctx.Response() returns a response object, then we call SetHeader() on it
-		// SetHeader sets an HTTP response header (key-value pair)
 		ctx.Response().SetHeader("Content-Type", "text/html; charset=utf-8")
+		page := landing.NewPage()
+		return ctx.WriteHTML(page.Render())
+	})
 
-		// CALLING METHODS ACROSS PACKAGES
-		// pages.HomePage is a struct instance from the pages package
-		// We call its Render() method, which returns an HTML string
-		// ctx.WriteHTML() sends that HTML back to the client
-		// The return statement returns the error (or nil) from WriteHTML
-		return ctx.WriteHTML(pages.HomePage.Render())
+	// Login page
+	s.Get("/login", func(ctx rweb.Context) error {
+		ctx.Response().SetHeader("Content-Type", "text/html; charset=utf-8")
+		page := auth.NewLoginPage()
+		return ctx.WriteHTML(page.Render())
+	})
+
+	// Register page
+	s.Get("/register", func(ctx rweb.Context) error {
+		ctx.Response().SetHeader("Content-Type", "text/html; charset=utf-8")
+		page := auth.NewRegisterPage()
+		return ctx.WriteHTML(page.Render())
 	})
 
 	// Health check endpoint
