@@ -14,7 +14,7 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 			b.DivClass("preview-header").R(
 				b.H1("class", "preview-title", "id", "preview-title").T("Select a note"),
 				b.Div("class", "preview-meta", "id", "preview-meta").R(
-					// Meta information will be populated by JavaScript
+				// Meta information will be populated by JavaScript
 				),
 			),
 			// Preview body
@@ -59,10 +59,19 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 							"name", "description", "placeholder", "Brief description..."),
 					),
 					// Category select (populated by JavaScript)
+					// Note: Event listener attached in app.js init() to avoid timing issues
 					b.DivClass("edit-field").R(
 						b.LabelClass("edit-label", "for", "edit-category").T("Category"),
 						b.Select("class", "edit-input", "id", "edit-category", "name", "category").R(
 							b.Option("value", "").T("Select category..."),
+						),
+					),
+					// Subcategory multi-select (shown when category has subcats defined)
+					// Design: Displays available subcats for the selected category as checkboxes
+					b.DivClass("edit-field subcat-field", "id", "subcat-field", "style", "display:none").R(
+						b.LabelClass("edit-label").T("Subcats"),
+						b.DivClass("subcat-select", "id", "subcat-select").R(
+						// Subcategory checkboxes populated dynamically by JavaScript
 						),
 					),
 				),

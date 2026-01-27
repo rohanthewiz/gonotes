@@ -117,13 +117,14 @@ func SecurityHeadersMiddleware(c rweb.Context) error {
 	c.Response().SetHeader("Referrer-Policy", "strict-origin-when-cross-origin")
 
 	// Content Security Policy - adjust as needed
+	// Allow CDN domains for external libraries (marked, highlight.js, msgpack, monaco)
 	csp := []string{
 		"default-src 'self'",
-		"script-src 'self' 'unsafe-inline' 'unsafe-eval'", // Monaco requires unsafe-eval
-		"style-src 'self' 'unsafe-inline'",
+		"script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com", // Monaco requires unsafe-eval; CDNs for libraries
+		"style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",                                  // highlight.js theme CSS
 		"img-src 'self' data: https: blob:",
 		"font-src 'self' data:",
-		"connect-src 'self'",
+		"connect-src 'self' https://cdn.jsdelivr.net https://unpkg.com", // Allow CDN source maps
 	}
 	c.Response().SetHeader("Content-Security-Policy", strings.Join(csp, "; "))
 

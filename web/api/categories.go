@@ -63,7 +63,7 @@ func GetCategory(ctx rweb.Context) error {
 // Returns all categories with optional pagination via limit/offset query params.
 func ListCategories(ctx rweb.Context) error {
 	// Parse pagination parameters with sensible defaults
-	limit := 0  // 0 means no limit
+	limit := 0 // 0 means no limit
 	offset := 0
 
 	if limitStr := ctx.Request().QueryParam("limit"); limitStr != "" {
@@ -107,10 +107,15 @@ func UpdateCategory(ctx rweb.Context) error {
 	}
 
 	var input models.CategoryInput
-	if err := json.Unmarshal(ctx.Request().Body(), &input); err != nil {
+	body := ctx.Request().Body()
+	logger.Debug("UpdateCategory request body", "body", string(body))
+
+	if err := json.Unmarshal(body, &input); err != nil {
 		logger.LogErr(serr.Wrap(err, "failed to decode request body"), "invalid JSON")
 		return writeError(ctx, http.StatusBadRequest, "invalid JSON body")
 	}
+
+	logger.Debug("UpdateCategory parsed input", "name", input.Name, "subcategories", input.Subcategories)
 
 	// Name is required for updates
 	if input.Name == "" {
@@ -152,8 +157,20 @@ func DeleteCategory(ctx rweb.Context) error {
 	return writeSuccess(ctx, http.StatusOK, map[string]interface{}{"deleted": true, "id": id})
 }
 
+// AddCategoryToNoteRequest represents the optional request body for adding a category to a note.
+// The subcategories field allows specifying which subcats of the category apply to this note.
+type AddCategoryToNoteRequest struct {
+	Subcategories []string `json:"subcategories,omitempty"`
+}
+
 // AddCategoryToNote handles POST /api/v1/notes/:id/categories/:category_id
-// Adds a category to a note.
+// Adds a category to a note with optional subcategories.
+//
+// Request body (optional):
+//
+//	{ "subcategories": ["subcat1", "subcat2"] }
+//
+// If no body is provided, the category is added without subcategories.
 func AddCategoryToNote(ctx rweb.Context) error {
 	noteIDStr := ctx.Request().Param("id")
 	noteID, err := strconv.ParseInt(noteIDStr, 10, 64)
@@ -167,7 +184,25 @@ func AddCategoryToNote(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusBadRequest, "invalid category id")
 	}
 
-	err = models.AddCategoryToNote(noteID, categoryID)
+	// Parse optional request body for subcategories
+	var subcategories []string
+	body := ctx.Request().Body()
+	if len(body) > 0 {
+		var req AddCategoryToNoteRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			logger.LogErr(serr.Wrap(err, "failed to decode request body"), "invalid JSON")
+			return writeError(ctx, http.StatusBadRequest, "invalid JSON body")
+		}
+		subcategories = req.Subcategories
+	}
+
+	// Use the subcategory-aware function when subcats are provided
+	if len(subcategories) > 0 {
+		err = models.AddCategoryToNoteWithSubcategories(noteID, categoryID, subcategories)
+	} else {
+		err = models.AddCategoryToNote(noteID, categoryID)
+	}
+
 	if err != nil {
 		if err.Error() == "note not found" {
 			return writeError(ctx, http.StatusNotFound, "note not found")
@@ -182,11 +217,12 @@ func AddCategoryToNote(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusInternalServerError, "failed to add category to note")
 	}
 
-	logger.Info("Category added to note", "note_id", noteID, "category_id", categoryID)
+	logger.Info("Category added to note", "note_id", noteID, "category_id", categoryID, "subcategories", subcategories)
 	return writeSuccess(ctx, http.StatusCreated, map[string]interface{}{
-		"note_id":     noteID,
-		"category_id": categoryID,
-		"added":       true,
+		"note_id":       noteID,
+		"category_id":   categoryID,
+		"subcategories": subcategories,
+		"added":         true,
 	})
 }
 

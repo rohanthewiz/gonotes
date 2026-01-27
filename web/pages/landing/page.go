@@ -34,10 +34,21 @@ func (p Page) renderHead(b *element.Builder) any {
 		b.Title().T(p.Title),
 		// CSS
 		b.Link("rel", "stylesheet", "href", "/static/css/app.css"),
+		// Highlight.js CSS theme - GitHub theme provides familiar, readable syntax colors
+		b.Link("rel", "stylesheet", "href", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css"),
 		// Marked.js for Markdown rendering
 		b.Script("src", "https://cdn.jsdelivr.net/npm/marked/marked.min.js").R(),
 		// DOMPurify for XSS prevention
 		b.Script("src", "https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js").R(),
+		// Highlight.js core - includes JavaScript, TypeScript, HTML, CSS, JSON
+		b.Script("src", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js").R(),
+		// Additional language packs not included in highlight.js core
+		b.Script("src", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/languages/go.min.js").R(),
+		b.Script("src", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/languages/python.min.js").R(),
+		b.Script("src", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/languages/bash.min.js").R(),
+		b.Script("src", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/languages/sql.min.js").R(),
+		// MsgPack for efficient note body encoding between client and server
+		b.Script("src", "https://unpkg.com/@msgpack/msgpack@latest/dist/msgpack.min.js").R(),
 	)
 }
 
@@ -80,7 +91,7 @@ func (p Page) renderBody(b *element.Builder) any {
 			),
 		),
 
-		// Application JavaScript
-		b.Script("src", "/static/js/app.js").R(),
+		// Application JavaScript (cache-bust version for development)
+		b.Script("src", "/static/js/app.js?v=1").R(),
 	)
 }

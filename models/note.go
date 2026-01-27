@@ -181,11 +181,12 @@ func (n *Note) ToOutput() NoteOutput {
 // Returns the created note with all fields populated.
 //
 // Encryption behavior for private notes:
-// - If IsPrivate is true and encryption is enabled, the body is encrypted before
-//   being written to disk. The IV is stored in encryption_iv.
-// - The cache stores the UNENCRYPTED body for fast reads.
-// - This means disk contains encrypted data (secure at rest) while memory has
-//   plaintext for performance.
+//   - If IsPrivate is true and encryption is enabled, the body is encrypted before
+//     being written to disk. The IV is stored in encryption_iv.
+//   - The cache stores the UNENCRYPTED body for fast reads.
+//   - This means disk contains encrypted data (secure at rest) while memory has
+//     plaintext for performance.
+//
 // CreateNote creates a new note in both disk and cache databases.
 // The userGUID parameter is required to set note ownership (created_by).
 func CreateNote(input NoteInput, userGUID string) (*Note, error) {
@@ -264,16 +265,31 @@ func CreateNote(input NoteInput, userGUID string) (*Note, error) {
 		                   created_by, updated_by, created_at, updated_at, synced_at, deleted_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
+
+	logger.Debug("CreateNote: inserting into cache",
+		"note_id", note.ID,
+		"guid", note.GUID,
+		"title", note.Title,
+		"created_at", note.CreatedAt,
+		"updated_at", note.UpdatedAt,
+	)
+
 	_, err = cacheDB.Exec(cacheInsertQuery,
 		note.ID, note.GUID, note.Title, note.Description, cacheBody,
 		note.Tags, note.IsPrivate, note.EncryptionIV, note.CreatedBy,
 		note.UpdatedBy, note.CreatedAt, note.UpdatedAt, note.SyncedAt, note.DeletedAt,
 	)
 	if err != nil {
-		// Cache insert failed - log error but return the note since disk write succeeded
-		// This maintains disk DB as source of truth
+		// Cache insert failed - log detailed error for debugging
+		logger.LogErr(err, "CreateNote: cache insert failed",
+			"note_id", note.ID,
+			"guid", note.GUID,
+			"error_detail", err.Error(),
+		)
 		return note, serr.Wrap(err, "note created in disk DB but failed to update cache")
 	}
+
+	logger.Debug("CreateNote: cache insert successful", "note_id", note.ID)
 
 	// Return note with unencrypted body for the caller
 	note.Body = cacheBody
@@ -305,6 +321,45 @@ func GetNoteByID(id int64, userGUID string) (*Note, error) {
 	if err != nil {
 		return nil, err
 	}
+	return note, nil
+}
+
+// getNoteByIDFromDisk retrieves a single note by its primary key from the disk database.
+// Used as a fallback when cache operations fail. Note that for encrypted private notes,
+// the body will be encrypted in the returned note (unlike cache reads).
+func getNoteByIDFromDisk(id int64, userGUID string) (*Note, error) {
+	query := `
+		SELECT id, guid, title, description, body, tags, is_private, encryption_iv,
+		       created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at
+		FROM notes
+		WHERE id = ? AND created_by = ? AND deleted_at IS NULL
+	`
+
+	note := &Note{}
+	err := db.QueryRow(query, id, userGUID).Scan(
+		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
+		&note.Tags, &note.IsPrivate, &note.EncryptionIV, &note.CreatedBy,
+		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.AuthoredAt, &note.SyncedAt, &note.DeletedAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// For private encrypted notes, decrypt the body before returning
+	if note.IsPrivate && IsEncryptionEnabled() && note.Body.Valid && note.EncryptionIV.Valid {
+		decryptedBody, err := DecryptNoteBody(note.Body.String, note.EncryptionIV.String)
+		if err != nil {
+			// Log error but return note with encrypted body rather than failing
+			logger.LogErr(err, "failed to decrypt note body from disk", "note_id", id)
+		} else {
+			note.Body = sql.NullString{String: decryptedBody, Valid: true}
+		}
+	}
+
 	return note, nil
 }
 
@@ -392,10 +447,11 @@ func ListNotes(userGUID string, limit, offset int) ([]Note, error) {
 // perform the update and then fetch the updated record separately.
 //
 // Encryption behavior for private notes:
-// - If IsPrivate is true and encryption is enabled, the body is encrypted
-//   before being written to disk. A new IV is generated for each update.
-// - The cache stores the UNENCRYPTED body for fast reads.
-// - If a note changes from private to public, the body is stored unencrypted.
+//   - If IsPrivate is true and encryption is enabled, the body is encrypted
+//     before being written to disk. A new IV is generated for each update.
+//   - The cache stores the UNENCRYPTED body for fast reads.
+//   - If a note changes from private to public, the body is stored unencrypted.
+//
 // The userGUID parameter is used to verify ownership and set updated_by.
 func UpdateNote(id int64, input NoteInput, userGUID string) (*Note, error) {
 	// First verify the note exists, isn't deleted, and is owned by this user
@@ -480,6 +536,11 @@ func UpdateNote(id int64, input NoteInput, userGUID string) (*Note, error) {
 		WHERE id = ? AND deleted_at IS NULL
 	`
 
+	logger.Debug("UpdateNote: updating cache",
+		"note_id", id,
+		"title", input.Title,
+	)
+
 	_, err = cacheDB.Exec(cacheUpdateQuery,
 		input.Title,
 		toNullString(input.Description),
@@ -491,10 +552,20 @@ func UpdateNote(id int64, input NoteInput, userGUID string) (*Note, error) {
 		id,
 	)
 	if err != nil {
-		// Cache update failed - the disk is still updated (source of truth)
-		// Return error to indicate cache is out of sync
-		return nil, serr.Wrap(err, "note updated in disk DB but failed to update cache")
+		// Cache update failed - log detailed error for debugging
+		logger.LogErr(err, "UpdateNote: cache update failed",
+			"note_id", id,
+			"error_detail", err.Error(),
+		)
+		// Fetch from disk and return note with error so handler can return success
+		diskNote, fetchErr := getNoteByIDFromDisk(id, userGUID)
+		if fetchErr != nil || diskNote == nil {
+			return nil, serr.Wrap(err, "note updated in disk DB but failed to update cache and fetch")
+		}
+		return diskNote, serr.Wrap(err, "note updated in disk DB but failed to update cache")
 	}
+
+	logger.Debug("UpdateNote: cache update successful", "note_id", id)
 
 	// Fetch the updated note from cache (will have unencrypted body)
 	return GetNoteByID(id, userGUID)
