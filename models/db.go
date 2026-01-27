@@ -103,6 +103,13 @@ func createTables() error {
 		return serr.Wrap(err, "failed to create note_categories table")
 	}
 
+	// Migration: add subcategories column for existing note_categories tables
+	// This column stores a JSON array of subcategory names for filtering
+	_, err = db.Exec(`ALTER TABLE note_categories ADD COLUMN IF NOT EXISTS subcategories VARCHAR`)
+	if err != nil {
+		return serr.Wrap(err, "failed to add subcategories column to note_categories")
+	}
+
 	// Create note change tracking tables for peer-to-peer sync
 	// Order matters: note_fragments first (referenced by note_changes)
 	_, err = db.Exec(DDLCreateNoteFragmentsSequence)
