@@ -32,6 +32,156 @@
   const API_BASE = '/api/v1';
 
   // ============================================
+  // Markdown Configuration with Syntax Highlighting
+  // ============================================
+
+  // Configure Marked.js to use highlight.js for code blocks.
+  // This provides syntax highlighting for Go, Python, JavaScript, TypeScript,
+  // HTML, CSS, JSON, SQL, and Bash code blocks in note previews.
+  function configureMarkdown() {
+    const renderer = new marked.Renderer();
+
+    // Custom code block renderer that integrates highlight.js
+    // Design: Marked calls this synchronously for each fenced code block
+    // Note: Marked v5+ passes a token object {text, lang, escaped} instead of separate params
+    renderer.code = function(token) {
+      const code = token.text || token;  // Handle both v5+ (object) and older (string) API
+      const language = token.lang || '';
+      // Normalize language identifier - handle null/undefined and trim whitespace
+      const lang = (language || '').trim().toLowerCase();
+
+      // Map common language aliases to highlight.js recognized names
+      // This improves UX by accepting variations users commonly type
+      const langMap = {
+        'js': 'javascript',
+        'ts': 'typescript',
+        'sh': 'bash',
+        'shell': 'bash',
+        'py': 'python',
+        'golang': 'go'
+      };
+      const resolvedLang = langMap[lang] || lang;
+
+      // Apply syntax highlighting if highlight.js is available and knows the language
+      let highlighted;
+      if (typeof hljs !== 'undefined' && resolvedLang && hljs.getLanguage(resolvedLang)) {
+        try {
+          highlighted = hljs.highlight(code, { language: resolvedLang }).value;
+        } catch (err) {
+          // Fallback gracefully - log warning and show plain code
+          console.warn('Highlight.js error for language:', resolvedLang, err);
+          highlighted = escapeHtmlForCode(code);
+        }
+      } else {
+        // No highlighting available - escape HTML for safe display
+        highlighted = escapeHtmlForCode(code);
+      }
+
+      // Return pre/code block with hljs class for default styling
+      return `<pre><code class="hljs language-${resolvedLang || 'plaintext'}">${highlighted}</code></pre>`;
+    };
+
+    // Configure Marked options for GitHub Flavored Markdown
+    marked.setOptions({
+      renderer: renderer,
+      gfm: true,           // Enable GitHub Flavored Markdown
+      breaks: true,        // Convert single newlines to <br>
+      pedantic: false,     // Don't be overly strict about markdown spec
+      smartLists: true     // Better list handling
+    });
+  }
+
+  // HTML escape for code blocks - separate from escapeHtml to avoid circular dependency
+  function escapeHtmlForCode(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  // Initialize markdown configuration when marked library is available
+  // Note: Configuration is deferred since marked is loaded from CDN
+  function initMarkdownIfReady() {
+    if (typeof marked !== 'undefined' && typeof hljs !== 'undefined') {
+      configureMarkdown();
+      return true;
+    }
+    return false;
+  }
+
+  // Try immediately, then retry in init() if not ready
+  initMarkdownIfReady();
+
+  // ============================================
+  // MsgPack Body Encoding Utilities
+  // ============================================
+
+  // Enable/disable msgpack encoding for API requests
+  // When enabled, note body content is encoded as msgpack for efficient transport
+  // Can be toggled via settings or feature flag for backwards compatibility
+  const USE_MSGPACK_ENCODING = true;
+
+  // Encode note body to Base64-encoded msgpack format
+  // Used before sending note data to server to reduce payload size
+  // Design: Only the body field is msgpack-encoded; metadata stays as JSON for debugging
+  function encodeMsgPackBody(body) {
+    if (!body || typeof MessagePack === 'undefined') {
+      return null;
+    }
+
+    try {
+      // Encode string to msgpack bytes using @msgpack/msgpack library
+      const encoded = MessagePack.encode(body);
+      // Convert Uint8Array to Base64 string for JSON transport
+      // Using btoa with String.fromCharCode for browser compatibility
+      const base64 = btoa(String.fromCharCode.apply(null, encoded));
+      return base64;
+    } catch (err) {
+      console.error('MsgPack encode error:', err);
+      return null;
+    }
+  }
+
+  // Decode Base64-encoded msgpack to string
+  // Used after receiving note data from server
+  function decodeMsgPackBody(base64Encoded) {
+    if (!base64Encoded || typeof MessagePack === 'undefined') {
+      return null;
+    }
+
+    try {
+      // Convert Base64 to Uint8Array
+      const binaryString = atob(base64Encoded);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      // Decode msgpack to string
+      return MessagePack.decode(bytes);
+    } catch (err) {
+      console.error('MsgPack decode error:', err);
+      return null;
+    }
+  }
+
+  // Transform single note response from msgpack format to standard format
+  // Handles body_encoded -> body conversion transparently
+  function transformNoteFromMsgPack(note) {
+    if (note && note.body_encoded !== undefined) {
+      note.body = decodeMsgPackBody(note.body_encoded);
+      delete note.body_encoded;
+    }
+    return note;
+  }
+
+  // Transform array of note responses from msgpack format
+  function transformNotesFromMsgPack(notes) {
+    if (!Array.isArray(notes)) {
+      return notes;
+    }
+    return notes.map(transformNoteFromMsgPack);
+  }
+
+  // ============================================
   // API Helper Functions
   // ============================================
 
@@ -54,6 +204,13 @@
       ...options.headers
     };
 
+    // Add msgpack encoding header if enabled and MessagePack library is available
+    // This signals to the server that we want body_encoded in responses
+    const useMsgPack = USE_MSGPACK_ENCODING && typeof MessagePack !== 'undefined';
+    if (useMsgPack) {
+      headers['X-Body-Encoding'] = 'msgpack';
+    }
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -74,6 +231,16 @@
           return null;
         }
         throw new Error(data.error || 'Request failed');
+      }
+
+      // Transform msgpack-encoded responses back to standard format
+      // This handles body_encoded -> body conversion transparently
+      if (useMsgPack && data.data) {
+        if (Array.isArray(data.data)) {
+          data.data = transformNotesFromMsgPack(data.data);
+        } else if (data.data.body_encoded !== undefined) {
+          data.data = transformNoteFromMsgPack(data.data);
+        }
       }
 
       return data;
@@ -208,14 +375,32 @@
     const form = document.getElementById('edit-form');
     const formData = new FormData(form);
 
+    const bodyContent = formData.get('body') || null;
+
+    // Build note data object
+    // When msgpack is enabled, body goes to body_encoded field instead of body
     const noteData = {
       guid: formData.get('guid'),
       title: formData.get('title'),
       description: formData.get('description') || null,
-      body: formData.get('body') || null,
       tags: formData.get('tags') || null,
       is_private: document.getElementById('edit-private').checked
     };
+
+    // Add body field based on encoding mode
+    // If msgpack is enabled and we can encode, use body_encoded; otherwise use plain body
+    const useMsgPack = USE_MSGPACK_ENCODING && typeof MessagePack !== 'undefined';
+    if (useMsgPack && bodyContent) {
+      const encodedBody = encodeMsgPackBody(bodyContent);
+      if (encodedBody) {
+        noteData.body_encoded = encodedBody;
+      } else {
+        // Fallback to plain body if encoding fails
+        noteData.body = bodyContent;
+      }
+    } else {
+      noteData.body = bodyContent;
+    }
 
     if (!noteData.title.trim()) {
       showToast('Title is required', 'error');
@@ -243,6 +428,26 @@
       }
 
       if (response && response.data) {
+        const savedNoteId = response.data.id;
+
+        // Handle category assignment if a category was selected
+        // Design: Category is added to note after note save, with selected subcats
+        const categorySelect = document.getElementById('edit-category');
+        const selectedCategoryId = categorySelect ? categorySelect.value : '';
+
+        if (selectedCategoryId) {
+          try {
+            const subcats = getSelectedSubcats();
+            await apiRequest(`/notes/${savedNoteId}/categories/${selectedCategoryId}`, {
+              method: 'POST',
+              body: JSON.stringify({ subcategories: subcats })
+            });
+          } catch (catError) {
+            // Log but don't fail the note save - category assignment is secondary
+            console.error('Failed to assign category:', catError);
+          }
+        }
+
         showToast('Note saved successfully', 'success');
         await loadNotes();
 
@@ -295,14 +500,29 @@
   window.app.duplicateCurrentNote = async function() {
     if (!state.currentNote) return;
 
+    const bodyContent = state.currentNote.body;
+
+    // Build note data object with msgpack support
     const noteData = {
       guid: generateGUID(),
       title: state.currentNote.title + ' (Copy)',
       description: state.currentNote.description,
-      body: state.currentNote.body,
       tags: state.currentNote.tags,
       is_private: state.currentNote.is_private
     };
+
+    // Add body field based on encoding mode
+    const useMsgPack = USE_MSGPACK_ENCODING && typeof MessagePack !== 'undefined';
+    if (useMsgPack && bodyContent) {
+      const encodedBody = encodeMsgPackBody(bodyContent);
+      if (encodedBody) {
+        noteData.body_encoded = encodedBody;
+      } else {
+        noteData.body = bodyContent;
+      }
+    } else {
+      noteData.body = bodyContent;
+    }
 
     try {
       const response = await apiRequest('/notes', {
@@ -825,6 +1045,84 @@
       state.categories.map(cat => `<option value="${cat.id}">${cat.name}</option>`).join('');
   }
 
+  // Track selected subcategories for current note editing session
+  let selectedSubcats = [];
+
+  // onCategoryChange - Called when user selects a category in the edit form
+  // Shows subcategory checkboxes if the selected category has subcats defined
+  window.app.onCategoryChange = function(categoryId) {
+    console.log('onCategoryChange called with:', categoryId);
+    console.log('Available categories:', state.categories);
+
+    const subcatField = document.getElementById('subcat-field');
+    const subcatSelect = document.getElementById('subcat-select');
+    if (!subcatField || !subcatSelect) {
+      console.log('subcat elements not found');
+      return;
+    }
+
+    // Clear previous selection state
+    selectedSubcats = [];
+
+    if (!categoryId) {
+      // No category selected - hide subcat field
+      subcatField.style.display = 'none';
+      subcatSelect.innerHTML = '';
+      return;
+    }
+
+    // Find the selected category and its subcategories
+    const category = state.categories.find(c => c.id === parseInt(categoryId));
+    console.log('Found category:', category);
+
+    if (!category || !category.subcategories || category.subcategories.length === 0) {
+      // Category has no subcats defined - hide subcat field
+      console.log('No subcategories for this category');
+      subcatField.style.display = 'none';
+      subcatSelect.innerHTML = '';
+      return;
+    }
+
+    console.log('Showing subcategories:', category.subcategories);
+
+    // Render subcategory checkboxes
+    // Design: Each subcat is displayed as a checkbox for multi-select
+    subcatSelect.innerHTML = category.subcategories.map(subcat => `
+      <label class="subcat-checkbox-label">
+        <input type="checkbox" class="subcat-checkbox" value="${escapeHtml(subcat)}"
+               onchange="app.toggleSubcat('${escapeHtml(subcat)}', this.checked)">
+        <span>${escapeHtml(subcat)}</span>
+      </label>
+    `).join('');
+
+    subcatField.style.display = 'block';
+  };
+
+  // toggleSubcat - Called when user checks/unchecks a subcategory checkbox
+  window.app.toggleSubcat = function(subcat, checked) {
+    if (checked) {
+      if (!selectedSubcats.includes(subcat)) {
+        selectedSubcats.push(subcat);
+      }
+    } else {
+      selectedSubcats = selectedSubcats.filter(s => s !== subcat);
+    }
+  };
+
+  // getSelectedSubcats - Returns the currently selected subcategories
+  function getSelectedSubcats() {
+    return selectedSubcats.slice(); // Return a copy
+  }
+
+  // clearSubcatSelection - Clears subcategory selection and hides the field
+  function clearSubcatSelection() {
+    selectedSubcats = [];
+    const subcatField = document.getElementById('subcat-field');
+    const subcatSelect = document.getElementById('subcat-select');
+    if (subcatField) subcatField.style.display = 'none';
+    if (subcatSelect) subcatSelect.innerHTML = '';
+  }
+
   function populateEditForm(note) {
     document.getElementById('edit-id').value = note.id;
     document.getElementById('edit-guid').value = note.guid;
@@ -833,6 +1131,11 @@
     document.getElementById('edit-tags').value = note.tags || '';
     document.getElementById('edit-body').value = note.body || '';
     document.getElementById('edit-private').checked = note.is_private;
+
+    // Reset category and subcategory selection when populating edit form
+    const categorySelect = document.getElementById('edit-category');
+    if (categorySelect) categorySelect.value = '';
+    clearSubcatSelection();
   }
 
   function clearEditForm() {
@@ -843,6 +1146,11 @@
     document.getElementById('edit-tags').value = '';
     document.getElementById('edit-body').value = '';
     document.getElementById('edit-private').checked = false;
+
+    // Clear category and subcategory selection
+    const categorySelect = document.getElementById('edit-category');
+    if (categorySelect) categorySelect.value = '';
+    clearSubcatSelection();
   }
 
   function showEditMode() {
@@ -941,6 +1249,252 @@
 
   window.app.showSettings = function() {
     showToast('Settings coming soon', 'warning');
+  };
+
+  // ============================================
+  // Category Management
+  // ============================================
+
+  // Track editing state for categories
+  let editingCategoryId = null;
+  let editingSubcategories = [];
+
+  window.app.showCategoryManager = function() {
+    const modalTitle = document.getElementById('modal-title');
+    const modalBody = document.getElementById('modal-body');
+    const modalFooter = document.getElementById('modal-footer');
+
+    modalTitle.textContent = 'Manage Categories';
+
+    // Build category manager HTML
+    modalBody.innerHTML = `
+      <div class="category-manager">
+        <div class="category-manager-header">
+          <input type="text" id="new-category-name" placeholder="New category name..." />
+          <button class="btn btn-primary" onclick="app.createCategory()">Add</button>
+        </div>
+        <div class="category-list" id="category-list">
+          ${renderCategoryList()}
+        </div>
+      </div>
+    `;
+
+    // Hide default footer buttons, we handle actions inline
+    modalFooter.innerHTML = `
+      <button class="btn btn-secondary" onclick="app.closeModal()">Close</button>
+    `;
+
+    document.getElementById('modal-overlay').classList.add('open');
+
+    // Focus the input
+    document.getElementById('new-category-name').focus();
+  };
+
+  function renderCategoryList() {
+    if (state.categories.length === 0) {
+      return '<div class="empty-categories">No categories yet. Create one above.</div>';
+    }
+
+    return state.categories.map(cat => {
+      const subcats = cat.subcategories || [];
+      const subcatText = subcats.length > 0 ? subcats.join(', ') : 'No subcategories';
+
+      return `
+        <div class="category-item" data-category-id="${cat.id}">
+          <div class="category-item-header">
+            <span class="category-name">${escapeHtml(cat.name)}</span>
+            <span class="category-subcats">${escapeHtml(subcatText)}</span>
+            <div class="category-actions">
+              <button class="btn-edit-cat" onclick="app.editCategory(${cat.id})">Edit</button>
+              <button class="btn-delete-cat" onclick="app.deleteCategory(${cat.id})">Delete</button>
+            </div>
+          </div>
+          <div class="category-edit-form" id="category-edit-${cat.id}" style="display: none;">
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  window.app.createCategory = async function() {
+    const input = document.getElementById('new-category-name');
+    const name = input.value.trim();
+
+    if (!name) {
+      showToast('Please enter a category name', 'error');
+      return;
+    }
+
+    try {
+      const response = await apiRequest('/categories', {
+        method: 'POST',
+        body: JSON.stringify({ name: name })
+      });
+
+      if (response && response.data) {
+        showToast('Category created', 'success');
+        input.value = '';
+        await loadCategories();
+        // Refresh the modal list
+        document.getElementById('category-list').innerHTML = renderCategoryList();
+      }
+    } catch (error) {
+      showToast('Failed to create category', 'error');
+    }
+  };
+
+  window.app.editCategory = function(categoryId) {
+    const cat = state.categories.find(c => c.id === categoryId);
+    if (!cat) return;
+
+    // Close any other open edit forms
+    document.querySelectorAll('.category-edit-form').forEach(form => {
+      form.style.display = 'none';
+    });
+
+    editingCategoryId = categoryId;
+    editingSubcategories = [...(cat.subcategories || [])];
+
+    const editForm = document.getElementById(`category-edit-${categoryId}`);
+    editForm.style.display = 'block';
+    editForm.innerHTML = `
+      <label>Category Name</label>
+      <input type="text" id="edit-cat-name-${categoryId}" value="${escapeHtml(cat.name)}" />
+
+      <label>Subcategories</label>
+      <div class="subcategory-tags" id="subcategory-tags-${categoryId}">
+        ${renderSubcategoryTags(categoryId)}
+      </div>
+      <div class="subcategory-input-group">
+        <input type="text" id="new-subcat-${categoryId}" placeholder="Add subcategory..."
+               onkeypress="if(event.key==='Enter'){app.addSubcategory(${categoryId}); event.preventDefault();}" />
+        <button class="btn btn-secondary" onclick="app.addSubcategory(${categoryId})">Add</button>
+      </div>
+
+      <div class="category-edit-actions">
+        <button class="btn btn-secondary" onclick="app.cancelEditCategory(${categoryId})">Cancel</button>
+        <button class="btn btn-primary" onclick="app.saveCategory(${categoryId})">Save</button>
+      </div>
+    `;
+  };
+
+  function renderSubcategoryTags(categoryId) {
+    if (editingSubcategories.length === 0) {
+      return '<span class="text-muted" style="font-size: var(--font-size-xs);">None</span>';
+    }
+
+    return editingSubcategories.map((subcat, index) => `
+      <span class="subcategory-tag">
+        ${escapeHtml(subcat)}
+        <button onclick="app.removeSubcategory(${categoryId}, ${index})">&times;</button>
+      </span>
+    `).join('');
+  }
+
+  window.app.addSubcategory = function(categoryId) {
+    console.log('addSubcategory called with categoryId:', categoryId);
+
+    const input = document.getElementById(`new-subcat-${categoryId}`);
+    console.log('input element:', input);
+
+    const value = input ? input.value.trim() : '';
+    console.log('Adding subcategory:', value, 'to category:', categoryId);
+
+    if (!value) return;
+
+    if (editingSubcategories.includes(value)) {
+      showToast('Subcategory already exists', 'warning');
+      return;
+    }
+
+    editingSubcategories.push(value);
+    console.log('editingSubcategories now:', editingSubcategories);
+    input.value = '';
+
+    // Re-render tags
+    const tagsContainer = document.getElementById(`subcategory-tags-${categoryId}`);
+    console.log('tagsContainer element:', tagsContainer);
+    const renderedHtml = renderSubcategoryTags(categoryId);
+    console.log('rendered HTML:', renderedHtml);
+    if (tagsContainer) {
+      tagsContainer.innerHTML = renderedHtml;
+    }
+  };
+
+  window.app.removeSubcategory = function(categoryId, index) {
+    editingSubcategories.splice(index, 1);
+    document.getElementById(`subcategory-tags-${categoryId}`).innerHTML = renderSubcategoryTags(categoryId);
+  };
+
+  window.app.cancelEditCategory = function(categoryId) {
+    const editForm = document.getElementById(`category-edit-${categoryId}`);
+    editForm.style.display = 'none';
+    editingCategoryId = null;
+    editingSubcategories = [];
+  };
+
+  window.app.saveCategory = async function(categoryId) {
+    const nameInput = document.getElementById(`edit-cat-name-${categoryId}`);
+    const name = nameInput.value.trim();
+
+    if (!name) {
+      showToast('Category name is required', 'error');
+      return;
+    }
+
+    // Debug: Log what we're sending
+    console.log('Saving category:', categoryId, 'name:', name, 'subcategories:', editingSubcategories);
+
+    try {
+      const payload = {
+        name: name,
+        subcategories: editingSubcategories
+      };
+      console.log('Request payload:', JSON.stringify(payload));
+
+      const response = await apiRequest(`/categories/${categoryId}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      });
+      console.log('Response:', response);
+
+      if (response && response.data) {
+        showToast('Category updated', 'success');
+        await loadCategories();
+        document.getElementById('category-list').innerHTML = renderCategoryList();
+        editingCategoryId = null;
+        editingSubcategories = [];
+      }
+    } catch (error) {
+      showToast('Failed to update category', 'error');
+    }
+  };
+
+  window.app.deleteCategory = async function(categoryId) {
+    const cat = state.categories.find(c => c.id === categoryId);
+    if (!cat) return;
+
+    if (!confirm(`Are you sure you want to delete the category "${cat.name}"?`)) {
+      return;
+    }
+
+    try {
+      await apiRequest(`/categories/${categoryId}`, {
+        method: 'DELETE'
+      });
+
+      showToast('Category deleted', 'success');
+      await loadCategories();
+      document.getElementById('category-list').innerHTML = renderCategoryList();
+    } catch (error) {
+      showToast('Failed to delete category', 'error');
+    }
   };
 
   // ============================================
@@ -1049,6 +1603,18 @@
   // ============================================
 
   async function init() {
+    // Ensure markdown/highlight.js is configured (retry in case CDN scripts loaded late)
+    initMarkdownIfReady();
+
+    // Attach category select change handler
+    // Done here rather than inline to ensure app.onCategoryChange is defined
+    const categorySelect = document.getElementById('edit-category');
+    if (categorySelect) {
+      categorySelect.addEventListener('change', function() {
+        window.app.onCategoryChange(this.value);
+      });
+    }
+
     const isAuthenticated = await checkAuth();
     if (!isAuthenticated) return;
 

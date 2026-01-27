@@ -37,6 +37,10 @@ func writeError(ctx rweb.Context, status int, message string) error {
 // CreateNote handles POST /api/v1/notes
 // Creates a new note from JSON body and returns the created note.
 // Requires authentication - note is owned by the authenticated user.
+//
+// Content encoding modes:
+// - Standard JSON: Body field is plain string
+// - MsgPack mode: Header "X-Body-Encoding: msgpack", body_encoded field contains Base64 msgpack
 func CreateNote(ctx rweb.Context) error {
 	// Authentication check - all note operations require auth
 	userGUID := GetCurrentUserGUID(ctx)
@@ -46,11 +50,32 @@ func CreateNote(ctx rweb.Context) error {
 
 	var input models.NoteInput
 
-	// Decode JSON body into input struct
-	// rweb provides Body() as []byte, so we unmarshal directly
-	if err := json.Unmarshal(ctx.Request().Body(), &input); err != nil {
-		logger.LogErr(serr.Wrap(err, "failed to decode request body"), "invalid JSON")
-		return writeError(ctx, http.StatusBadRequest, "invalid JSON body")
+	// Check for msgpack body encoding mode via header
+	// Design: Using header rather than content-type to maintain JSON envelope
+	useMsgPack := ctx.Request().Header("X-Body-Encoding") == "msgpack"
+
+	if useMsgPack {
+		// Decode JSON with msgpack-encoded body field
+		var msgpackReq models.MsgPackBodyRequest
+		if err := json.Unmarshal(ctx.Request().Body(), &msgpackReq); err != nil {
+			logger.LogErr(serr.Wrap(err, "failed to decode msgpack request body"), "invalid JSON")
+			return writeError(ctx, http.StatusBadRequest, "invalid JSON body")
+		}
+
+		// Convert msgpack request to standard NoteInput
+		converted, err := msgpackReq.ToNoteInput()
+		if err != nil {
+			logger.LogErr(serr.Wrap(err, "failed to decode msgpack body"), "msgpack decode error")
+			return writeError(ctx, http.StatusBadRequest, "invalid msgpack body encoding")
+		}
+		input = *converted
+	} else {
+		// Standard JSON body - decode directly
+		// rweb provides Body() as []byte, so we unmarshal directly
+		if err := json.Unmarshal(ctx.Request().Body(), &input); err != nil {
+			logger.LogErr(serr.Wrap(err, "failed to decode request body"), "invalid JSON")
+			return writeError(ctx, http.StatusBadRequest, "invalid JSON body")
+		}
 	}
 
 	// Validate required fields
@@ -72,18 +97,61 @@ func CreateNote(ctx rweb.Context) error {
 	}
 
 	// Create the note with user ownership
+	// Note: CreateNote may return both a note AND an error if disk write succeeded
+	// but cache update failed. In this case, we still return success since the
+	// disk DB is the source of truth.
+	logger.Debug("API CreateNote: calling models.CreateNote", "guid", input.GUID, "title", input.Title)
+
 	note, err := models.CreateNote(input, userGUID)
+
+	logger.Debug("API CreateNote: models.CreateNote returned",
+		"note_is_nil", note == nil,
+		"err_is_nil", err == nil,
+		"err_msg", func() string {
+			if err != nil {
+				return err.Error()
+			}
+			return ""
+		}(),
+	)
+
 	if err != nil {
+		if note != nil {
+			// Disk write succeeded, cache failed - log warning but return success
+			logger.LogErr(err, "note created but cache update failed", "id", note.ID, "guid", note.GUID)
+			logger.Info("Note created (cache sync pending)", "id", note.ID, "guid", note.GUID, "user", userGUID)
+			partialOutput := note.ToOutput()
+			if useMsgPack {
+				if msgpackResp, encErr := partialOutput.ToMsgPackResponse(); encErr == nil {
+					return writeSuccess(ctx, http.StatusCreated, msgpackResp)
+				}
+			}
+			return writeSuccess(ctx, http.StatusCreated, partialOutput)
+		}
+		// Complete failure - disk write failed
 		logger.LogErr(serr.Wrap(err, "failed to create note"), "database error")
 		return writeError(ctx, http.StatusInternalServerError, "failed to create note")
 	}
 
 	logger.Info("Note created", "id", note.ID, "guid", note.GUID, "user", userGUID)
-	return writeSuccess(ctx, http.StatusCreated, note.ToOutput())
+
+	// Return msgpack-encoded response if client requested it
+	output := note.ToOutput()
+	if useMsgPack {
+		msgpackResp, err := output.ToMsgPackResponse()
+		if err != nil {
+			// Fallback to standard JSON if msgpack encoding fails
+			logger.LogErr(err, "failed to encode msgpack response, falling back to JSON")
+			return writeSuccess(ctx, http.StatusCreated, output)
+		}
+		return writeSuccess(ctx, http.StatusCreated, msgpackResp)
+	}
+	return writeSuccess(ctx, http.StatusCreated, output)
 }
 
 // GetNote handles GET /api/v1/notes/:id
 // Retrieves a single note by ID. Only returns notes owned by the authenticated user.
+// Supports msgpack body encoding via X-Body-Encoding: msgpack header.
 func GetNote(ctx rweb.Context) error {
 	// Authentication check - all note operations require auth
 	userGUID := GetCurrentUserGUID(ctx)
@@ -107,7 +175,15 @@ func GetNote(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusNotFound, "note not found")
 	}
 
-	return writeSuccess(ctx, http.StatusOK, note.ToOutput())
+	// Return msgpack-encoded response if client requested it
+	output := note.ToOutput()
+	if ctx.Request().Header("X-Body-Encoding") == "msgpack" {
+		if msgpackResp, encErr := output.ToMsgPackResponse(); encErr == nil {
+			return writeSuccess(ctx, http.StatusOK, msgpackResp)
+		}
+		// Fallback to JSON on encoding error
+	}
+	return writeSuccess(ctx, http.StatusOK, output)
 }
 
 // ListNotes handles GET /api/v1/notes
@@ -202,12 +278,27 @@ func ListNotes(ctx rweb.Context) error {
 		outputs[i] = note.ToOutput()
 	}
 
+	// Return msgpack-encoded response if client requested it
+	if ctx.Request().Header("X-Body-Encoding") == "msgpack" {
+		msgpackOutputs := make([]models.MsgPackBodyResponse, 0, len(outputs))
+		for _, output := range outputs {
+			if msgpackResp, encErr := output.ToMsgPackResponse(); encErr == nil {
+				msgpackOutputs = append(msgpackOutputs, *msgpackResp)
+			} else {
+				// Log error but skip this note in msgpack response
+				logger.LogErr(encErr, "failed to encode msgpack response for note", "id", output.ID)
+			}
+		}
+		return writeSuccess(ctx, http.StatusOK, msgpackOutputs)
+	}
+
 	return writeSuccess(ctx, http.StatusOK, outputs)
 }
 
 // UpdateNote handles PUT /api/v1/notes/:id
 // Updates an existing note with the provided JSON body.
 // Only updates notes owned by the authenticated user.
+// Supports msgpack body encoding via X-Body-Encoding: msgpack header.
 func UpdateNote(ctx rweb.Context) error {
 	// Authentication check - all note operations require auth
 	userGUID := GetCurrentUserGUID(ctx)
@@ -222,9 +313,31 @@ func UpdateNote(ctx rweb.Context) error {
 	}
 
 	var input models.NoteInput
-	if err := json.Unmarshal(ctx.Request().Body(), &input); err != nil {
-		logger.LogErr(serr.Wrap(err, "failed to decode request body"), "invalid JSON")
-		return writeError(ctx, http.StatusBadRequest, "invalid JSON body")
+
+	// Check for msgpack body encoding mode via header
+	useMsgPack := ctx.Request().Header("X-Body-Encoding") == "msgpack"
+
+	if useMsgPack {
+		// Decode JSON with msgpack-encoded body field
+		var msgpackReq models.MsgPackBodyRequest
+		if err := json.Unmarshal(ctx.Request().Body(), &msgpackReq); err != nil {
+			logger.LogErr(serr.Wrap(err, "failed to decode msgpack request body"), "invalid JSON")
+			return writeError(ctx, http.StatusBadRequest, "invalid JSON body")
+		}
+
+		// Convert msgpack request to standard NoteInput
+		converted, err := msgpackReq.ToNoteInput()
+		if err != nil {
+			logger.LogErr(serr.Wrap(err, "failed to decode msgpack body"), "msgpack decode error")
+			return writeError(ctx, http.StatusBadRequest, "invalid msgpack body encoding")
+		}
+		input = *converted
+	} else {
+		// Standard JSON body
+		if err := json.Unmarshal(ctx.Request().Body(), &input); err != nil {
+			logger.LogErr(serr.Wrap(err, "failed to decode request body"), "invalid JSON")
+			return writeError(ctx, http.StatusBadRequest, "invalid JSON body")
+		}
 	}
 
 	// Title is required for updates
@@ -233,8 +346,38 @@ func UpdateNote(ctx rweb.Context) error {
 	}
 
 	// UpdateNote verifies ownership via userGUID
+	// Note: UpdateNote may return both a note AND an error if disk write succeeded
+	// but cache update failed. In this case, we still return success since the
+	// disk DB is the source of truth.
+	logger.Debug("API UpdateNote: calling models.UpdateNote", "id", id, "title", input.Title)
+
 	note, err := models.UpdateNote(id, input, userGUID)
+
+	logger.Debug("API UpdateNote: models.UpdateNote returned",
+		"note_is_nil", note == nil,
+		"err_is_nil", err == nil,
+		"err_msg", func() string {
+			if err != nil {
+				return err.Error()
+			}
+			return ""
+		}(),
+	)
+
 	if err != nil {
+		if note != nil {
+			// Disk write succeeded, cache failed - log warning but return success
+			logger.LogErr(err, "note updated but cache update failed", "id", note.ID)
+			logger.Info("Note updated (cache sync pending)", "id", note.ID, "user", userGUID)
+			partialOutput := note.ToOutput()
+			if useMsgPack {
+				if msgpackResp, encErr := partialOutput.ToMsgPackResponse(); encErr == nil {
+					return writeSuccess(ctx, http.StatusOK, msgpackResp)
+				}
+			}
+			return writeSuccess(ctx, http.StatusOK, partialOutput)
+		}
+		// Complete failure - disk write failed
 		logger.LogErr(serr.Wrap(err, "failed to update note"), "database error")
 		return writeError(ctx, http.StatusInternalServerError, "failed to update note")
 	}
@@ -243,7 +386,16 @@ func UpdateNote(ctx rweb.Context) error {
 	}
 
 	logger.Info("Note updated", "id", note.ID, "user", userGUID)
-	return writeSuccess(ctx, http.StatusOK, note.ToOutput())
+
+	// Return msgpack-encoded response if client requested it
+	output := note.ToOutput()
+	if useMsgPack {
+		if msgpackResp, encErr := output.ToMsgPackResponse(); encErr == nil {
+			return writeSuccess(ctx, http.StatusOK, msgpackResp)
+		}
+		// Fallback to JSON on encoding error
+	}
+	return writeSuccess(ctx, http.StatusOK, output)
 }
 
 // DeleteNote handles DELETE /api/v1/notes/:id

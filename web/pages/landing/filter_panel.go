@@ -46,9 +46,12 @@ func (f FilterPanel) Render(b *element.Builder) any {
 
 func (f FilterPanel) renderCategoriesSection(b *element.Builder) any {
 	return b.Div("class", "filter-section", "id", "categories-section").R(
-		b.Div("class", "filter-header", "onclick", "app.toggleSection('categories-section')").R(
-			b.SpanClass("filter-title").T("Categories"),
-			b.SpanClass("filter-toggle").T("▼"),
+		b.Div("class", "filter-header").R(
+			b.Span("class", "filter-title", "onclick", "app.toggleSection('categories-section')").T("Categories"),
+			b.Span("class", "filter-header-actions").R(
+				b.A("href", "#", "class", "filter-action-link", "onclick", "event.stopPropagation(); app.showCategoryManager(); return false;", "title", "Manage categories").T("Manage"),
+			),
+			b.Span("class", "filter-toggle", "onclick", "app.toggleSection('categories-section')").T("▼"),
 		),
 		b.DivClass("filter-content").R(
 			b.Div("id", "categories-list").R(
