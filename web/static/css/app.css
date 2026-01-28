@@ -955,6 +955,57 @@ input, textarea, select {
   cursor: pointer;
 }
 
+/* Category input with dynamic creation support */
+.category-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.category-input-wrapper .edit-input {
+  flex: 1;
+}
+
+.new-indicator {
+  font-size: var(--font-size-xs);
+  color: var(--success);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* New subcategory input in edit form */
+.new-subcat-input {
+  display: flex;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-sm);
+  padding-top: var(--spacing-sm);
+  border-top: 1px dashed var(--border-light);
+}
+
+.new-subcat-input .subcat-input {
+  flex: 1;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: var(--font-size-xs);
+}
+
+.new-subcat-input .btn-sm {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: var(--font-size-xs);
+}
+
+/* New subcategory tag styling */
+.subcat-checkbox-label.new-subcat {
+  background: var(--success-light);
+  border-color: var(--success);
+}
+
+.subcat-checkbox-label.new-subcat em {
+  font-style: normal;
+  font-size: var(--font-size-xs);
+  color: var(--success);
+}
+
 .edit-body-wrapper {
   flex: 1;
   display: flex;

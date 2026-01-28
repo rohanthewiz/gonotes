@@ -58,20 +58,33 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 						b.Input("type", "text", "class", "edit-input", "id", "edit-description",
 							"name", "description", "placeholder", "Brief description..."),
 					),
-					// Category select (populated by JavaScript)
-					// Note: Event listener attached in app.js init() to avoid timing issues
+					// Category input with autocomplete (supports dynamic creation)
+					// Uses datalist for native autocomplete + allows new entries
 					b.DivClass("edit-field").R(
 						b.LabelClass("edit-label", "for", "edit-category").T("Category"),
-						b.Select("class", "edit-input", "id", "edit-category", "name", "category").R(
-							b.Option("value", "").T("Select category..."),
+						b.DivClass("category-input-wrapper").R(
+							b.Input("type", "text", "class", "edit-input", "id", "edit-category",
+								"name", "category", "placeholder", "Type or select category...",
+								"list", "category-datalist", "autocomplete", "off"),
+							b.Elem("datalist", "id", "category-datalist").R(
+							// Options populated dynamically by JavaScript
+							),
+							b.Span("class", "new-indicator", "id", "new-category-indicator", "style", "display:none").T("(new)"),
 						),
 					),
 					// Subcategory multi-select (shown when category has subcats defined)
 					// Design: Displays available subcats for the selected category as checkboxes
+					// Also allows adding new subcategories dynamically
 					b.DivClass("edit-field subcat-field", "id", "subcat-field", "style", "display:none").R(
 						b.LabelClass("edit-label").T("Subcats"),
 						b.DivClass("subcat-select", "id", "subcat-select").R(
 						// Subcategory checkboxes populated dynamically by JavaScript
+						),
+						b.DivClass("new-subcat-input").R(
+							b.Input("type", "text", "class", "edit-input subcat-input", "id", "new-subcat-input",
+								"placeholder", "Add new subcategory...",
+								"onkeypress", "if(event.key==='Enter'){event.preventDefault(); app.addNewSubcatFromForm();}"),
+							b.Button("type", "button", "class", "btn btn-secondary btn-sm", "onclick", "app.addNewSubcatFromForm()").T("Add"),
 						),
 					),
 				),
