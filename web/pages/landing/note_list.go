@@ -11,7 +11,6 @@ func (n NoteList) Render(b *element.Builder) any {
 		// Batch actions bar (hidden by default)
 		b.Div("class", "batch-actions", "id", "batch-actions").R(
 			b.ButtonClass("btn", "onclick", "app.deleteSelected()").T("Delete"),
-			b.ButtonClass("btn", "onclick", "app.tagSelected()").T("Add Tags"),
 			b.ButtonClass("btn", "onclick", "app.categorySelected()").T("Set Category"),
 			b.ButtonClass("btn", "onclick", "app.togglePrivacySelected()").T("Toggle Privacy"),
 			b.Span("class", "batch-count", "id", "batch-count").T("0 selected"),
@@ -57,9 +56,6 @@ func NoteRowTemplate() string {
       <span class="note-title">{{title}}</span>
     </div>
     <div class="note-meta">
-      <div class="note-tags">
-        {{#each tags}}<span class="note-tag" onclick="event.stopPropagation(); app.filterByTag('{{this}}')">#{{this}}</span>{{/each}}
-      </div>
       {{#if categories}}<span class="note-categories">{{categories}}</span>{{/if}}
     </div>
     <div class="note-preview">{{preview}}</div>

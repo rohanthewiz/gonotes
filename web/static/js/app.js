@@ -631,7 +631,7 @@
       guid: generateGUID(),
       title: state.currentNote.title + ' (Copy)',
       description: state.currentNote.description,
-      tags: state.currentNote.tags,
+      tags: null,
       is_private: state.currentNote.is_private
     };
 
