@@ -353,13 +353,44 @@
     showEditMode();
   };
 
-  window.app.editNote = function(noteId) {
+  window.app.editNote = async function(noteId) {
     const note = state.notes.find(n => n.id === noteId);
     if (note) {
       state.currentNote = note;
       state.isEditing = true;
       populateEditForm(note);
       showEditMode();
+
+      // Fetch note's categories from the API and populate multi-category entries.
+      // Done after showEditMode so the form is visible while categories load.
+      try {
+        const resp = await apiRequest(`/notes/${noteId}/categories`);
+        if (resp && resp.data && resp.data.length > 0) {
+          // Populate both Maps from all categories assigned to this note
+          resp.data.forEach(noteCategory => {
+            const key = noteCategory.name.toLowerCase();
+            const entry = {
+              categoryId: noteCategory.id,
+              categoryName: noteCategory.name,
+              selectedSubcats: (noteCategory.selected_subcategories || []).slice(),
+              newSubcategories: [],
+              isNew: false
+            };
+            categoryEntries.set(key, entry);
+            // Deep copy for original state so save can compute diff
+            originalCategoryEntries.set(key, {
+              categoryId: entry.categoryId,
+              categoryName: entry.categoryName,
+              selectedSubcats: entry.selectedSubcats.slice(),
+              newSubcategories: [],
+              isNew: false
+            });
+          });
+          renderAllCategoryEntries();
+        }
+      } catch (err) {
+        console.error('Failed to load note categories:', err);
+      }
     }
   };
 
@@ -430,59 +461,78 @@
       if (response && response.data) {
         const savedNoteId = response.data.id;
 
-        // Handle category assignment if a category was entered
-        // Design: Category is added to note after note save, with selected subcats
-        // Supports dynamic creation of new categories and subcategories
-        const categoryInput = document.getElementById('edit-category');
-        const categoryName = categoryInput ? categoryInput.value.trim() : '';
+        // Multi-category diff-based save: compare originalCategoryEntries vs categoryEntries
+        // Compute removed, added, and kept (with possible subcat changes)
+        try {
+          // Removed: in original but not in current
+          for (const [key, origEntry] of originalCategoryEntries) {
+            if (!categoryEntries.has(key)) {
+              await apiRequest(`/notes/${savedNoteId}/categories/${origEntry.categoryId}`, {
+                method: 'DELETE'
+              });
+            }
+          }
 
-        if (categoryName) {
-          try {
-            // Find existing category by name
-            let category = state.categories.find(c =>
-              c.name.toLowerCase() === categoryName.toLowerCase()
-            );
+          // Added & kept entries
+          for (const [key, entry] of categoryEntries) {
+            const isAdded = !originalCategoryEntries.has(key);
 
-            if (!category) {
-              // Create new category with any new subcategories
-              const createResponse = await apiRequest('/categories', {
+            // Ensure category exists — create if new
+            let categoryId = entry.categoryId;
+            if (entry.isNew && !categoryId) {
+              const createResp = await apiRequest('/categories', {
                 method: 'POST',
                 body: JSON.stringify({
-                  name: categoryName,
-                  subcategories: newSubcategories.length > 0 ? newSubcategories : []
+                  name: entry.categoryName,
+                  subcategories: entry.newSubcategories.length > 0 ? entry.newSubcategories : []
                 })
               });
-              if (createResponse && createResponse.data) {
-                category = createResponse.data;
-                showToast(`Category "${categoryName}" created`, 'success');
+              if (createResp && createResp.data) {
+                categoryId = createResp.data.id;
+                entry.categoryId = categoryId;
+                showToast(`Category "${entry.categoryName}" created`, 'success');
               }
-            } else if (newSubcategories.length > 0) {
-              // Existing category - add any new subcategories to it
-              const existingSubcats = category.subcategories || [];
-              const allSubcats = [...new Set([...existingSubcats, ...newSubcategories])];
+            } else if (entry.newSubcategories.length > 0 && categoryId) {
+              // Merge new subcategories into existing category definition
+              const catDef = state.categories.find(c => c.id === categoryId);
+              const existingSubcats = (catDef && catDef.subcategories) ? catDef.subcategories : [];
+              const allSubcats = [...new Set([...existingSubcats, ...entry.newSubcategories])];
 
-              await apiRequest(`/categories/${category.id}`, {
+              await apiRequest(`/categories/${categoryId}`, {
                 method: 'PUT',
                 body: JSON.stringify({
-                  name: category.name,
+                  name: entry.categoryName,
                   subcategories: allSubcats
                 })
               });
-              showToast(`Added new subcategories to "${categoryName}"`, 'success');
             }
 
-            // Assign category to note with selected subcategories
-            if (category && category.id) {
-              const subcats = getSelectedSubcats();
-              await apiRequest(`/notes/${savedNoteId}/categories/${category.id}`, {
+            if (!categoryId) continue;
+
+            if (isAdded) {
+              // New association — POST to create the note-category link
+              await apiRequest(`/notes/${savedNoteId}/categories/${categoryId}`, {
                 method: 'POST',
-                body: JSON.stringify({ subcategories: subcats })
+                body: JSON.stringify({ subcategories: entry.selectedSubcats })
               });
+            } else {
+              // Kept entry — check if subcategories changed
+              const origEntry = originalCategoryEntries.get(key);
+              const subcatsChanged =
+                JSON.stringify(origEntry.selectedSubcats.slice().sort()) !==
+                JSON.stringify(entry.selectedSubcats.slice().sort());
+
+              if (subcatsChanged) {
+                await apiRequest(`/notes/${savedNoteId}/categories/${categoryId}`, {
+                  method: 'PUT',
+                  body: JSON.stringify({ subcategories: entry.selectedSubcats })
+                });
+              }
             }
-          } catch (catError) {
-            // Log but don't fail the note save - category assignment is secondary
-            console.error('Failed to handle category:', catError);
           }
+        } catch (catError) {
+          // Log but don't fail the note save — category assignment is secondary
+          console.error('Failed to handle categories:', catError);
         }
 
         showToast('Note saved successfully', 'success');
@@ -622,15 +672,57 @@
     metaHtml.push(`<span class="preview-meta-item">Modified: ${formatRelativeTime(note.updated_at)}</span>`);
     document.getElementById('preview-meta').innerHTML = metaHtml.join('');
 
+    // Fetch and render category rows for this note.
+    // Each row displays a bold category name followed by its selected subcategories.
+    renderPreviewCategories(note.id);
+
     // Render markdown content
     const content = note.body || '';
     const html = DOMPurify.sanitize(marked.parse(content));
     document.getElementById('preview-content').innerHTML = html || '<p class="text-muted">No content</p>';
   }
 
+  // Fetches the note's assigned categories and renders each as a row:
+  // [Category Name]  subcat1  subcat2  subcat3
+  // Uses bold + primary color for category, muted style for subcategories.
+  async function renderPreviewCategories(noteId) {
+    const container = document.getElementById('preview-categories');
+    container.innerHTML = '';
+
+    try {
+      const resp = await apiRequest(`/notes/${noteId}/categories`);
+      if (!resp || !resp.data || resp.data.length === 0) return;
+
+      resp.data.forEach(cat => {
+        const row = document.createElement('div');
+        row.className = 'preview-cat-row';
+
+        // Bold category label
+        const catSpan = document.createElement('span');
+        catSpan.className = 'preview-cat-name';
+        catSpan.textContent = cat.name;
+        row.appendChild(catSpan);
+
+        // Append each selected subcategory as a lighter chip
+        const subcats = cat.selected_subcategories || [];
+        subcats.forEach(sub => {
+          const subSpan = document.createElement('span');
+          subSpan.className = 'preview-subcat';
+          subSpan.textContent = sub;
+          row.appendChild(subSpan);
+        });
+
+        container.appendChild(row);
+      });
+    } catch (err) {
+      console.error('Failed to load preview categories:', err);
+    }
+  }
+
   function clearPreview() {
     document.getElementById('preview-title').textContent = 'Select a note';
     document.getElementById('preview-meta').innerHTML = '';
+    document.getElementById('preview-categories').innerHTML = '';
     document.getElementById('preview-content').innerHTML = '<p class="text-muted">Select a note from the list to preview its content.</p>';
     document.getElementById('preview-footer').style.display = 'none';
   }
@@ -1085,162 +1177,276 @@
     ).join('');
   }
 
-  // Track selected subcategories for current note editing session
-  let selectedSubcats = [];
+  // Multi-category editing state.
+  // Each Map entry: key = lowercase category name,
+  // value = { categoryId, categoryName, selectedSubcats, newSubcategories, isNew }
+  let categoryEntries = new Map();         // current editing state
+  let originalCategoryEntries = new Map(); // snapshot at edit start (for save diff)
 
-  // Track new subcategories added during current editing session
-  let newSubcategories = [];
-
-  // onCategoryChange - Called when user types/selects a category in the edit form
-  // Shows subcategory checkboxes if the selected category has subcats defined
-  // Also detects if user is entering a new category
+  // onCategoryChange - Called when user types in the category add-input
+  // Only toggles the "(new)" indicator; subcategory rendering is per-entry card
   window.app.onCategoryChange = function(categoryName) {
-    const subcatField = document.getElementById('subcat-field');
-    const subcatSelect = document.getElementById('subcat-select');
     const newIndicator = document.getElementById('new-category-indicator');
 
-    if (!subcatField || !subcatSelect) {
-      return;
-    }
-
-    // Clear previous selection state
-    selectedSubcats = [];
-    newSubcategories = [];
-
     if (!categoryName || !categoryName.trim()) {
-      // No category entered - hide subcat field and new indicator
-      subcatField.style.display = 'none';
-      subcatSelect.innerHTML = '';
       if (newIndicator) newIndicator.style.display = 'none';
       return;
     }
 
     const trimmedName = categoryName.trim();
-
-    // Find the category by name (case-insensitive)
     const category = state.categories.find(c =>
       c.name.toLowerCase() === trimmedName.toLowerCase()
     );
 
-    if (!category) {
-      // This is a NEW category - show indicator and subcategory field for adding new subcats
-      if (newIndicator) newIndicator.style.display = 'inline';
-
-      // Show subcategory field with just the add input (no existing subcats)
-      subcatSelect.innerHTML = '<span class="text-muted" style="font-size: var(--font-size-xs);">Add subcategories for this new category</span>';
-      subcatField.style.display = 'block';
-      return;
+    // Show "(new)" when the typed name doesn't match any existing category
+    if (newIndicator) {
+      newIndicator.style.display = category ? 'none' : 'inline';
     }
-
-    // Existing category - hide new indicator
-    if (newIndicator) newIndicator.style.display = 'none';
-
-    if (!category.subcategories || category.subcategories.length === 0) {
-      // Category has no subcats defined - show field with just add input
-      subcatSelect.innerHTML = '<span class="text-muted" style="font-size: var(--font-size-xs);">No subcategories yet</span>';
-      subcatField.style.display = 'block';
-      return;
-    }
-
-    // Render subcategory checkboxes for existing subcats
-    // Design: Each subcat is displayed as a checkbox for multi-select
-    subcatSelect.innerHTML = category.subcategories.map(subcat => `
-      <label class="subcat-checkbox-label">
-        <input type="checkbox" class="subcat-checkbox" value="${escapeHtml(subcat)}"
-               onchange="app.toggleSubcat('${escapeHtml(subcat)}', this.checked)">
-        <span>${escapeHtml(subcat)}</span>
-      </label>
-    `).join('');
-
-    subcatField.style.display = 'block';
   };
 
-  // addNewSubcatFromForm - Called when user adds a new subcategory from the note edit form
-  window.app.addNewSubcatFromForm = function() {
-    const input = document.getElementById('new-subcat-input');
+  // ============================================
+  // Multi-Category Entry Functions
+  // ============================================
+
+  // addCategoryEntry - Read the add-input, validate, add to Map, render card
+  window.app.addCategoryEntry = function() {
+    const input = document.getElementById('edit-category');
     if (!input) return;
 
-    const value = input.value.trim();
-    if (!value) return;
-
-    // Check if already in selected or new subcategories
-    if (selectedSubcats.includes(value) || newSubcategories.includes(value)) {
-      showToast('Subcategory already added', 'warning');
+    const rawName = input.value.trim();
+    if (!rawName) {
+      showToast('Enter a category name', 'warning');
       return;
     }
 
-    // Get current category to check if this subcat already exists
-    const categoryInput = document.getElementById('edit-category');
-    const categoryName = categoryInput ? categoryInput.value.trim() : '';
-    const category = state.categories.find(c =>
-      c.name.toLowerCase() === categoryName.toLowerCase()
-    );
-
-    // If category exists and already has this subcategory, add to selected
-    if (category && category.subcategories && category.subcategories.includes(value)) {
-      selectedSubcats.push(value);
-      // Check the corresponding checkbox
-      const checkbox = document.querySelector(`.subcat-checkbox[value="${escapeHtml(value)}"]`);
-      if (checkbox) checkbox.checked = true;
-    } else {
-      // This is a new subcategory - add to both lists
-      newSubcategories.push(value);
-      selectedSubcats.push(value);
-      // Add visual indicator for new subcategory
-      addNewSubcatTag(value);
+    const key = rawName.toLowerCase();
+    if (categoryEntries.has(key)) {
+      showToast('Category already added', 'warning');
+      return;
     }
+
+    // Look up existing category to get id and subcategories
+    const existing = state.categories.find(c => c.name.toLowerCase() === key);
+
+    const entry = {
+      categoryId: existing ? existing.id : null,
+      categoryName: existing ? existing.name : rawName,
+      selectedSubcats: [],
+      newSubcategories: [],
+      isNew: !existing
+    };
+
+    categoryEntries.set(key, entry);
+    renderCategoryEntry(key, entry);
 
     input.value = '';
-    showToast(`Subcategory "${value}" will be created`, 'success');
+    const newIndicator = document.getElementById('new-category-indicator');
+    if (newIndicator) newIndicator.style.display = 'none';
   };
 
-  // addNewSubcatTag - Adds a visual tag for a new subcategory
-  function addNewSubcatTag(subcat) {
-    const subcatSelect = document.getElementById('subcat-select');
-    if (!subcatSelect) return;
+  // removeCategoryEntry - Remove from Map and DOM
+  window.app.removeCategoryEntry = function(key) {
+    categoryEntries.delete(key);
+    const card = document.getElementById('cat-entry-' + CSS.escape(key));
+    if (card) card.remove();
+  };
 
-    // Remove "no subcategories" message if present
-    const noSubcatMsg = subcatSelect.querySelector('.text-muted');
-    if (noSubcatMsg) noSubcatMsg.remove();
+  // renderCategoryEntry - Build DOM for one entry card and append to container
+  function renderCategoryEntry(key, entry) {
+    const container = document.getElementById('category-entries-container');
+    if (!container) return;
 
-    const tag = document.createElement('label');
-    tag.className = 'subcat-checkbox-label new-subcat';
-    tag.innerHTML = `
-      <input type="checkbox" class="subcat-checkbox" value="${escapeHtml(subcat)}" checked
-             onchange="app.toggleSubcat('${escapeHtml(subcat)}', this.checked)">
-      <span>${escapeHtml(subcat)} <em>(new)</em></span>
-    `;
-    subcatSelect.appendChild(tag);
+    const card = document.createElement('div');
+    card.className = 'category-entry';
+    card.id = 'cat-entry-' + key;
+
+    // Header row: name + new indicator + remove button
+    const header = document.createElement('div');
+    header.className = 'category-entry-header';
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'category-entry-name';
+    nameSpan.textContent = entry.categoryName;
+    if (entry.isNew) {
+      const indicator = document.createElement('span');
+      indicator.className = 'new-indicator';
+      indicator.style.marginLeft = '6px';
+      indicator.textContent = '(new)';
+      nameSpan.appendChild(indicator);
+    }
+    header.appendChild(nameSpan);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'category-entry-remove';
+    removeBtn.innerHTML = '&times;';
+    removeBtn.onclick = () => window.app.removeCategoryEntry(key);
+    header.appendChild(removeBtn);
+
+    card.appendChild(header);
+
+    // Subcategory section
+    const subcatsDiv = document.createElement('div');
+    subcatsDiv.className = 'category-entry-subcats';
+
+    // Find existing category definition to get available subcats
+    const catDef = state.categories.find(c => c.name.toLowerCase() === key);
+    const availableSubcats = (catDef && catDef.subcategories) ? catDef.subcategories : [];
+
+    if (availableSubcats.length > 0) {
+      // Render checkbox for each defined subcategory
+      const selectDiv = document.createElement('div');
+      selectDiv.className = 'subcat-select';
+
+      availableSubcats.forEach(subcat => {
+        const label = document.createElement('label');
+        label.className = 'subcat-checkbox-label';
+        const isSelected = entry.selectedSubcats.includes(subcat);
+
+        label.innerHTML = `
+          <input type="checkbox" class="subcat-checkbox" value="${escapeHtml(subcat)}"
+                 ${isSelected ? 'checked' : ''}
+                 onchange="app.toggleEntrySubcat('${escapeHtml(key)}', '${escapeHtml(subcat)}', this.checked)">
+          <span>${escapeHtml(subcat)}</span>
+        `;
+        selectDiv.appendChild(label);
+      });
+
+      // Also render any new subcats that were dynamically added
+      entry.newSubcategories.forEach(subcat => {
+        const label = document.createElement('label');
+        label.className = 'subcat-checkbox-label new-subcat';
+        const isSelected = entry.selectedSubcats.includes(subcat);
+
+        label.innerHTML = `
+          <input type="checkbox" class="subcat-checkbox" value="${escapeHtml(subcat)}"
+                 ${isSelected ? 'checked' : ''}
+                 onchange="app.toggleEntrySubcat('${escapeHtml(key)}', '${escapeHtml(subcat)}', this.checked)">
+          <span>${escapeHtml(subcat)} <em>(new)</em></span>
+        `;
+        selectDiv.appendChild(label);
+      });
+
+      subcatsDiv.appendChild(selectDiv);
+    } else if (entry.newSubcategories.length > 0) {
+      // No existing subcats but has new ones — render them
+      const selectDiv = document.createElement('div');
+      selectDiv.className = 'subcat-select';
+
+      entry.newSubcategories.forEach(subcat => {
+        const label = document.createElement('label');
+        label.className = 'subcat-checkbox-label new-subcat';
+        const isSelected = entry.selectedSubcats.includes(subcat);
+
+        label.innerHTML = `
+          <input type="checkbox" class="subcat-checkbox" value="${escapeHtml(subcat)}"
+                 ${isSelected ? 'checked' : ''}
+                 onchange="app.toggleEntrySubcat('${escapeHtml(key)}', '${escapeHtml(subcat)}', this.checked)">
+          <span>${escapeHtml(subcat)} <em>(new)</em></span>
+        `;
+        selectDiv.appendChild(label);
+      });
+
+      subcatsDiv.appendChild(selectDiv);
+    }
+
+    // New subcategory input row for this entry
+    const newSubcatRow = document.createElement('div');
+    newSubcatRow.className = 'new-subcat-input';
+
+    const newSubcatInput = document.createElement('input');
+    newSubcatInput.type = 'text';
+    newSubcatInput.className = 'edit-input subcat-input';
+    newSubcatInput.placeholder = 'Add subcategory...';
+    newSubcatInput.onkeypress = function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        window.app.addNewSubcatToEntry(key, this);
+      }
+    };
+
+    const addSubcatBtn = document.createElement('button');
+    addSubcatBtn.type = 'button';
+    addSubcatBtn.className = 'btn btn-secondary btn-sm';
+    addSubcatBtn.textContent = 'Add';
+    addSubcatBtn.onclick = function() {
+      window.app.addNewSubcatToEntry(key, newSubcatInput);
+    };
+
+    newSubcatRow.appendChild(newSubcatInput);
+    newSubcatRow.appendChild(addSubcatBtn);
+    subcatsDiv.appendChild(newSubcatRow);
+
+    card.appendChild(subcatsDiv);
+    container.appendChild(card);
   }
 
-  // toggleSubcat - Called when user checks/unchecks a subcategory checkbox
-  window.app.toggleSubcat = function(subcat, checked) {
+  // renderAllCategoryEntries - Clear container and render all entries from Map
+  function renderAllCategoryEntries() {
+    const container = document.getElementById('category-entries-container');
+    if (!container) return;
+    container.innerHTML = '';
+
+    categoryEntries.forEach((entry, key) => {
+      renderCategoryEntry(key, entry);
+    });
+  }
+
+  // toggleEntrySubcat - Update a specific entry's selectedSubcats list
+  window.app.toggleEntrySubcat = function(catKey, subcat, checked) {
+    const entry = categoryEntries.get(catKey);
+    if (!entry) return;
+
     if (checked) {
-      if (!selectedSubcats.includes(subcat)) {
-        selectedSubcats.push(subcat);
+      if (!entry.selectedSubcats.includes(subcat)) {
+        entry.selectedSubcats.push(subcat);
       }
     } else {
-      selectedSubcats = selectedSubcats.filter(s => s !== subcat);
+      entry.selectedSubcats = entry.selectedSubcats.filter(s => s !== subcat);
     }
   };
 
-  // getSelectedSubcats - Returns the currently selected subcategories
-  function getSelectedSubcats() {
-    return selectedSubcats.slice(); // Return a copy
-  }
+  // addNewSubcatToEntry - Add a new subcategory to a specific entry
+  window.app.addNewSubcatToEntry = function(catKey, inputEl) {
+    const entry = categoryEntries.get(catKey);
+    if (!entry || !inputEl) return;
 
-  // clearSubcatSelection - Clears subcategory selection and hides the field
-  function clearSubcatSelection() {
-    selectedSubcats = [];
-    newSubcategories = [];
-    const subcatField = document.getElementById('subcat-field');
-    const subcatSelect = document.getElementById('subcat-select');
-    const newSubcatInput = document.getElementById('new-subcat-input');
+    const value = inputEl.value.trim();
+    if (!value) return;
+
+    // Check for duplicates in both existing and new subcategories
+    const catDef = state.categories.find(c => c.name.toLowerCase() === catKey);
+    const existingSubcats = (catDef && catDef.subcategories) ? catDef.subcategories : [];
+
+    if (existingSubcats.includes(value) || entry.newSubcategories.includes(value)) {
+      showToast('Subcategory already exists', 'warning');
+      return;
+    }
+
+    // Add to the entry's new subcategories and select it
+    entry.newSubcategories.push(value);
+    entry.selectedSubcats.push(value);
+
+    inputEl.value = '';
+
+    // Re-render this entry card to show the new subcategory checkbox
+    const card = document.getElementById('cat-entry-' + CSS.escape(catKey));
+    if (card) card.remove();
+    renderCategoryEntry(catKey, entry);
+
+    showToast(`Subcategory "${value}" added`, 'success');
+  };
+
+  // clearCategoryEntries - Reset both Maps and clear the container
+  function clearCategoryEntries() {
+    categoryEntries.clear();
+    originalCategoryEntries.clear();
+    const container = document.getElementById('category-entries-container');
+    if (container) container.innerHTML = '';
     const newIndicator = document.getElementById('new-category-indicator');
-    if (subcatField) subcatField.style.display = 'none';
-    if (subcatSelect) subcatSelect.innerHTML = '';
-    if (newSubcatInput) newSubcatInput.value = '';
     if (newIndicator) newIndicator.style.display = 'none';
+    const catInput = document.getElementById('edit-category');
+    if (catInput) catInput.value = '';
   }
 
   function populateEditForm(note) {
@@ -1252,10 +1458,8 @@
     document.getElementById('edit-body').value = note.body || '';
     document.getElementById('edit-private').checked = note.is_private;
 
-    // Reset category and subcategory selection when populating edit form
-    const categorySelect = document.getElementById('edit-category');
-    if (categorySelect) categorySelect.value = '';
-    clearSubcatSelection();
+    // Reset multi-category entries when populating edit form
+    clearCategoryEntries();
   }
 
   function clearEditForm() {
@@ -1267,10 +1471,8 @@
     document.getElementById('edit-body').value = '';
     document.getElementById('edit-private').checked = false;
 
-    // Clear category and subcategory selection
-    const categorySelect = document.getElementById('edit-category');
-    if (categorySelect) categorySelect.value = '';
-    clearSubcatSelection();
+    // Clear multi-category entries
+    clearCategoryEntries();
   }
 
   function showEditMode() {
@@ -1726,7 +1928,7 @@
     // Ensure markdown/highlight.js is configured (retry in case CDN scripts loaded late)
     initMarkdownIfReady();
 
-    // Attach category input handler with debounce for autocomplete
+    // Attach category input handler with debounce for "(new)" indicator
     // Done here rather than inline to ensure app.onCategoryChange is defined
     const categoryInput = document.getElementById('edit-category');
     if (categoryInput) {
@@ -1737,10 +1939,17 @@
           window.app.onCategoryChange(this.value);
         }, 150); // Short debounce for responsive feel
       });
-      // Also trigger on blur to finalize selection
+      // Also trigger on blur to finalize indicator
       categoryInput.addEventListener('blur', function() {
         clearTimeout(categoryDebounceTimer);
         window.app.onCategoryChange(this.value);
+      });
+      // Enter key triggers addCategoryEntry for quick keyboard-driven workflow
+      categoryInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          window.app.addCategoryEntry();
+        }
       });
     }
 

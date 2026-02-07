@@ -95,6 +95,20 @@ func (c *Category) ToOutput() CategoryOutput {
 	return output
 }
 
+// NoteCategoryDetailOutput enriches CategoryOutput with note-specific subcategory selections.
+// When retrieving categories for a specific note, the full list of available subcategories
+// comes from the category itself, while selected_subcategories reflects which ones are
+// actually assigned in the note_categories junction table for that note.
+type NoteCategoryDetailOutput struct {
+	ID                    int64     `json:"id"`
+	Name                  string    `json:"name"`
+	Description           *string   `json:"description,omitempty"`
+	Subcategories         []string  `json:"subcategories,omitempty"`
+	SelectedSubcategories []string  `json:"selected_subcategories,omitempty"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
+}
+
 // CreateCategory creates a new category in both disk and cache databases
 func CreateCategory(input CategoryInput) (*Category, error) {
 	if input.Name == "" {
@@ -518,6 +532,72 @@ func GetNoteCategories(noteID int64) ([]Category, error) {
 	}
 
 	return categories, nil
+}
+
+// GetNoteCategoryDetails retrieves categories for a note along with which subcategories
+// are specifically selected for this note. Unlike GetNoteCategories which only returns
+// category data, this also pulls nc.subcategories from the junction table so the caller
+// knows which subcategories the user chose when linking the category to the note.
+func GetNoteCategoryDetails(noteID int64) ([]NoteCategoryDetailOutput, error) {
+	query := `SELECT c.id, c.name, c.description, c.subcategories, c.created_at, c.updated_at,
+		nc.subcategories
+		FROM categories c
+		INNER JOIN note_categories nc ON c.id = nc.category_id
+		WHERE nc.note_id = ?
+		ORDER BY c.name ASC`
+
+	rows, err := cacheDB.Query(query, noteID)
+	if err != nil {
+		return nil, serr.Wrap(err, "failed to get note category details")
+	}
+	defer rows.Close()
+
+	var results []NoteCategoryDetailOutput
+	for rows.Next() {
+		var (
+			cat              Category
+			selectedSubcJSON sql.NullString
+		)
+		err := rows.Scan(
+			&cat.ID, &cat.Name, &cat.Description, &cat.Subcategories,
+			&cat.CreatedAt, &cat.UpdatedAt,
+			&selectedSubcJSON,
+		)
+		if err != nil {
+			return nil, serr.Wrap(err, "failed to scan note category detail")
+		}
+
+		// Build the output by converting the category fields and adding selected subcategories
+		detail := NoteCategoryDetailOutput{
+			ID:        cat.ID,
+			Name:      cat.Name,
+			CreatedAt: cat.CreatedAt,
+			UpdatedAt: cat.UpdatedAt,
+		}
+		if cat.Description.Valid {
+			detail.Description = &cat.Description.String
+		}
+		if cat.Subcategories.Valid && cat.Subcategories.String != "" {
+			var subcats []string
+			if err := json.Unmarshal([]byte(cat.Subcategories.String), &subcats); err == nil {
+				detail.Subcategories = subcats
+			}
+		}
+		if selectedSubcJSON.Valid && selectedSubcJSON.String != "" {
+			var selectedSubcats []string
+			if err := json.Unmarshal([]byte(selectedSubcJSON.String), &selectedSubcats); err == nil {
+				detail.SelectedSubcategories = selectedSubcats
+			}
+		}
+
+		results = append(results, detail)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, serr.Wrap(err, "error iterating note category details")
+	}
+
+	return results, nil
 }
 
 // GetCategoryNotes retrieves all notes for a category

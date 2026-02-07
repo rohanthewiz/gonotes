@@ -716,6 +716,42 @@ input, textarea, select {
   color: var(--text-secondary);
 }
 
+/* Category and subcategory display in the preview header.
+   Each row contains one category (bold, colored) followed by its subcategories. */
+.preview-categories {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-sm);
+}
+
+.preview-cat-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+}
+
+.preview-cat-name {
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+  color: var(--primary-dark);
+  padding: 2px 8px;
+  background: rgba(59, 130, 246, 0.1);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+.preview-subcat {
+  font-size: var(--font-size-xs);
+  font-weight: 400;
+  color: var(--text-secondary);
+  padding: 2px 7px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
 .preview-body {
   flex: 1;
   overflow-y: auto;
@@ -972,6 +1008,67 @@ input, textarea, select {
   color: var(--success);
   font-weight: 500;
   white-space: nowrap;
+}
+
+/* Multi-category entry container and cards */
+.category-entries-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  max-height: 240px;
+  overflow-y: auto;
+  margin-bottom: var(--spacing-sm);
+}
+
+.category-entry {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--bg-secondary);
+}
+
+.category-entry-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-xs);
+}
+
+.category-entry-name {
+  font-weight: 500;
+  font-size: var(--font-size-sm);
+}
+
+.category-entry-remove {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--font-size-md);
+  padding: 0 var(--spacing-xs);
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.category-entry-remove:hover {
+  color: var(--danger);
+  background: var(--danger-light);
+}
+
+.category-entry-subcats {
+  margin-top: var(--spacing-xs);
+}
+
+/* Add category row — input + "(new)" indicator + button */
+.category-add-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.category-add-row .edit-input {
+  flex: 1;
 }
 
 /* New subcategory input in edit form */

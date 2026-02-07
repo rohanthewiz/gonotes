@@ -33,7 +33,7 @@ func (p Page) renderHead(b *element.Builder) any {
 		b.Meta("name", "viewport", "content", "width=device-width, initial-scale=1.0"),
 		b.Title().T(p.Title),
 		// CSS
-		b.Link("rel", "stylesheet", "href", "/static/css/app.css"),
+		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=2"),
 		// Highlight.js CSS theme - GitHub theme provides familiar, readable syntax colors
 		b.Link("rel", "stylesheet", "href", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css"),
 		// Marked.js for Markdown rendering
@@ -92,6 +92,6 @@ func (p Page) renderBody(b *element.Builder) any {
 		),
 
 		// Application JavaScript (cache-bust version for development)
-		b.Script("src", "/static/js/app.js?v=1").R(),
+		b.Script("src", "/static/js/app.js?v=2").R(),
 	)
 }

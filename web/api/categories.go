@@ -226,6 +226,50 @@ func AddCategoryToNote(ctx rweb.Context) error {
 	})
 }
 
+// UpdateNoteCategory handles PUT /api/v1/notes/:id/categories/:category_id
+// Updates the subcategories for an existing note-category relationship.
+// This allows changing which subcats are selected without removing and re-adding the category.
+func UpdateNoteCategory(ctx rweb.Context) error {
+	noteIDStr := ctx.Request().Param("id")
+	noteID, err := strconv.ParseInt(noteIDStr, 10, 64)
+	if err != nil {
+		return writeError(ctx, http.StatusBadRequest, "invalid note id")
+	}
+
+	categoryIDStr := ctx.Request().Param("category_id")
+	categoryID, err := strconv.ParseInt(categoryIDStr, 10, 64)
+	if err != nil {
+		return writeError(ctx, http.StatusBadRequest, "invalid category id")
+	}
+
+	// Parse subcategories from request body
+	var req AddCategoryToNoteRequest
+	body := ctx.Request().Body()
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			logger.LogErr(serr.Wrap(err, "failed to decode request body"), "invalid JSON")
+			return writeError(ctx, http.StatusBadRequest, "invalid JSON body")
+		}
+	}
+
+	err = models.UpdateNoteCategorySubcategories(noteID, categoryID, req.Subcategories)
+	if err != nil {
+		if err.Error() == "relationship not found" {
+			return writeError(ctx, http.StatusNotFound, "relationship not found")
+		}
+		logger.LogErr(serr.Wrap(err, "failed to update note category subcategories"), "database error")
+		return writeError(ctx, http.StatusInternalServerError, "failed to update note category")
+	}
+
+	logger.Info("Note category subcategories updated", "note_id", noteID, "category_id", categoryID)
+	return writeSuccess(ctx, http.StatusOK, map[string]interface{}{
+		"note_id":       noteID,
+		"category_id":   categoryID,
+		"subcategories": req.Subcategories,
+		"updated":       true,
+	})
+}
+
 // RemoveCategoryFromNote handles DELETE /api/v1/notes/:id/categories/:category_id
 // Removes a category from a note.
 func RemoveCategoryFromNote(ctx rweb.Context) error {
@@ -259,7 +303,10 @@ func RemoveCategoryFromNote(ctx rweb.Context) error {
 }
 
 // GetNoteCategories handles GET /api/v1/notes/:id/categories
-// Retrieves all categories for a note.
+// Returns categories for a note along with which subcategories are selected.
+// The response includes both the full subcategory list (from the category definition)
+// and selected_subcategories (from the note-category junction) so the UI can
+// render checkboxes with the correct pre-selected state.
 func GetNoteCategories(ctx rweb.Context) error {
 	noteIDStr := ctx.Request().Param("id")
 	noteID, err := strconv.ParseInt(noteIDStr, 10, 64)
@@ -267,19 +314,13 @@ func GetNoteCategories(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusBadRequest, "invalid note id")
 	}
 
-	categories, err := models.GetNoteCategories(noteID)
+	details, err := models.GetNoteCategoryDetails(noteID)
 	if err != nil {
 		logger.LogErr(serr.Wrap(err, "failed to get note categories"), "database error")
 		return writeError(ctx, http.StatusInternalServerError, "database error")
 	}
 
-	// Convert to output format for clean JSON serialization
-	outputs := make([]models.CategoryOutput, len(categories))
-	for i, category := range categories {
-		outputs[i] = category.ToOutput()
-	}
-
-	return writeSuccess(ctx, http.StatusOK, outputs)
+	return writeSuccess(ctx, http.StatusOK, details)
 }
 
 // GetCategoryNotes handles GET /api/v1/categories/:id/notes

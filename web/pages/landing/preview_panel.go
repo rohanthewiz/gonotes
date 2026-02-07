@@ -14,8 +14,11 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 			b.DivClass("preview-header").R(
 				b.H1("class", "preview-title", "id", "preview-title").T("Select a note"),
 				b.Div("class", "preview-meta", "id", "preview-meta").R(
-				// Meta information will be populated by JavaScript
+					// Meta information will be populated by JavaScript
 				),
+				// Category rows: each row shows a category (bold, colored) followed by
+				// its subcategories. Populated dynamically when a note is selected.
+				b.Div("class", "preview-categories", "id", "preview-categories").R(),
 			),
 			// Preview body
 			b.DivClass("preview-body").R(
@@ -58,33 +61,23 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 						b.Input("type", "text", "class", "edit-input", "id", "edit-description",
 							"name", "description", "placeholder", "Brief description..."),
 					),
-					// Category input with autocomplete (supports dynamic creation)
-					// Uses datalist for native autocomplete + allows new entries
+					// Multi-category support: container for assigned category entry cards
+					// Each card shows the category name, remove button, and subcategory checkboxes
 					b.DivClass("edit-field").R(
-						b.LabelClass("edit-label", "for", "edit-category").T("Category"),
-						b.DivClass("category-input-wrapper").R(
+						b.LabelClass("edit-label").T("Categories"),
+						b.Div("class", "category-entries-container", "id", "category-entries-container").R(
+							// Category entry cards populated dynamically by JavaScript
+						),
+						// Add category row: input with datalist + "Add" button
+						b.DivClass("category-add-row").R(
 							b.Input("type", "text", "class", "edit-input", "id", "edit-category",
-								"name", "category", "placeholder", "Type or select category...",
+								"placeholder", "Type or select category...",
 								"list", "category-datalist", "autocomplete", "off"),
-							b.Elem("datalist", "id", "category-datalist").R(
-							// Options populated dynamically by JavaScript
+							b.DataList("id", "category-datalist").R(
+								// Options populated dynamically by JavaScript
 							),
-							b.Span("class", "new-indicator", "id", "new-category-indicator", "style", "display:none").T("(new)"),
-						),
-					),
-					// Subcategory multi-select (shown when category has subcats defined)
-					// Design: Displays available subcats for the selected category as checkboxes
-					// Also allows adding new subcategories dynamically
-					b.DivClass("edit-field subcat-field", "id", "subcat-field", "style", "display:none").R(
-						b.LabelClass("edit-label").T("Subcats"),
-						b.DivClass("subcat-select", "id", "subcat-select").R(
-						// Subcategory checkboxes populated dynamically by JavaScript
-						),
-						b.DivClass("new-subcat-input").R(
-							b.Input("type", "text", "class", "edit-input subcat-input", "id", "new-subcat-input",
-								"placeholder", "Add new subcategory...",
-								"onkeypress", "if(event.key==='Enter'){event.preventDefault(); app.addNewSubcatFromForm();}"),
-							b.Button("type", "button", "class", "btn btn-secondary btn-sm", "onclick", "app.addNewSubcatFromForm()").T("Add"),
+							b.SpanClass("new-indicator", "id", "new-category-indicator", "style", "display:none").T("(new)"),
+							b.Button("type", "button", "class", "btn btn-secondary btn-sm", "onclick", "app.addCategoryEntry()").T("Add"),
 						),
 					),
 				),
