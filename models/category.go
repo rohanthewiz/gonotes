@@ -724,6 +724,60 @@ func GetNotesByCategoryName(categoryName string, userGUID string) ([]Note, error
 	return notes, nil
 }
 
+// NoteCategoryMapping is a lightweight struct for the bulk note-category mapping endpoint.
+// Unlike NoteCategoryDetailOutput (which is per-note), this returns ALL mappings across
+// all notes so the client can build a lookup table for client-side category filtering.
+type NoteCategoryMapping struct {
+	NoteID                int64    `json:"note_id"`
+	CategoryID            int64    `json:"category_id"`
+	CategoryName          string   `json:"category_name"`
+	SelectedSubcategories []string `json:"selected_subcategories,omitempty"`
+}
+
+// GetAllNoteCategoryMappings retrieves every note-category relationship in one query.
+// The userGUID scopes results to only that user's notes (via notes.created_by).
+// This powers the search-bar category filter — the client caches the result in a
+// lookup map keyed by note ID so filtering is instant without per-note API calls.
+func GetAllNoteCategoryMappings(userGUID string) ([]NoteCategoryMapping, error) {
+	query := `SELECT nc.note_id, nc.category_id, c.name, nc.subcategories
+		FROM note_categories nc
+		INNER JOIN categories c ON nc.category_id = c.id
+		INNER JOIN notes n ON nc.note_id = n.id
+		WHERE n.created_by = ? AND n.deleted_at IS NULL
+		ORDER BY nc.note_id, c.name`
+
+	rows, err := cacheDB.Query(query, userGUID)
+	if err != nil {
+		return nil, serr.Wrap(err, "failed to query note-category mappings")
+	}
+	defer rows.Close()
+
+	var mappings []NoteCategoryMapping
+	for rows.Next() {
+		var (
+			m            NoteCategoryMapping
+			subcatsJSON  sql.NullString
+		)
+		if err := rows.Scan(&m.NoteID, &m.CategoryID, &m.CategoryName, &subcatsJSON); err != nil {
+			return nil, serr.Wrap(err, "failed to scan note-category mapping")
+		}
+		// Parse the JSON subcategories array stored in the junction table
+		if subcatsJSON.Valid && subcatsJSON.String != "" {
+			var subcats []string
+			if err := json.Unmarshal([]byte(subcatsJSON.String), &subcats); err == nil {
+				m.SelectedSubcategories = subcats
+			}
+		}
+		mappings = append(mappings, m)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, serr.Wrap(err, "error iterating note-category mappings")
+	}
+
+	return mappings, nil
+}
+
 // GetNotesByCategoryAndSubcategories retrieves notes that belong to the specified category
 // and have ALL the specified subcategories. This uses DuckDB's JSON functions to query
 // the subcategories array stored in the note_categories table.

@@ -2,29 +2,18 @@ package landing
 
 import "github.com/rohanthewiz/element"
 
-// FilterPanel represents the left panel with search and filter controls
+// FilterPanel represents the left panel with filter controls.
+// Search and tags have been moved/removed — search lives in the SearchBar component,
+// and tags are replaced by the category/subcategory system.
 type FilterPanel struct{}
 
 // Render implements the element.Component interface
 func (f FilterPanel) Render(b *element.Builder) any {
 	b.Aside("class", "left-panel", "id", "filter-panel").R(
-		// Search box
-		b.DivClass("search-box").R(
-			b.DivClass("search-input-wrapper").R(
-				b.SpanClass("search-icon").T("🔍"),
-				b.Input("type", "text", "class", "search-input", "id", "search-input",
-					"placeholder", "Search notes...", "oninput", "app.handleSearch(this.value)"),
-				b.ButtonClass("search-clear", "onclick", "app.clearSearch()", "title", "Clear search").T("×"),
-			),
-		),
-
 		// Filter sections container
 		b.Div("class", "filter-sections", "id", "filter-sections").R(
-			// Categories section
+			// Categories section — only the "Manage" link; filtering is in the search bar
 			f.renderCategoriesSection(b),
-
-			// Tags section
-			f.renderTagsSection(b),
 
 			// Privacy section
 			f.renderPrivacySection(b),
@@ -44,34 +33,16 @@ func (f FilterPanel) Render(b *element.Builder) any {
 	return nil
 }
 
+// renderCategoriesSection shows only the "Manage" link for the category manager modal.
+// Category filtering has moved to the SearchBar component's dropdown + subcategory chips.
 func (f FilterPanel) renderCategoriesSection(b *element.Builder) any {
 	return b.Div("class", "filter-section", "id", "categories-section").R(
 		b.Div("class", "filter-header").R(
-			b.Span("class", "filter-title", "onclick", "app.toggleSection('categories-section')").T("Categories"),
+			b.SpanClass("filter-title").T("Categories"),
 			b.Span("class", "filter-header-actions").R(
-				b.A("href", "#", "class", "filter-action-link", "onclick", "event.stopPropagation(); app.showCategoryManager(); return false;", "title", "Manage categories").T("Manage"),
-			),
-			b.Span("class", "filter-toggle", "onclick", "app.toggleSection('categories-section')").T("▼"),
-		),
-		b.DivClass("filter-content").R(
-			b.Div("id", "categories-list").R(
-				// Categories will be populated via JavaScript
-				b.DivClass("text-muted").T("Loading..."),
-			),
-		),
-	)
-}
-
-func (f FilterPanel) renderTagsSection(b *element.Builder) any {
-	return b.Div("class", "filter-section", "id", "tags-section").R(
-		b.Div("class", "filter-header", "onclick", "app.toggleSection('tags-section')").R(
-			b.SpanClass("filter-title").T("Tags"),
-			b.SpanClass("filter-toggle").T("▼"),
-		),
-		b.DivClass("filter-content").R(
-			b.Div("id", "tags-list").R(
-				// Tags will be populated via JavaScript
-				b.DivClass("text-muted").T("Loading..."),
+				b.A("href", "#", "class", "filter-action-link",
+					"onclick", "event.stopPropagation(); app.showCategoryManager(); return false;",
+					"title", "Manage categories").T("Manage"),
 			),
 		),
 	)

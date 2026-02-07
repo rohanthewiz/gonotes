@@ -47,14 +47,8 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 						"name", "title", "placeholder", "Note title...", "required", "required"),
 				),
 
-				// Meta fields
+				// Meta fields (tags removed — replaced by category/subcategory system)
 				b.DivClass("edit-meta").R(
-					// Tags input
-					b.DivClass("edit-field").R(
-						b.LabelClass("edit-label", "for", "edit-tags").T("Tags"),
-						b.Input("type", "text", "class", "edit-input", "id", "edit-tags",
-							"name", "tags", "placeholder", "tag1, tag2, tag3"),
-					),
 					// Description input
 					b.DivClass("edit-field").R(
 						b.LabelClass("edit-label", "for", "edit-description").T("Description"),

@@ -323,6 +323,25 @@ func GetNoteCategories(ctx rweb.Context) error {
 	return writeSuccess(ctx, http.StatusOK, details)
 }
 
+// GetNoteCategoryMappings handles GET /api/v1/note-category-mappings
+// Returns all note-category relationships for the authenticated user in a single bulk
+// response. The client uses this to build a lookup map so category filtering in the
+// search bar works entirely client-side without per-note API calls.
+func GetNoteCategoryMappings(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
+	mappings, err := models.GetAllNoteCategoryMappings(userGUID)
+	if err != nil {
+		logger.LogErr(serr.Wrap(err, "failed to get note-category mappings"), "database error")
+		return writeError(ctx, http.StatusInternalServerError, "database error")
+	}
+
+	return writeSuccess(ctx, http.StatusOK, mappings)
+}
+
 // GetCategoryNotes handles GET /api/v1/categories/:id/notes
 // Retrieves all notes for a category.
 func GetCategoryNotes(ctx rweb.Context) error {

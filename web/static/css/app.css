@@ -45,6 +45,7 @@
 
   /* Layout */
   --toolbar-height: 52px;
+  --search-bar-height: 48px;
   --status-bar-height: 36px;
   --left-panel-width: 220px;
   --right-panel-width: 40%;
@@ -234,6 +235,116 @@ input, textarea, select {
   align-items: center;
   justify-content: center;
   font-weight: 600;
+}
+
+/* ============================================
+   Search Bar - Full-width between toolbar and content
+   ============================================ */
+.search-bar {
+  display: flex;
+  align-items: center;
+  height: var(--search-bar-height);
+  padding: 0 var(--spacing-lg);
+  gap: var(--spacing-md);
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.search-bar-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.search-bar-icon {
+  position: absolute;
+  left: var(--spacing-md);
+  color: var(--text-muted);
+  pointer-events: none;
+  font-size: var(--font-size-sm);
+}
+
+.search-bar-input {
+  width: 100%;
+  padding: var(--spacing-sm) var(--spacing-md);
+  padding-left: 36px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  font-size: var(--font-size-md);
+  transition: all var(--transition-fast);
+}
+
+.search-bar-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+/* Category dropdown in the search bar */
+.search-bar-select {
+  min-width: 180px;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.search-bar-select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+/* Subcategory chips container — shown when a category with subcats is selected */
+.search-bar-subcats {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  flex-wrap: wrap;
+}
+
+.search-bar-subcats:empty {
+  display: none;
+}
+
+/* Toggleable subcategory chip in the search bar */
+.subcat-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: var(--font-size-xs);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: all var(--transition-fast);
+}
+
+.subcat-chip:hover {
+  border-color: var(--primary-light);
+  color: var(--primary);
+}
+
+.subcat-chip.active {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: var(--primary);
+  color: var(--primary);
+  font-weight: 500;
+}
+
+/* Clear button in search bar */
+.search-bar-clear {
+  flex-shrink: 0;
 }
 
 /* ============================================
@@ -533,24 +644,6 @@ input, textarea, select {
   align-items: center;
   gap: var(--spacing-sm);
   flex-wrap: wrap;
-}
-
-.note-tags {
-  display: flex;
-  gap: var(--spacing-xs);
-  flex-wrap: wrap;
-}
-
-.note-tag {
-  font-size: var(--font-size-xs);
-  color: var(--primary);
-  background: rgba(59, 130, 246, 0.1);
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-}
-
-.note-tag:hover {
-  background: rgba(59, 130, 246, 0.2);
 }
 
 .note-categories {
@@ -1535,7 +1628,7 @@ input, textarea, select {
   .left-panel {
     position: fixed;
     left: 0;
-    top: var(--toolbar-height);
+    top: calc(var(--toolbar-height) + var(--search-bar-height));
     bottom: var(--status-bar-height);
     z-index: 50;
     transform: translateX(-100%);
@@ -1550,7 +1643,7 @@ input, textarea, select {
   .right-panel {
     position: fixed;
     right: 0;
-    top: var(--toolbar-height);
+    top: calc(var(--toolbar-height) + var(--search-bar-height));
     bottom: var(--status-bar-height);
     z-index: 50;
     width: 50%;
@@ -1572,7 +1665,25 @@ input, textarea, select {
 @media (max-width: 768px) {
   :root {
     --toolbar-height: 56px;
+    --search-bar-height: auto;
     --left-panel-width: 280px;
+  }
+
+  /* Stack search bar fields vertically on small screens */
+  .search-bar {
+    flex-wrap: wrap;
+    height: auto;
+    padding: var(--spacing-sm) var(--spacing-lg);
+    gap: var(--spacing-sm);
+  }
+
+  .search-bar-input-wrapper {
+    flex-basis: 100%;
+  }
+
+  .search-bar-select {
+    min-width: 0;
+    flex: 1;
   }
 
   .toolbar-left .view-indicator {

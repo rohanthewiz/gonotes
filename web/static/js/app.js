@@ -8,14 +8,15 @@
   const state = {
     notes: [],
     categories: [],
-    tags: [],
+    noteCategoryMap: {},  // { noteId: [{ categoryId, categoryName, subcategories }] }
     currentNote: null,
     selectedNotes: new Set(),
     isEditing: false,
     filters: {
       search: '',
-      categories: [],
-      tags: [],
+      categoryId: null,      // selected category ID from search bar dropdown
+      categoryName: '',       // selected category name (for display)
+      subcategories: [],      // selected subcategory chips (AND logic)
       privacy: 'all',
       date: 'all',
       unsynced: false
@@ -306,7 +307,6 @@
       const response = await apiRequest('/notes?limit=100');
       if (response && response.data) {
         state.notes = response.data;
-        extractTagsFromNotes();
         renderNoteList();
         updateResultCount();
         updateSyncStatus('synced', 'Synced');
@@ -321,28 +321,62 @@
       const response = await apiRequest('/categories');
       if (response && response.data) {
         state.categories = response.data;
-        renderCategoriesList();
         populateCategorySelect();
+        populateSearchCategoryDropdown();
       }
     } catch (error) {
       console.error('Failed to load categories:', error);
     }
   }
 
-  function extractTagsFromNotes() {
-    const tagCounts = {};
-    state.notes.forEach(note => {
-      if (note.tags) {
-        const tags = note.tags.split(',').map(t => t.trim()).filter(t => t);
-        tags.forEach(tag => {
-          tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+  // Fetch all note-category mappings in one bulk call and build a lookup map.
+  // The map is keyed by note ID so getFilteredNotes() can check category membership
+  // instantly without per-note API calls. Called once on init and after saves.
+  async function loadNoteCategoryMappings() {
+    try {
+      const response = await apiRequest('/note-category-mappings');
+      if (response && response.data) {
+        // Build lookup: { noteId: [{ categoryId, categoryName, subcategories }] }
+        const map = {};
+        response.data.forEach(m => {
+          if (!map[m.note_id]) {
+            map[m.note_id] = [];
+          }
+          map[m.note_id].push({
+            categoryId: m.category_id,
+            categoryName: m.category_name,
+            subcategories: m.selected_subcategories || []
+          });
         });
+        state.noteCategoryMap = map;
       }
+    } catch (error) {
+      console.error('Failed to load note-category mappings:', error);
+    }
+  }
+
+  // Populate the search bar's category dropdown from state.categories.
+  // Called after loadCategories() and after saves that may create new categories.
+  function populateSearchCategoryDropdown() {
+    const select = document.getElementById('search-category-select');
+    if (!select) return;
+
+    // Preserve current selection if it still exists
+    const currentValue = select.value;
+
+    // Clear and rebuild options — first option is always "All Categories"
+    select.innerHTML = '<option value="">All Categories</option>';
+    state.categories.forEach(cat => {
+      const option = document.createElement('option');
+      option.value = cat.id;
+      option.textContent = cat.name;
+      select.appendChild(option);
     });
-    state.tags = Object.entries(tagCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 20);
-    renderTagsList();
+
+    // Restore selection if the category still exists
+    if (currentValue) {
+      select.value = currentValue;
+    }
   }
 
   window.app.newNote = function() {
@@ -410,11 +444,12 @@
 
     // Build note data object
     // When msgpack is enabled, body goes to body_encoded field instead of body
+    // Tags field is still sent for backward compatibility but we no longer collect it from UI
     const noteData = {
       guid: formData.get('guid'),
       title: formData.get('title'),
       description: formData.get('description') || null,
-      tags: formData.get('tags') || null,
+      tags: null,
       is_private: document.getElementById('edit-private').checked
     };
 
@@ -537,7 +572,8 @@
 
         showToast('Note saved successfully', 'success');
         await loadNotes();
-        await loadCategories(); // Refresh categories to include any new ones
+        await loadCategories();
+        await loadNoteCategoryMappings();
 
         // Select the saved note
         state.currentNote = response.data;
@@ -660,14 +696,10 @@
     document.getElementById('preview-title').textContent = note.title;
     document.getElementById('preview-footer').style.display = 'flex';
 
-    // Render meta information
+    // Render meta information (tags removed — categories shown separately)
     const metaHtml = [];
     if (note.is_private) {
       metaHtml.push('<span class="preview-meta-item"><span>🔒</span> Private</span>');
-    }
-    if (note.tags) {
-      const tags = note.tags.split(',').map(t => `<span class="note-tag">#${t.trim()}</span>`).join(' ');
-      metaHtml.push(`<span class="preview-meta-item">${tags}</span>`);
     }
     metaHtml.push(`<span class="preview-meta-item">Modified: ${formatRelativeTime(note.updated_at)}</span>`);
     document.getElementById('preview-meta').innerHTML = metaHtml.join('');
@@ -799,24 +831,16 @@
     title.textContent = note.title;
     titleRow.appendChild(title);
 
-    // Meta row (tags and categories)
+    // Meta row — show categories from the lookup map instead of tags
     const meta = document.createElement('div');
     meta.className = 'note-meta';
 
-    if (note.tags) {
-      const tagsDiv = document.createElement('div');
-      tagsDiv.className = 'note-tags';
-      note.tags.split(',').forEach(tag => {
-        const tagSpan = document.createElement('span');
-        tagSpan.className = 'note-tag';
-        tagSpan.textContent = '#' + tag.trim();
-        tagSpan.onclick = (e) => {
-          e.stopPropagation();
-          window.app.filterByTag(tag.trim());
-        };
-        tagsDiv.appendChild(tagSpan);
-      });
-      meta.appendChild(tagsDiv);
+    const noteCats = state.noteCategoryMap[note.id];
+    if (noteCats && noteCats.length > 0) {
+      const catsSpan = document.createElement('span');
+      catsSpan.className = 'note-categories';
+      catsSpan.textContent = noteCats.map(c => c.categoryName).join(', ');
+      meta.appendChild(catsSpan);
     }
 
     // Preview
@@ -876,24 +900,50 @@
   function getFilteredNotes() {
     let notes = [...state.notes];
 
-    // Apply search filter
+    // Apply search filter — supports both text match and numeric ID match.
+    // If the search term is purely numeric, also match against note.id
+    // so users can jump directly to a note by its database ID.
     if (state.filters.search) {
-      const searchLower = state.filters.search.toLowerCase();
-      notes = notes.filter(note =>
-        note.title.toLowerCase().includes(searchLower) ||
-        (note.body && note.body.toLowerCase().includes(searchLower)) ||
-        (note.tags && note.tags.toLowerCase().includes(searchLower)) ||
-        (note.description && note.description.toLowerCase().includes(searchLower))
-      );
+      const searchTerm = state.filters.search.trim();
+      const searchLower = searchTerm.toLowerCase();
+      const isNumericSearch = /^\d+$/.test(searchTerm);
+
+      notes = notes.filter(note => {
+        // ID match: if the search term is a number, check note.id
+        if (isNumericSearch && note.id === parseInt(searchTerm, 10)) {
+          return true;
+        }
+        // Text match across title, description, and body
+        return note.title.toLowerCase().includes(searchLower) ||
+          (note.body && note.body.toLowerCase().includes(searchLower)) ||
+          (note.description && note.description.toLowerCase().includes(searchLower));
+      });
     }
 
-    // Apply tag filters (OR logic)
-    if (state.filters.tags.length > 0) {
+    // Apply category filter from search bar dropdown.
+    // Uses the pre-loaded noteCategoryMap for instant lookups.
+    if (state.filters.categoryId) {
+      const catId = state.filters.categoryId;
       notes = notes.filter(note => {
-        if (!note.tags) return false;
-        const noteTags = note.tags.split(',').map(t => t.trim().toLowerCase());
-        return state.filters.tags.some(tag => noteTags.includes(tag.toLowerCase()));
+        const mappings = state.noteCategoryMap[note.id];
+        if (!mappings) return false;
+        return mappings.some(m => m.categoryId === catId);
       });
+
+      // Apply subcategory filter — AND logic: note must have ALL selected subcats
+      if (state.filters.subcategories.length > 0) {
+        notes = notes.filter(note => {
+          const mappings = state.noteCategoryMap[note.id];
+          if (!mappings) return false;
+          // Find the mapping for the selected category
+          const catMapping = mappings.find(m => m.categoryId === catId);
+          if (!catMapping) return false;
+          // Check that every selected subcategory is present in the mapping
+          return state.filters.subcategories.every(
+            sub => catMapping.subcategories.includes(sub)
+          );
+        });
+      }
     }
 
     // Apply privacy filter
@@ -971,32 +1021,89 @@
     updateActiveFilters();
   };
 
-  window.app.filterByTag = function(tag) {
-    if (!state.filters.tags.includes(tag)) {
-      state.filters.tags.push(tag);
-      renderNoteList();
-      updateResultCount();
-      updateActiveFilters();
-      renderTagsList();
+  // handleCategoryFilter — called when the search bar category dropdown changes.
+  // Reads the selected category ID, looks up subcategories from state.categories,
+  // and renders toggleable subcategory chips if the category has any.
+  window.app.handleCategoryFilter = function(categoryIdStr) {
+    if (!categoryIdStr) {
+      // "All Categories" selected — clear category filter
+      state.filters.categoryId = null;
+      state.filters.categoryName = '';
+      state.filters.subcategories = [];
+      renderSubcategoryChips([]);
+    } else {
+      const categoryId = parseInt(categoryIdStr, 10);
+      const cat = state.categories.find(c => c.id === categoryId);
+      state.filters.categoryId = categoryId;
+      state.filters.categoryName = cat ? cat.name : '';
+      state.filters.subcategories = [];
+      // Render subcategory chips from the category definition
+      const subcats = (cat && cat.subcategories) ? cat.subcategories : [];
+      renderSubcategoryChips(subcats);
     }
-  };
 
-  window.app.removeTagFilter = function(tag) {
-    state.filters.tags = state.filters.tags.filter(t => t !== tag);
     renderNoteList();
     updateResultCount();
     updateActiveFilters();
-    renderTagsList();
   };
 
-  window.app.toggleTagFilter = function(tag, checked) {
-    if (checked) {
-      if (!state.filters.tags.includes(tag)) {
-        state.filters.tags.push(tag);
-      }
+  // Render toggleable subcategory chips in the search bar.
+  // Each chip toggles on/off to narrow results within the selected category.
+  function renderSubcategoryChips(subcategories) {
+    const container = document.getElementById('search-subcats-container');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    subcategories.forEach(sub => {
+      const chip = document.createElement('span');
+      chip.className = 'subcat-chip';
+      chip.textContent = sub;
+      chip.onclick = () => window.app.toggleSubcategoryFilter(sub);
+      container.appendChild(chip);
+    });
+  }
+
+  // Toggle a subcategory chip on/off in the search bar filter
+  window.app.toggleSubcategoryFilter = function(subcat) {
+    const idx = state.filters.subcategories.indexOf(subcat);
+    if (idx >= 0) {
+      state.filters.subcategories.splice(idx, 1);
     } else {
-      state.filters.tags = state.filters.tags.filter(t => t !== tag);
+      state.filters.subcategories.push(subcat);
     }
+
+    // Update chip active state in the DOM
+    const container = document.getElementById('search-subcats-container');
+    if (container) {
+      container.querySelectorAll('.subcat-chip').forEach(chip => {
+        if (chip.textContent === subcat) {
+          chip.classList.toggle('active');
+        }
+      });
+    }
+
+    renderNoteList();
+    updateResultCount();
+    updateActiveFilters();
+  };
+
+  // clearSearchBar — resets all search bar state: text input, category dropdown, subcats
+  window.app.clearSearchBar = function() {
+    // Reset text search
+    document.getElementById('search-input').value = '';
+    state.filters.search = '';
+
+    // Reset category dropdown
+    const select = document.getElementById('search-category-select');
+    if (select) select.value = '';
+    state.filters.categoryId = null;
+    state.filters.categoryName = '';
+    state.filters.subcategories = [];
+
+    // Clear subcategory chips
+    renderSubcategoryChips([]);
+
     renderNoteList();
     updateResultCount();
     updateActiveFilters();
@@ -1026,24 +1133,29 @@
   window.app.clearAllFilters = function() {
     state.filters = {
       search: '',
-      categories: [],
-      tags: [],
+      categoryId: null,
+      categoryName: '',
+      subcategories: [],
       privacy: 'all',
       date: 'all',
       unsynced: false
     };
 
-    // Reset UI
+    // Reset search bar UI
     document.getElementById('search-input').value = '';
+    const select = document.getElementById('search-category-select');
+    if (select) select.value = '';
+    renderSubcategoryChips([]);
+
+    // Reset filter panel UI
     document.querySelectorAll('input[name="privacy"]')[0].checked = true;
     document.querySelectorAll('input[name="date"]')[0].checked = true;
-    document.getElementById('filter-unsynced').checked = false;
+    const unsyncedEl = document.getElementById('filter-unsynced');
+    if (unsyncedEl) unsyncedEl.checked = false;
 
     renderNoteList();
     updateResultCount();
     updateActiveFilters();
-    renderTagsList();
-    renderCategoriesList();
   };
 
   // ============================================
@@ -1127,45 +1239,6 @@
   // ============================================
   // UI Helpers
   // ============================================
-
-  function renderCategoriesList() {
-    const container = document.getElementById('categories-list');
-    if (!container) return;
-
-    if (state.categories.length === 0) {
-      container.innerHTML = '<div class="text-muted">No categories</div>';
-      return;
-    }
-
-    container.innerHTML = state.categories.map(cat => `
-      <label class="filter-item">
-        <input type="checkbox" class="filter-checkbox"
-               ${state.filters.categories.includes(cat.name) ? 'checked' : ''}
-               onchange="app.toggleCategoryFilter('${cat.name}', this.checked)">
-        <span class="filter-label">${cat.name}</span>
-      </label>
-    `).join('');
-  }
-
-  function renderTagsList() {
-    const container = document.getElementById('tags-list');
-    if (!container) return;
-
-    if (state.tags.length === 0) {
-      container.innerHTML = '<div class="text-muted">No tags</div>';
-      return;
-    }
-
-    container.innerHTML = state.tags.map(([tag, count]) => `
-      <label class="filter-item">
-        <input type="checkbox" class="filter-checkbox"
-               ${state.filters.tags.includes(tag) ? 'checked' : ''}
-               onchange="app.toggleTagFilter('${tag}', this.checked)">
-        <span class="filter-label">${tag}</span>
-        <span class="filter-count">${count}</span>
-      </label>
-    `).join('');
-  }
 
   function populateCategorySelect() {
     // Populate datalist for category autocomplete
@@ -1454,7 +1527,6 @@
     document.getElementById('edit-guid').value = note.guid;
     document.getElementById('edit-title').value = note.title;
     document.getElementById('edit-description').value = note.description || '';
-    document.getElementById('edit-tags').value = note.tags || '';
     document.getElementById('edit-body').value = note.body || '';
     document.getElementById('edit-private').checked = note.is_private;
 
@@ -1467,7 +1539,6 @@
     document.getElementById('edit-guid').value = '';
     document.getElementById('edit-title').value = '';
     document.getElementById('edit-description').value = '';
-    document.getElementById('edit-tags').value = '';
     document.getElementById('edit-body').value = '';
     document.getElementById('edit-private').checked = false;
 
@@ -1523,9 +1594,13 @@
     if (state.filters.search) {
       badges.push(`<span class="filter-badge">Search: "${state.filters.search}"</span>`);
     }
-    state.filters.tags.forEach(tag => {
-      badges.push(`<span class="filter-badge">#${tag} <button onclick="app.removeTagFilter('${tag}')" style="background:none;border:none;cursor:pointer;">×</button></span>`);
-    });
+    if (state.filters.categoryName) {
+      let catBadge = state.filters.categoryName;
+      if (state.filters.subcategories.length > 0) {
+        catBadge += ' > ' + state.filters.subcategories.join(', ');
+      }
+      badges.push(`<span class="filter-badge">${escapeHtml(catBadge)}</span>`);
+    }
     if (state.filters.privacy !== 'all') {
       badges.push(`<span class="filter-badge">${state.filters.privacy}</span>`);
     }
@@ -1555,6 +1630,7 @@
   window.app.syncNotes = async function() {
     await loadNotes();
     await loadCategories();
+    await loadNoteCategoryMappings();
   };
 
   // ============================================
@@ -1720,13 +1796,8 @@
   }
 
   window.app.addSubcategory = function(categoryId) {
-    console.log('addSubcategory called with categoryId:', categoryId);
-
     const input = document.getElementById(`new-subcat-${categoryId}`);
-    console.log('input element:', input);
-
     const value = input ? input.value.trim() : '';
-    console.log('Adding subcategory:', value, 'to category:', categoryId);
 
     if (!value) return;
 
@@ -1736,16 +1807,12 @@
     }
 
     editingSubcategories.push(value);
-    console.log('editingSubcategories now:', editingSubcategories);
     input.value = '';
 
     // Re-render tags
     const tagsContainer = document.getElementById(`subcategory-tags-${categoryId}`);
-    console.log('tagsContainer element:', tagsContainer);
-    const renderedHtml = renderSubcategoryTags(categoryId);
-    console.log('rendered HTML:', renderedHtml);
     if (tagsContainer) {
-      tagsContainer.innerHTML = renderedHtml;
+      tagsContainer.innerHTML = renderSubcategoryTags(categoryId);
     }
   };
 
@@ -1770,21 +1837,16 @@
       return;
     }
 
-    // Debug: Log what we're sending
-    console.log('Saving category:', categoryId, 'name:', name, 'subcategories:', editingSubcategories);
-
     try {
       const payload = {
         name: name,
         subcategories: editingSubcategories
       };
-      console.log('Request payload:', JSON.stringify(payload));
 
       const response = await apiRequest(`/categories/${categoryId}`, {
         method: 'PUT',
         body: JSON.stringify(payload)
       });
-      console.log('Response:', response);
 
       if (response && response.data) {
         showToast('Category updated', 'success');
@@ -1956,9 +2018,13 @@
     const isAuthenticated = await checkAuth();
     if (!isAuthenticated) return;
 
+    // Load notes, categories, and category mappings.
+    // Notes and categories load in parallel; mappings depend on auth but
+    // can run concurrently with the other two since it's a separate endpoint.
     await Promise.all([
       loadNotes(),
-      loadCategories()
+      loadCategories(),
+      loadNoteCategoryMappings()
     ]);
   }
 

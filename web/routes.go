@@ -73,6 +73,7 @@ func setupRoutes(s *rweb.Server) {
 	s.Put("/api/v1/notes/:id/categories/:category_id", api.UpdateNoteCategory)         // Update subcategories for a note-category relationship
 	s.Get("/api/v1/notes/:id/categories", api.GetNoteCategories)                      // Get all categories for a note
 	s.Get("/api/v1/categories/:id/notes", api.GetCategoryNotes)                       // Get all notes for a category
+	s.Get("/api/v1/note-category-mappings", api.GetNoteCategoryMappings)              // Bulk: all note-category mappings for search bar
 
 	// =========================================
 	// Sync endpoints

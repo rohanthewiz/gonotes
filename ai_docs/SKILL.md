@@ -134,7 +134,7 @@ All note endpoints are user-scoped. Users can only access their own notes.
   "title": "string",          // Required
   "description": "string",    // Optional
   "body": "string",           // Optional, main content
-  "tags": "string",           // Optional, comma-separated
+  "tags": "string",           // Deprecated — kept for backward compat, no longer used by UI
   "is_private": false         // Optional, enables encryption if true
 }
 ```
@@ -147,7 +147,7 @@ All note endpoints are user-scoped. Users can only access their own notes.
   "title": "string",
   "description": "string",
   "body": "string",
-  "tags": "string",
+  "tags": "string",           // Deprecated — use categories/subcategories instead
   "is_private": false,
   "encryption_iv": "string",  // Present if encrypted
   "created_by": "user-guid",
@@ -489,6 +489,29 @@ GET /api/v1/categories/:id/notes
 }
 ```
 
+#### Bulk Note-Category Mappings
+```
+GET /api/v1/note-category-mappings
+```
+Returns **all** note-category relationships for the authenticated user in one call.
+The UI caches this as a lookup map keyed by note ID so the search-bar category
+filter can operate instantly without per-note API calls.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "note_id": 1,
+      "category_id": 5,
+      "category_name": "Kubernetes",
+      "selected_subcategories": ["pod", "deployment"]
+    }
+  ]
+}
+```
+
 ### Filtering Notes by Category and Subcategories
 
 The List Notes endpoint supports filtering by category:
@@ -557,7 +580,7 @@ GET /api/v1/sync/changes
 - `0x80` (128): Title changed
 - `0x40` (64): Description changed
 - `0x20` (32): Body changed
-- `0x10` (16): Tags changed
+- `0x10` (16): Tags changed (deprecated — tags no longer used by UI)
 - `0x08` (8): IsPrivate changed
 - `0x04` (4): Categories changed
 
@@ -626,15 +649,46 @@ All error responses follow this format:
 3. Include token in all API requests via Authorization header
 4. Refresh token before expiration (7 days)
 
+### Page Layout
+
+```
+Toolbar  (new note, title, note count)
+SearchBar  (full-width: text/ID input, category dropdown, subcategory chips, clear)
+┌──────────────┬────────────────┬──────────────────┐
+│ FilterPanel  │   NoteList     │  PreviewPanel    │
+│ (categories  │   (scrollable) │  (preview/edit)  │
+│  manage link,│                │                  │
+│  privacy,    │                │                  │
+│  date, sync) │                │                  │
+└──────────────┴────────────────┴──────────────────┘
+StatusBar
+```
+
+### Search Bar
+
+The search bar sits between the toolbar and the three-pane content area. It supports
+three combinable (AND logic) search dimensions:
+
+1. **Text/ID search** — free-text input matches title, description, body; purely numeric input also matches note database ID
+2. **Category dropdown** — filters notes to those assigned to the selected category (client-side via cached `noteCategoryMap`)
+3. **Subcategory chips** — appear when the selected category has subcategories; toggling chips further narrows results (AND logic)
+
+The category mapping is fetched once via `GET /api/v1/note-category-mappings` and cached
+client-side. All filtering happens in the browser for instant response.
+
 ### Implemented UI Features
 1. **Login/Register Forms** — Username, password, optional email
-2. **Note List View** — Paginated list with search/filter by tags and categories
-3. **Note Editor** — Title, body (markdown), tags, description, privacy toggle, multi-category with subcategory checkboxes
-4. **Note Preview** — Right panel shows rendered markdown, tags, and category/subcategory rows (bold category name + subcategory chips)
-5. **Category Management** — Create/edit/delete categories and subcategories from the filter panel or inline during note editing
-6. **Category Filtering** — Filter notes by category in the left panel; List Notes API supports `cat` and `subcats[]` query params
+2. **Note List View** — Paginated list with category labels per note
+3. **Note Editor** — Title, body (markdown), description, privacy toggle, multi-category with subcategory checkboxes
+4. **Note Preview** — Right panel shows rendered markdown and category/subcategory rows (bold category name + subcategory chips)
+5. **Category Management** — Create/edit/delete categories and subcategories via modal or inline during note editing
+6. **Search & Filtering** — Full-width search bar (text/ID + category + subcategory); left panel filters for privacy, date range, sync status
 7. **Sync Status** — Show last sync time, manual sync button
 8. **Offline Support** — Queue changes when offline, sync when online
+
+> **Note:** Tags have been removed from the UI. The `tags` column remains in the DB
+> schema for backward compatibility but is no longer written to or displayed. The
+> category/subcategory system fully replaces tags.
 
 ### Private Notes
 - When `is_private: true`, note body is encrypted on disk
