@@ -95,6 +95,8 @@ func (p Page) renderBody(b *element.Builder) any {
 		),
 
 		// Application JavaScript (cache-bust version for development)
-		b.Script("src", "/static/js/app.js?v=3").R(),
+		// app.js must load first — it exposes _internal for cats_subcats.js
+		b.Script("src", "/static/js/app.js?v=4").R(),
+		b.Script("src", "/static/js/cats_subcats.js?v=1").R(),
 	)
 }
