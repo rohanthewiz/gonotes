@@ -244,16 +244,32 @@ DELETE /api/v1/notes/:id
 
 ## Categories API
 
-Categories help organize notes. Notes can belong to multiple categories.
+Categories organize notes into logical groups. Each category can define a set of subcategories.
+A note can belong to **multiple categories**, and for each assigned category the user selects
+which subcategories apply to that specific note. This creates a flexible two-level taxonomy:
 
-### Category Data Model
+```
+Category "Kubernetes"
+  └─ subcategories: pod, deployment, service, ingress
+
+Note "K8s Networking" assigned to Kubernetes
+  └─ selected_subcategories: service, ingress   (subset chosen per-note)
+```
+
+### Data Model
+
+There are three levels of category data:
+
+1. **CategoryInput / CategoryOutput** — the category definition (name, description, full list of available subcategories)
+2. **note_categories junction table** — links a note to a category and stores which subcategories the user selected for that note
+3. **NoteCategoryDetailOutput** — enriched response that combines category definition with the per-note subcategory selections
 
 **CategoryInput (Request):**
 ```json
 {
   "name": "string",           // Required
   "description": "string",    // Optional
-  "subcategories": ["string"] // Optional, array of subcategory names
+  "subcategories": ["string"] // Optional, the full set of available subcategory names
 }
 ```
 
@@ -263,19 +279,32 @@ Categories help organize notes. Notes can belong to multiple categories.
   "id": 1,
   "name": "string",
   "description": "string",
-  "subcategories": ["string"],
+  "subcategories": ["string"],  // All available subcategories for this category
   "created_at": "RFC3339 timestamp",
   "updated_at": "RFC3339 timestamp"
 }
 ```
 
-### Category Endpoints
+**NoteCategoryDetailOutput (Response from GET /notes/:id/categories):**
+```json
+{
+  "id": 1,
+  "name": "Kubernetes",
+  "description": "Container orchestration",
+  "subcategories": ["pod", "deployment", "service", "ingress"],  // All available
+  "selected_subcategories": ["pod", "deployment"],                // Chosen for this note
+  "created_at": "RFC3339 timestamp",
+  "updated_at": "RFC3339 timestamp"
+}
+```
+
+### Category CRUD Endpoints
 
 #### Create Category
 ```
 POST /api/v1/categories
 ```
-**Request Body:** CategoryInput
+**Request Body:** CategoryInput (name required)
 **Response (201 Created):**
 ```json
 {
@@ -289,7 +318,7 @@ POST /api/v1/categories
 GET /api/v1/categories
 ```
 **Query Parameters:**
-- `limit` (int): Maximum number of results
+- `limit` (int): Maximum number of results (0 = no limit)
 - `offset` (int): Number of results to skip
 
 **Response (200 OK):**
@@ -316,7 +345,12 @@ GET /api/v1/categories/:id
 ```
 PUT /api/v1/categories/:id
 ```
-**Request Body:** CategoryInput
+**Request Body:** CategoryInput (name required)
+
+Use this to rename a category, update its description, or modify its subcategory list.
+Adding new subcategory names to the array makes them available for selection;
+removing names does **not** automatically unlink them from existing notes.
+
 **Response (200 OK):**
 ```json
 {
@@ -344,7 +378,8 @@ DELETE /api/v1/categories/:id
 
 ## Note-Category Relationships
 
-Notes can be assigned to categories with optional subcategories per relationship.
+Notes can be assigned to categories. Each note-category link can carry a subset of
+the category's subcategories indicating which apply to that particular note.
 
 ### Relationship Endpoints
 
@@ -358,6 +393,8 @@ POST /api/v1/notes/:id/categories/:category_id
   "subcategories": ["pod", "deployment"]
 }
 ```
+If no body is provided, the category is added without any subcategories selected.
+
 **Response (201 Created):**
 ```json
 {
@@ -365,7 +402,35 @@ POST /api/v1/notes/:id/categories/:category_id
   "data": {
     "note_id": 1,
     "category_id": 2,
-    "subcategories": ["pod", "deployment"]
+    "subcategories": ["pod", "deployment"],
+    "added": true
+  }
+}
+```
+
+#### Update Subcategories for a Note-Category Link
+```
+PUT /api/v1/notes/:id/categories/:category_id
+```
+Changes which subcategories are selected for an existing note-category relationship
+without removing and re-adding.
+
+**Request Body:**
+```json
+{
+  "subcategories": ["pod", "service"]
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "note_id": 1,
+    "category_id": 2,
+    "subcategories": ["pod", "service"],
+    "updated": true
   }
 }
 ```
@@ -379,23 +444,34 @@ DELETE /api/v1/notes/:id/categories/:category_id
 {
   "success": true,
   "data": {
+    "note_id": 1,
+    "category_id": 2,
     "removed": true
   }
 }
 ```
 
-#### Get Categories for a Note
+#### Get Categories for a Note (with subcategory details)
 ```
 GET /api/v1/notes/:id/categories
 ```
+Returns **NoteCategoryDetailOutput** objects — each includes the full list of
+available subcategories *and* which ones are selected for this note. This is the
+endpoint the UI uses to render preview and edit views.
+
 **Response (200 OK):**
 ```json
 {
   "success": true,
   "data": [
     {
-      "category": { CategoryOutput },
-      "subcategories": ["pod", "deployment"]
+      "id": 5,
+      "name": "Kubernetes",
+      "description": "Container orchestration",
+      "subcategories": ["pod", "deployment", "service", "ingress"],
+      "selected_subcategories": ["pod", "deployment"],
+      "created_at": "RFC3339 timestamp",
+      "updated_at": "RFC3339 timestamp"
     }
   ]
 }
@@ -412,6 +488,18 @@ GET /api/v1/categories/:id/notes
   "data": [ NoteOutput, ... ]
 }
 ```
+
+### Filtering Notes by Category and Subcategories
+
+The List Notes endpoint supports filtering by category:
+
+```
+GET /api/v1/notes?cat=Kubernetes
+GET /api/v1/notes?cat=Kubernetes&subcats[]=pod&subcats[]=deployment
+```
+
+When `subcats[]` is provided alongside `cat`, only notes that have **all** the
+specified subcategories selected are returned.
 
 ---
 
@@ -538,13 +626,15 @@ All error responses follow this format:
 3. Include token in all API requests via Authorization header
 4. Refresh token before expiration (7 days)
 
-### Recommended UI Features
-1. **Login/Register Forms** - Username, password, optional email
-2. **Note List View** - Paginated list with search/filter
-3. **Note Editor** - Title, body (markdown?), tags, privacy toggle
-4. **Category Management** - Create, assign to notes, filter by
-5. **Sync Status** - Show last sync time, manual sync button
-6. **Offline Support** - Queue changes when offline, sync when online
+### Implemented UI Features
+1. **Login/Register Forms** — Username, password, optional email
+2. **Note List View** — Paginated list with search/filter by tags and categories
+3. **Note Editor** — Title, body (markdown), tags, description, privacy toggle, multi-category with subcategory checkboxes
+4. **Note Preview** — Right panel shows rendered markdown, tags, and category/subcategory rows (bold category name + subcategory chips)
+5. **Category Management** — Create/edit/delete categories and subcategories from the filter panel or inline during note editing
+6. **Category Filtering** — Filter notes by category in the left panel; List Notes API supports `cat` and `subcats[]` query params
+7. **Sync Status** — Show last sync time, manual sync button
+8. **Offline Support** — Queue changes when offline, sync when online
 
 ### Private Notes
 - When `is_private: true`, note body is encrypted on disk
