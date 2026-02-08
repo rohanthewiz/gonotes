@@ -418,6 +418,7 @@
         await loadNotes();
         await window.app._loadCategories();
         await window.app._loadNoteCategoryMappings();
+        renderNoteList();
 
         // Select the saved note
         state.currentNote = response.data;
@@ -1085,6 +1086,7 @@
     await loadNotes();
     await window.app._loadCategories();
     await window.app._loadNoteCategoryMappings();
+    renderNoteList();
   };
 
   // ============================================
@@ -1244,6 +1246,8 @@
       window.app._loadCategories(),
       window.app._loadNoteCategoryMappings()
     ]);
+    // Re-render after mappings are loaded so categories show in the list
+    renderNoteList();
   }
 
   // Start the app when DOM is ready
