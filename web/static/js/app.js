@@ -641,6 +641,7 @@
 
     // Inline categories — shown right after title
     const noteCats = state.noteCategoryMap[note.id];
+    console.log('DEBUG note.id=', note.id, typeof note.id, 'mapKeys=', Object.keys(state.noteCategoryMap), 'noteCats=', noteCats);
     if (noteCats && noteCats.length > 0) {
       const catsSpan = document.createElement('span');
       catsSpan.className = 'note-categories-inline';
