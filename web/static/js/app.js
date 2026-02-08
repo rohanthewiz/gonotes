@@ -623,7 +623,7 @@
     const content = document.createElement('div');
     content.className = 'note-content';
 
-    // Title row
+    // Title row — compact: title, categories, timestamp, and actions all on one line
     const titleRow = document.createElement('div');
     titleRow.className = 'note-title-row';
     if (note.is_private) {
@@ -638,26 +638,18 @@
     title.textContent = note.title;
     titleRow.appendChild(title);
 
-    // Meta row — show categories from the lookup map instead of tags
-    const meta = document.createElement('div');
-    meta.className = 'note-meta';
-
+    // Inline categories — shown right after title
     const noteCats = state.noteCategoryMap[note.id];
     if (noteCats && noteCats.length > 0) {
       const catsSpan = document.createElement('span');
-      catsSpan.className = 'note-categories';
+      catsSpan.className = 'note-categories-inline';
       catsSpan.textContent = noteCats.map(c => c.categoryName).join(', ');
-      meta.appendChild(catsSpan);
+      titleRow.appendChild(catsSpan);
     }
 
-    // Preview
-    const preview = document.createElement('div');
-    preview.className = 'note-preview';
-    preview.textContent = (note.body || '').substring(0, 100) + ((note.body?.length || 0) > 100 ? '...' : '');
-
-    // Footer
-    const footer = document.createElement('div');
-    footer.className = 'note-footer';
+    // Right-side group: timestamp + action buttons
+    const titleRight = document.createElement('div');
+    titleRight.className = 'note-title-right';
 
     const timestamp = document.createElement('span');
     timestamp.className = 'note-timestamp';
@@ -686,13 +678,17 @@
 
     actions.appendChild(viewBtn);
     actions.appendChild(editBtn);
-    footer.appendChild(timestamp);
-    footer.appendChild(actions);
+    titleRight.appendChild(timestamp);
+    titleRight.appendChild(actions);
+    titleRow.appendChild(titleRight);
+
+    // Preview
+    const preview = document.createElement('div');
+    preview.className = 'note-preview';
+    preview.textContent = (note.body || '').substring(0, 100) + ((note.body?.length || 0) > 100 ? '...' : '');
 
     content.appendChild(titleRow);
-    content.appendChild(meta);
     content.appendChild(preview);
-    content.appendChild(footer);
 
     row.appendChild(checkbox);
     row.appendChild(content);
