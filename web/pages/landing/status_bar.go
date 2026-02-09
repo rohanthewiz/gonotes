@@ -8,12 +8,16 @@ type StatusBar struct{}
 // Render implements the element.Component interface
 func (s StatusBar) Render(b *element.Builder) any {
 	b.FooterClass("status-bar").R(
-		// Left section - Sync status
+		// Left section - Sync status with stats
 		b.DivClass("status-left").R(
 			b.Div("class", "sync-status synced", "id", "sync-status").R(
 				b.Span("id", "sync-status-icon").T("✓"),
 				b.Span("id", "sync-status-text").T("Ready"),
 			),
+			b.Span("class", "sync-stat", "id", "sync-stat-pulled", "title", "Notes received").T(""),
+			b.Span("class", "sync-stat", "id", "sync-stat-pushed", "title", "Notes pushed").T(""),
+			b.Span("class", "sync-stat sync-conflicts", "id", "sync-stat-conflicts",
+				"onclick", "app.showConflicts()", "title", "Unresolved conflicts").T(""),
 		),
 
 		// Center section - Active filters

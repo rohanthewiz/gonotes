@@ -25,8 +25,7 @@
       field: 'updated_at',
       order: 'desc'
     },
-    user: null,
-    lastSync: null
+    user: null
   };
 
   // API configuration
@@ -1082,13 +1081,6 @@
     if (textEl) textEl.textContent = text;
   }
 
-  window.app.syncNotes = async function() {
-    await loadNotes();
-    await window.app._loadCategories();
-    await window.app._loadNoteCategoryMappings();
-    renderNoteList();
-  };
-
   // ============================================
   // Modal Dialogs
   // ============================================
@@ -1225,7 +1217,11 @@
     escapeHtml,
     renderNoteList,
     updateResultCount,
-    updateActiveFilters
+    updateActiveFilters,
+    updateSyncStatus,
+    loadNotes,
+    generateGUID,
+    formatRelativeTime
   };
 
   async function init() {
@@ -1234,6 +1230,9 @@
 
     // Initialize category input handlers (defined in cats_subcats.js)
     window.app._initCategoryHandlers();
+
+    // Initialize sync module (defined in sync.js)
+    window.app._initSyncHandlers();
 
     const isAuthenticated = await checkAuth();
     if (!isAuthenticated) return;
