@@ -6,15 +6,17 @@
 3. [Design Principles](#design-principles)
 4. [Architecture Overview](#architecture-overview)
 5. [Category & Subcategory Sync Design](#category--subcategory-sync-design)
-6. [Change Tracking Enhancements](#change-tracking-enhancements)
-7. [Sync Protocol](#sync-protocol)
-8. [Conflict Resolution](#conflict-resolution)
-9. [Active vs Passive Synching](#active-vs-passive-synching)
-10. [API Endpoints](#api-endpoints)
-11. [Data Models & Schema Changes](#data-models--schema-changes)
-12. [Implementation Phases](#implementation-phases)
-13. [Security Considerations](#security-considerations)
-14. [Edge Cases & Failure Modes](#edge-cases--failure-modes)
+6. [`authored_at` Semantics](#authored_at-semantics)
+7. [Body Diff Storage](#body-diff-storage)
+8. [Change Tracking Enhancements](#change-tracking-enhancements)
+9. [Sync Protocol](#sync-protocol)
+10. [Conflict Resolution](#conflict-resolution)
+11. [Active vs Passive Synching](#active-vs-passive-synching)
+12. [API Endpoints](#api-endpoints)
+13. [Data Models & Schema Changes](#data-models--schema-changes)
+14. [Implementation Phases](#implementation-phases)
+15. [Security Considerations](#security-considerations)
+16. [Edge Cases & Failure Modes](#edge-cases--failure-modes)
 
 ---
 
@@ -28,7 +30,15 @@ API (`GET /api/v1/sync/changes`). However, categories, subcategories, and
 note-category mappings are not yet tracked in the change log. This plan extends the
 existing event-sourced change tracking to cover the full data model, introduces a
 **hub-and-spoke sync topology** with one designated server, and defines both active
-(push/pull polling) and passive (startup reconciliation) sync modes.
+(pull/push polling) and passive (startup reconciliation) sync modes.
+
+**Key design decisions:**
+- **Pull-first sync** (rebase model): Spokes pull remote changes and resolve conflicts
+  locally before pushing, analogous to `git pull --rebase` then `git push`.
+- **`authored_at` preservation**: `authored_at` tracks the original human authoring
+  time and is *never* updated during sync operations -- only on local create/update.
+- **Body diffs**: Note body changes are stored as unified diffs (not full snapshots)
+  to massively reduce change log storage for large notes with small edits.
 
 ---
 
@@ -93,10 +103,21 @@ existing event-sourced change tracking to cover the full data model, introduces 
    logged for manual recovery.
 
 6. **Delta efficiency.** Only transmit what changed. The existing bitmask+fragment
-   pattern for notes extends naturally to categories.
+   pattern for notes extends naturally to categories. Note body changes use true
+   diffs (unified diff format) rather than full snapshots.
 
 7. **Idempotent application.** Applying the same change twice must produce the same
    result. This simplifies retry logic and eliminates concerns about duplicate delivery.
+
+8. **`authored_at` integrity.** The `authored_at` timestamp represents when the user
+   actually authored or edited a note on the originating machine. It is set on create,
+   updated on local edit, and **preserved as-is** during sync. Sync operations must
+   never overwrite `authored_at` with the receiving machine's current time.
+
+9. **Pull-first sync (rebase model).** Spokes always pull remote changes first, apply
+   them locally, resolve any conflicts on the spoke side, and then push local changes.
+   This keeps the hub simple (it only accepts non-conflicting pushes) and mirrors the
+   `git pull --rebase && git push` workflow that developers are familiar with.
 
 ---
 
@@ -116,18 +137,28 @@ existing event-sourced change tracking to cover the full data model, introduces 
                          └─────────────┘
 ```
 
-### Sync Flow
+### Sync Flow (Pull-First / Rebase Model)
 
-A spoke syncs with the hub in two phases per cycle:
+A spoke syncs with the hub in two phases per cycle, **pulling before pushing**
+(analogous to `git pull --rebase` before `git push`):
 
-1. **Push**: Spoke sends its local unsynced changes to the hub.
-   Hub validates and applies them, then ACKs.
-2. **Pull**: Spoke requests changes from the hub since its last sync point.
-   Hub returns changes (including those received from other spokes).
-   Spoke applies them locally.
+1. **Pull**: Spoke requests changes from the hub since its last sync point.
+   Hub returns changes from other spokes. Spoke applies them locally.
+   If any pulled changes conflict with pending local changes, the spoke resolves
+   conflicts locally (using LWW on `authored_at`) before proceeding.
+2. **Push**: Spoke sends its local unsynced changes to the hub.
+   Since conflicts were already resolved during pull, the hub can apply these
+   changes without conflict resolution logic. Hub validates and ACKs.
 
-This two-phase push-then-pull ensures that a spoke's own changes are on the hub
-before it pulls, preventing the spoke from receiving its own changes back as conflicts.
+**Why pull-first?**
+- **Conflicts are resolved locally.** The spoke has full context of both its own
+  pending changes and the incoming remote changes, making resolution straightforward.
+- **Hub stays simple.** The hub is a dumb relay -- it applies pre-resolved changes
+  without needing its own conflict resolution logic.
+- **Familiar mental model.** Works like `git pull --rebase && git push`: get up to
+  date, layer your changes on top, then push cleanly.
+- **No self-conflict.** After pulling and resolving, the spoke's push contains
+  changes that are guaranteed not to conflict with the hub's current state.
 
 ### Entity Sync Scope
 
@@ -247,6 +278,189 @@ When applying this on the receiving end, the receiver:
 
 ---
 
+## `authored_at` Semantics
+
+The `authored_at` timestamp is the cornerstone of conflict resolution. It must
+accurately reflect when the user actually wrote or edited a note on the originating
+machine.
+
+### Rules
+
+| Operation | `authored_at` Behavior |
+|-----------|----------------------|
+| **CreateNote** (local) | Set to `CURRENT_TIMESTAMP` (same as `created_at`). The user is authoring this note now. |
+| **UpdateNote** (local) | Set to `CURRENT_TIMESTAMP`. The user is editing this note now. |
+| **DeleteNote** (local) | Not updated. `deleted_at` is set instead. |
+| **Sync Create** (received from hub) | Set to the **source machine's `authored_at`** value from the change envelope. Never use the local `CURRENT_TIMESTAMP`. |
+| **Sync Update** (received from hub) | Set to the **source machine's `authored_at`** value from the change envelope. Never use the local `CURRENT_TIMESTAMP`. |
+| **Sync Delete** (received from hub) | Not relevant (soft delete via `deleted_at`). |
+
+### Implementation
+
+The existing `CreateNote` and `UpdateNote` functions already set
+`authored_at = CURRENT_TIMESTAMP` on local operations. For sync operations, a
+separate code path (`applySyncNoteCreate`, `applySyncNoteUpdate`) must accept
+`authored_at` as an explicit parameter and write it directly:
+
+```go
+// applySyncNoteUpdate applies a note update received from the hub.
+// Critically, authored_at is preserved from the source machine --
+// it is NOT set to CURRENT_TIMESTAMP.
+func applySyncNoteUpdate(noteGUID string, fragment NoteFragment, authoredAt time.Time) error {
+    // ... build SET clause from fragment bitmask ...
+    // SET authored_at = ? (the source's authored_at, NOT CURRENT_TIMESTAMP)
+    // SET synced_at = CURRENT_TIMESTAMP (marks when we received this sync)
+}
+```
+
+### Why This Matters
+
+Without this rule, conflict resolution breaks. Consider:
+
+1. User edits note on Laptop at 10:00 AM (`authored_at = 10:00`).
+2. User edits same note on Desktop at 10:05 AM (`authored_at = 10:05`).
+3. Laptop syncs: pulls Desktop's change. If the sync overwrites `authored_at` with
+   `CURRENT_TIMESTAMP` (say 10:10), the Laptop's record now says the note was
+   authored at 10:10 -- which is wrong. The Desktop's edit was at 10:05.
+4. If Desktop then syncs, LWW would compare 10:10 vs 10:05 and incorrectly
+   think the Laptop's version is newer.
+
+By preserving `authored_at` from the source, LWW correctly resolves that the
+Desktop's 10:05 edit wins over the Laptop's 10:00 edit.
+
+### For Categories
+
+Categories should follow the same pattern. Add an `updated_at` column to categories
+(or use the existing one) and apply the same rules: set on local CRUD, preserve
+from source on sync.
+
+---
+
+## Body Diff Storage
+
+### Problem: Full Body Snapshots Waste Space
+
+Currently, when a note body is edited, the entire new body is stored in the
+`note_fragments.body` column. For a 10,000-character note where the user fixes a
+typo, we store all 10,000 characters. Over time with many edits, the `note_fragments`
+table becomes enormous.
+
+### Solution: Unified Diffs for Body Changes
+
+Store note body changes as **unified diffs** (similar to `git diff` output) instead
+of full snapshots. This dramatically reduces storage for incremental edits.
+
+**Format:** Use the standard unified diff format produced by the Myers diff algorithm.
+Go library: `github.com/sergi/go-diff/diffmatchpatch` (already transitively available
+via `go-difflib` in the test dependencies).
+
+### When to Use Diffs vs Full Snapshots
+
+| Operation | Body Storage | Rationale |
+|-----------|-------------|-----------|
+| **Create** (operation=1) | **Full snapshot** | No prior state to diff against |
+| **Update** (operation=2) | **Unified diff** | Diff against previous body state |
+| **Sync Create** (operation=9, new entity) | **Full snapshot** | Receiver has no prior state |
+| **Sync Update** (operation=9, existing entity) | **Unified diff** | Diff computed on source machine against source's prior state |
+| **Delete** (operation=3) | No body | Fragment is null |
+
+### Schema Change
+
+Add a `body_is_diff` boolean to `note_fragments` to distinguish diffs from full
+snapshots:
+
+```sql
+ALTER TABLE note_fragments ADD COLUMN IF NOT EXISTS body_is_diff BOOLEAN DEFAULT false;
+```
+
+### Computing Diffs
+
+```go
+import "github.com/sergi/go-diff/diffmatchpatch"
+
+// computeBodyDiff computes a unified diff between old and new body content.
+// Returns the diff as a string that can be stored in note_fragments.body.
+func computeBodyDiff(oldBody, newBody string) string {
+    dmp := diffmatchpatch.New()
+    diffs := dmp.DiffMain(oldBody, newBody, true)
+    patches := dmp.PatchMake(oldBody, diffs)
+    return dmp.PatchToText(patches)
+}
+
+// applyBodyDiff applies a unified diff to an existing body.
+// Returns the patched body or an error if the patch cannot be applied cleanly.
+func applyBodyDiff(currentBody, diffText string) (string, error) {
+    dmp := diffmatchpatch.New()
+    patches, err := dmp.PatchFromText(diffText)
+    if err != nil {
+        return "", serr.Wrap(err, "failed to parse body diff")
+    }
+    result, applied := dmp.PatchApply(patches, currentBody)
+    // Verify all patches applied cleanly
+    for i, ok := range applied {
+        if !ok {
+            return "", serr.New("patch hunk " + strconv.Itoa(i) + " failed to apply")
+        }
+    }
+    return result, nil
+}
+```
+
+### Integration with Change Tracking
+
+In `createDeltaFragment` (update operations):
+
+1. If `FragmentBody` is set in the bitmask, compute a diff between the existing
+   note body and the new body using `computeBodyDiff()`.
+2. Store the diff string in `fragment.Body`.
+3. Set `fragment.BodyIsDiff = true`.
+4. If the diff is larger than the new body itself (rare, but possible for
+   near-total rewrites), fall back to a full snapshot with `BodyIsDiff = false`.
+
+In `createFragmentFromInput` (create operations):
+
+1. Store the full body as-is (no diff).
+2. Set `fragment.BodyIsDiff = false`.
+
+### Applying Body Diffs on Sync
+
+When a spoke receives a change with `body_is_diff = true`:
+
+1. Load the note's current body from the local database.
+2. Call `applyBodyDiff(currentBody, fragment.Body)` to produce the new body.
+3. If the patch fails (e.g., the local base state diverged due to a conflict),
+   request a full snapshot from the hub as a fallback.
+
+### Fallback: Full Snapshot Recovery
+
+If a diff cannot be applied (patch failure), the receiver can request a full
+snapshot of the note:
+
+```
+GET /api/v1/sync/snapshot?entity_type=note&entity_guid=<guid>
+```
+
+This returns the complete current state of the entity from the hub, bypassing
+the change log entirely. This is a safety net, not the normal path.
+
+### NoteFragment Struct Update
+
+```go
+type NoteFragment struct {
+    ID          int64
+    Bitmask     int16
+    Title       sql.NullString
+    Description sql.NullString
+    Body        sql.NullString // Full body or unified diff (see BodyIsDiff)
+    BodyIsDiff  bool           // true = Body contains a diff, false = full snapshot
+    Tags        sql.NullString
+    IsPrivate   sql.NullBool
+    Categories  sql.NullString
+}
+```
+
+---
+
 ## Change Tracking Enhancements
 
 ### Unified Change Stream
@@ -262,10 +476,15 @@ type SyncChange struct {
     EntityGUID   string    `json:"entity_guid"`
     Operation    int32     `json:"operation"`
     Fragment     any       `json:"fragment,omitempty"`
+    AuthoredAt   time.Time `json:"authored_at"`   // Source machine's authored_at (preserved, never overwritten)
     User         string    `json:"user,omitempty"`
     CreatedAt    time.Time `json:"created_at"`
 }
 ```
+
+The `AuthoredAt` field carries the originating machine's authoring timestamp through
+the sync pipeline. Receivers must use this value (not `CURRENT_TIMESTAMP`) when
+applying sync changes locally. This is critical for correct LWW conflict resolution.
 
 The hub's sync endpoint returns a combined, chronologically ordered stream of both
 note and category changes. This ensures categories are created before any note
@@ -314,68 +533,7 @@ type SyncConfig struct {
 }
 ```
 
-### Push Phase: Spoke -> Hub
-
-**Endpoint:** `POST /api/v1/sync/push`
-
-**Request body:**
-```json
-{
-  "peer_id": "spoke-guid",
-  "changes": [
-    {
-      "guid": "change-guid-1",
-      "entity_type": "category",
-      "entity_guid": "cat-guid-1",
-      "operation": 1,
-      "fragment": {
-        "bitmask": 224,
-        "name": "Kubernetes",
-        "description": "K8s notes",
-        "subcategories": "[\"pod\",\"deployment\"]"
-      },
-      "created_at": "2026-02-08T10:00:00Z"
-    },
-    {
-      "guid": "change-guid-2",
-      "entity_type": "note",
-      "entity_guid": "note-guid-1",
-      "operation": 1,
-      "fragment": {
-        "bitmask": 228,
-        "title": "K8s Pods",
-        "body": "How pods work...",
-        "categories": "[{\"category_guid\":\"cat-guid-1\",\"selected_subcategories\":[\"pod\"]}]"
-      },
-      "created_at": "2026-02-08T10:01:00Z"
-    }
-  ]
-}
-```
-
-**Hub processing:**
-1. Validate JWT and verify user identity.
-2. For each change (processed in order):
-   a. Check if `change.guid` already exists locally (idempotency). If so, skip.
-   b. Resolve `entity_guid` to local entity. For creates, create with the provided GUID.
-   c. Apply the change to the local database.
-   d. Record as `operation=9` (Sync) in local `note_changes`/`category_changes`.
-   e. Mark the change as synced from the spoke's `peer_id`.
-3. Return ACK with list of accepted change GUIDs.
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "accepted": ["change-guid-1", "change-guid-2"],
-    "rejected": [],
-    "conflicts": []
-  }
-}
-```
-
-### Pull Phase: Spoke <- Hub
+### Phase 1: Pull (Spoke <- Hub)
 
 **Endpoint:** `GET /api/v1/sync/pull?since=<RFC3339>&peer_id=<spoke-guid>&limit=100`
 
@@ -394,9 +552,11 @@ extended to include category changes.
         "entity_type": "note",
         "entity_guid": "note-guid-3",
         "operation": 2,
+        "authored_at": "2026-02-08T10:05:00Z",
         "fragment": {
           "bitmask": 32,
-          "body": "Updated content from another machine"
+          "body": "@@ -10,7 +10,7 @@\n content\n-old line\n+new line\n content",
+          "body_is_diff": true
         },
         "created_at": "2026-02-08T11:00:00Z"
       }
@@ -409,10 +569,90 @@ extended to include category changes.
 **Spoke processing:**
 1. For each change (processed in order):
    a. Check if `change.guid` already exists locally (idempotency). If so, skip.
-   b. Apply the change to the local database.
-   c. Record as `operation=9` (Sync) in local change tables.
+   b. **Check for local conflicts:** If the spoke has pending (un-pushed) changes
+      for the same `entity_guid`, resolve using LWW on `authored_at`. (See
+      [Conflict Resolution](#conflict-resolution).)
+   c. Apply the change to the local database. **Crucially, use the source's
+      `authored_at` -- do NOT set `authored_at = CURRENT_TIMESTAMP`.**
+   d. If the fragment body is a diff (`body_is_diff = true`), apply it to the
+      current local body using `applyBodyDiff()`. If the patch fails, request
+      a full snapshot as fallback.
+   e. Record as `operation=9` (Sync) in local change tables.
 2. Update local sync point to the `created_at` of the last processed change.
 3. If `has_more` is true, immediately request the next page.
+
+### Phase 2: Push (Spoke -> Hub)
+
+**Endpoint:** `POST /api/v1/sync/push`
+
+After pulling and resolving conflicts locally, the spoke pushes its remaining
+local changes. These are guaranteed to not conflict with the hub's current state
+(because the spoke just pulled the hub's latest state and resolved any overlaps).
+
+**Request body:**
+```json
+{
+  "peer_id": "spoke-guid",
+  "changes": [
+    {
+      "guid": "change-guid-1",
+      "entity_type": "category",
+      "entity_guid": "cat-guid-1",
+      "operation": 1,
+      "authored_at": "2026-02-08T10:00:00Z",
+      "fragment": {
+        "bitmask": 224,
+        "name": "Kubernetes",
+        "description": "K8s notes",
+        "subcategories": "[\"pod\",\"deployment\"]"
+      },
+      "created_at": "2026-02-08T10:00:00Z"
+    },
+    {
+      "guid": "change-guid-2",
+      "entity_type": "note",
+      "entity_guid": "note-guid-1",
+      "operation": 1,
+      "authored_at": "2026-02-08T10:01:00Z",
+      "fragment": {
+        "bitmask": 228,
+        "title": "K8s Pods",
+        "body": "How pods work...",
+        "body_is_diff": false,
+        "categories": "[{\"category_guid\":\"cat-guid-1\",\"selected_subcategories\":[\"pod\"]}]"
+      },
+      "created_at": "2026-02-08T10:01:00Z"
+    }
+  ]
+}
+```
+
+**Hub processing:**
+1. Validate JWT and verify user identity.
+2. For each change (processed in order):
+   a. Check if `change.guid` already exists locally (idempotency). If so, skip.
+   b. Resolve `entity_guid` to local entity. For creates, create with the provided GUID.
+   c. Apply the change to the local database. **Use the source's `authored_at` --
+      do NOT set `authored_at = CURRENT_TIMESTAMP`.** Set `synced_at = CURRENT_TIMESTAMP`.
+   d. If body is a diff, apply it to the hub's current body state.
+   e. Record as `operation=9` (Sync) in local `note_changes`/`category_changes`.
+   f. Mark the change as synced from the spoke's `peer_id`.
+3. Return ACK with list of accepted change GUIDs.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "accepted": ["change-guid-1", "change-guid-2"],
+    "rejected": []
+  }
+}
+```
+
+**Note:** The response no longer includes a `conflicts` field. In the pull-first
+model, conflicts are resolved on the spoke before pushing. The hub should reject
+a push only for validation failures (e.g., malformed data), not conflicts.
 
 ### Sync Point Tracking
 
@@ -442,26 +682,41 @@ same entity on two machines without syncing in between). LWW is appropriate beca
 - The `authored_at` timestamp on notes already tracks the last human edit time.
 - Simplicity: no vector clocks, no CRDTs, no manual merge UI needed.
 
-### Conflict Detection
+### Where Conflicts Are Resolved: The Spoke
 
-A conflict exists when the hub receives a push for an entity that has been modified
-since the spoke last pulled. Detection:
+In the pull-first model, conflict resolution happens **on the spoke during the pull
+phase**, before any push occurs. This is analogous to `git pull --rebase`:
+
+1. Spoke pulls remote changes from hub.
+2. For each pulled change, spoke checks if it has a **pending local change** for the
+   same entity (i.e., a local change that hasn't been pushed yet).
+3. If yes, that's a conflict. Spoke resolves it using LWW on `authored_at`.
+4. After resolving all conflicts, spoke pushes only the winning local changes.
+
+The hub never needs to resolve conflicts -- it only receives pre-resolved changes.
+
+### Conflict Detection (Spoke-Side)
+
+During the pull phase, for each incoming remote change:
 
 ```
-spoke_change.entity_guid == hub_entity.guid
-AND hub_entity.authored_at > spoke_last_pull_at
-AND spoke_change.created_at > spoke_last_pull_at
+incoming_change.entity_guid EXISTS in local pending_changes
+AND local_pending_change.operation != OperationSync
 ```
+
+A pending local change is one that exists in `note_changes` or `category_changes`
+but has NOT been pushed to the hub (no entry in the sync_peers table for the hub).
 
 ### Resolution Rules
 
 | Scenario | Resolution |
 |----------|------------|
-| Note updated on spoke, same note updated on hub | **Later `authored_at` wins.** Losing change is preserved in change history for audit but not applied. |
+| Note updated locally, same note updated on hub | **Later `authored_at` wins.** Losing change is preserved in `sync_conflicts` for audit. If remote wins, apply remote and discard local pending change. If local wins, apply remote then overwrite with local (local gets pushed later). |
 | Category updated on both | **Later `updated_at` wins.** Same approach. |
 | Note deleted on one side, updated on other | **Delete wins.** Rationale: the user explicitly chose to delete; recovering a deleted note is easier than un-deleting one that shouldn't exist. |
 | Same category name created on two machines | **Merge by name.** Detect duplicate names, merge subcategories (union), keep the older GUID. |
 | Note-category mappings differ | **Later timestamp wins.** The full-snapshot approach means the later snapshot replaces the earlier one. |
+| Body diff conflict (both sides edited body) | If remote wins: apply remote diff, discard local diff. If local wins: skip remote diff, local diff stays pending for push. |
 
 ### Conflict Logging
 
@@ -508,11 +763,12 @@ func runSyncCycle(config SyncConfig) error {
     token, err := authenticateWithHub(config)
     if err != nil { return err }
 
-    // 2. Push local changes
-    if err := pushChanges(config, token); err != nil { return err }
+    // 2. Pull remote changes first (rebase model)
+    //    This also resolves any conflicts with pending local changes
+    if err := pullAndResolveConflicts(config, token); err != nil { return err }
 
-    // 3. Pull remote changes
-    if err := pullChanges(config, token); err != nil { return err }
+    // 3. Push local changes (post-conflict-resolution, guaranteed clean)
+    if err := pushChanges(config, token); err != nil { return err }
 
     // 4. Update sync state
     return updateSyncState(config)
@@ -543,11 +799,12 @@ func RunPassiveSync(config SyncConfig) error {
     token, err := authenticateWithHub(config)
     if err != nil { return err }
 
-    // 2. Push ALL unsynced local changes (may be many if offline for days)
-    if err := pushAllChanges(config, token); err != nil { return err }
+    // 2. Pull ALL changes since last sync (paginated) and resolve conflicts
+    //    This may be many changes if the spoke has been offline for days
+    if err := pullAllAndResolveConflicts(config, token); err != nil { return err }
 
-    // 3. Pull ALL changes since last sync (paginated)
-    if err := pullAllChanges(config, token); err != nil { return err }
+    // 3. Push ALL unsynced local changes (post-conflict-resolution)
+    if err := pushAllChanges(config, token); err != nil { return err }
 
     // 4. Verify consistency (optional integrity check)
     if err := verifyConsistency(config, token); err != nil {
@@ -584,24 +841,29 @@ the polling interval. This gives the user control when they know they need fresh
                          │ Timer tick / Manual trigger / Startup
                          ▼
                     ┌─────────┐
-          ┌────────│  PUSH   │────────┐
+          ┌────────│  PULL   │────────┐
           │        └─────────┘        │
           │ Failure          Success  │
           ▼                           ▼
-    ┌───────────┐              ┌─────────┐
-    │  BACKOFF  │              │  PULL   │
-    └─────┬─────┘              └────┬────┘
-          │ Timer                    │
-          ▼                          │ Success / Failure
-    ┌─────────┐                      ▼
-    │  IDLE   │               ┌─────────────┐
-    └─────────┘               │  RECONCILE  │ (on checksum mismatch)
-                              └──────┬──────┘
-                                     │
-                                     ▼
-                              ┌─────────┐
-                              │  IDLE   │
-                              └─────────┘
+    ┌───────────┐          ┌──────────────┐
+    │  BACKOFF  │          │  RESOLVE     │ (conflict resolution on spoke)
+    └─────┬─────┘          └──────┬───────┘
+          │ Timer                 │
+          ▼                       ▼
+    ┌─────────┐            ┌─────────┐
+    │  IDLE   │            │  PUSH   │────────┐
+    └─────────┘            └─────────┘        │
+                                    │         │ Failure → BACKOFF
+                                    │ Success
+                                    ▼
+                            ┌─────────────┐
+                            │  RECONCILE  │ (on checksum mismatch)
+                            └──────┬──────┘
+                                   │
+                                   ▼
+                            ┌─────────┐
+                            │  IDLE   │
+                            └─────────┘
 ```
 
 ---
@@ -612,9 +874,10 @@ the polling interval. This gives the user control when they know they need fresh
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `POST` | `/api/v1/sync/push` | Spoke pushes local changes to hub |
-| `GET` | `/api/v1/sync/pull` | Spoke pulls changes from hub |
+| `GET` | `/api/v1/sync/pull` | Spoke pulls changes from hub (Phase 1 of sync cycle) |
+| `POST` | `/api/v1/sync/push` | Spoke pushes local changes to hub (Phase 2, after pull) |
 | `POST` | `/api/v1/sync/ack` | Spoke acknowledges received changes |
+| `GET` | `/api/v1/sync/snapshot` | Full snapshot of an entity (fallback when diff fails) |
 | `GET` | `/api/v1/sync/status` | Get sync status (counts, checksums) |
 | `GET` | `/api/v1/health` | Lightweight health check for network detection |
 
@@ -637,7 +900,14 @@ UPDATE categories SET guid = uuid() WHERE guid IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_guid ON categories(guid);
 ```
 
-**2. `category_fragments` table (new):**
+**2. `note_fragments` table -- add `body_is_diff` column:**
+```sql
+ALTER TABLE note_fragments ADD COLUMN IF NOT EXISTS body_is_diff BOOLEAN DEFAULT false;
+```
+When `body_is_diff = true`, the `body` column contains a unified diff (patch text)
+rather than the full body content. This reduces storage for incremental edits.
+
+**3. `category_fragments` table (new):**
 ```sql
 CREATE SEQUENCE IF NOT EXISTS category_fragments_id_seq START 1;
 CREATE TABLE IF NOT EXISTS category_fragments (
@@ -649,7 +919,7 @@ CREATE TABLE IF NOT EXISTS category_fragments (
 );
 ```
 
-**3. `category_changes` table (new):**
+**4. `category_changes` table (new):**
 ```sql
 CREATE SEQUENCE IF NOT EXISTS category_changes_id_seq START 1;
 CREATE TABLE IF NOT EXISTS category_changes (
@@ -666,7 +936,7 @@ CREATE INDEX IF NOT EXISTS idx_category_changes_category_guid ON category_change
 CREATE INDEX IF NOT EXISTS idx_category_changes_created_at ON category_changes(created_at);
 ```
 
-**4. `category_change_sync_peers` table (new):**
+**5. `category_change_sync_peers` table (new):**
 ```sql
 CREATE TABLE IF NOT EXISTS category_change_sync_peers (
     category_change_id BIGINT NOT NULL,
@@ -678,7 +948,7 @@ CREATE TABLE IF NOT EXISTS category_change_sync_peers (
 CREATE INDEX IF NOT EXISTS idx_cat_change_sync_peers_peer_id ON category_change_sync_peers(peer_id);
 ```
 
-**5. `sync_state` table (new):**
+**6. `sync_state` table (new):**
 ```sql
 CREATE TABLE IF NOT EXISTS sync_state (
     hub_url       VARCHAR NOT NULL,
@@ -690,7 +960,7 @@ CREATE TABLE IF NOT EXISTS sync_state (
 );
 ```
 
-**6. `sync_conflicts` table (new):**
+**7. `sync_conflicts` table (new):**
 ```sql
 CREATE SEQUENCE IF NOT EXISTS sync_conflicts_id_seq START 1;
 CREATE TABLE IF NOT EXISTS sync_conflicts (
@@ -727,7 +997,9 @@ type CategoryFragment struct {
     Subcategories sql.NullString   // JSON array
 }
 
-// SyncChange is the unified envelope for the sync protocol
+// SyncChange is the unified envelope for the sync protocol.
+// AuthoredAt carries the source machine's authoring timestamp -- receivers must
+// preserve this value and never overwrite it with CURRENT_TIMESTAMP.
 type SyncChange struct {
     ID         int64     `json:"id"`
     GUID       string    `json:"guid"`
@@ -735,6 +1007,7 @@ type SyncChange struct {
     EntityGUID string    `json:"entity_guid"`
     Operation  int32     `json:"operation"`
     Fragment   any       `json:"fragment,omitempty"`
+    AuthoredAt time.Time `json:"authored_at"`   // Source machine's authored_at (preserved through sync)
     User       string    `json:"user,omitempty"`
     CreatedAt  time.Time `json:"created_at"`
 }
@@ -745,11 +1018,12 @@ type SyncPushRequest struct {
     Changes []SyncChange `json:"changes"`
 }
 
-// SyncPushResponse is the response for POST /api/v1/sync/push
+// SyncPushResponse is the response for POST /api/v1/sync/push.
+// No Conflicts field -- in the pull-first model, conflicts are resolved on the
+// spoke before pushing. The hub only rejects for validation failures.
 type SyncPushResponse struct {
-    Accepted  []string       `json:"accepted"`
-    Rejected  []string       `json:"rejected,omitempty"`
-    Conflicts []SyncConflict `json:"conflicts,omitempty"`
+    Accepted []string `json:"accepted"`
+    Rejected []string `json:"rejected,omitempty"`
 }
 
 // SyncPullResponse is the response for GET /api/v1/sync/pull
@@ -804,6 +1078,10 @@ type SyncConfig struct {
   `UpdateNoteCategorySubcategories`, `RemoveCategoryFromNote`.
 
 **`models/note_change.go`:**
+- Add `BodyIsDiff bool` field to `NoteFragment` struct.
+- Add `body_is_diff` column to `note_fragments` table DDL and migration.
+- Implement `computeBodyDiff()` and `applyBodyDiff()` using `go-diff`.
+- Update `createDeltaFragment()` to compute body diffs for updates.
 - Implement category change functions: `insertCategoryChange`,
   `insertCategoryFragment`, `computeCategoryChangeBitmask`, etc.
 - Add `GetUnsentCategoryChangesForPeer()`.
@@ -817,10 +1095,17 @@ type SyncConfig struct {
 - Add GUID column to cache schema for categories.
 - Update `syncCategoriesFromDisk()` to include GUID.
 
+**`models/note.go`:**
+- Create `applySyncNoteCreate()` -- accepts explicit `authored_at` from source.
+- Create `applySyncNoteUpdate()` -- accepts explicit `authored_at` from source.
+  Must NOT set `authored_at = CURRENT_TIMESTAMP`. Must apply body diffs when
+  `body_is_diff = true`.
+
 **`web/api/sync.go`:**
-- Implement `PushChanges` handler.
-- Implement `PullChanges` handler.
+- Implement `PullChanges` handler (spoke calls this first).
+- Implement `PushChanges` handler (spoke calls this after pull).
 - Implement `AckChanges` handler.
+- Implement `SnapshotEntity` handler (fallback for diff failures).
 - Implement `SyncStatus` handler.
 - Implement `HealthCheck` handler.
 
@@ -831,10 +1116,30 @@ type SyncConfig struct {
 
 ## Implementation Phases
 
-### Phase 1: Category GUIDs & Change Tracking (Foundation)
+### Phase 1: Foundation (GUIDs, Body Diffs, `authored_at` Rules, Category Change Tracking)
 
-**Goal:** Categories get GUIDs and all CRUD operations record changes.
+**Goal:** Categories get GUIDs, note body changes use diffs, `authored_at` semantics
+are enforced, and all CRUD operations record changes.
 
+**1a. Body diff storage:**
+1. Add `body_is_diff` column to `note_fragments` table (migration).
+2. Add `github.com/sergi/go-diff` dependency.
+3. Implement `computeBodyDiff()` and `applyBodyDiff()` functions.
+4. Update `createDeltaFragment()` to compute body diffs for update operations.
+5. Add size comparison fallback: if diff > full body, store full snapshot instead.
+6. Update `NoteFragment` struct with `BodyIsDiff` field.
+7. Write tests for diff computation and application (including edge cases).
+
+**1b. `authored_at` enforcement:**
+1. Verify `CreateNote` sets `authored_at = CURRENT_TIMESTAMP` (already done).
+2. Verify `UpdateNote` sets `authored_at = CURRENT_TIMESTAMP` (already done).
+3. Create `applySyncNoteCreate()` that accepts explicit `authored_at` from source.
+4. Create `applySyncNoteUpdate()` that accepts explicit `authored_at` from source.
+5. Ensure sync code paths NEVER set `authored_at = CURRENT_TIMESTAMP`.
+6. Add `AuthoredAt` field to `SyncChange` envelope.
+7. Write tests verifying `authored_at` preservation through sync.
+
+**1c. Category GUIDs & change tracking:**
 1. Add `guid` column to `categories` table (migration + backfill).
 2. Update `Category` struct, `CategoryInput`, `CategoryOutput`.
 3. Generate GUID in `CreateCategory()`.
@@ -849,32 +1154,36 @@ type SyncConfig struct {
 
 ### Phase 2: Unified Sync Protocol & Endpoints
 
-**Goal:** Hub can receive and serve unified change streams.
+**Goal:** Hub can receive and serve unified change streams with body diffs.
 
-1. Create `SyncChange` unified envelope type.
+1. Create `SyncChange` unified envelope type (with `AuthoredAt` field).
 2. Implement `GetUnifiedChangesForPeer()` (merges note + category changes).
-3. Implement `POST /api/v1/sync/push` endpoint.
-4. Implement `GET /api/v1/sync/pull` endpoint.
+3. Implement `GET /api/v1/sync/pull` endpoint (spoke pulls first).
+4. Implement `POST /api/v1/sync/push` endpoint (spoke pushes after pull).
 5. Implement `POST /api/v1/sync/ack` endpoint.
-6. Implement `GET /api/v1/sync/status` endpoint.
-7. Implement `GET /api/v1/health` endpoint.
-8. Implement change application logic (the currently-stubbed `applyChangeOnPeer`):
-   - `applyNoteCreate`, `applyNoteUpdate`, `applyNoteDelete`
-   - `applyCategoryCreate`, `applyCategoryUpdate`, `applyCategoryDelete`
-   - `applyNoteCategoryMapping`
-9. Write integration tests with realistic sync scenarios.
+6. Implement `GET /api/v1/sync/snapshot` endpoint (fallback for diff failures).
+7. Implement `GET /api/v1/sync/status` endpoint.
+8. Implement `GET /api/v1/health` endpoint.
+9. Implement change application logic (preserving `authored_at` from source):
+   - `applySyncNoteCreate`, `applySyncNoteUpdate`, `applySyncNoteDelete`
+   - `applySyncCategoryCreate`, `applySyncCategoryUpdate`, `applySyncCategoryDelete`
+   - `applySyncNoteCategoryMapping`
+   - Body diff application with `applyBodyDiff()` and snapshot fallback
+10. Write integration tests with realistic sync scenarios.
 
-### Phase 3: Conflict Resolution
+### Phase 3: Conflict Resolution (Spoke-Side)
 
-**Goal:** Detect and resolve conflicts using LWW.
+**Goal:** Detect and resolve conflicts on the spoke during pull, using LWW.
 
 1. Add `authored_at` / `updated_at` comparison logic.
-2. Implement conflict detection in push handler.
-3. Implement LWW resolution for notes.
-4. Implement LWW resolution for categories.
-5. Implement name-based category deduplication.
-6. Create `sync_conflicts` table and logging.
-7. Write conflict scenario tests.
+2. Implement spoke-side conflict detection during pull phase:
+   - Identify pending local changes that overlap with incoming remote changes.
+3. Implement LWW resolution for notes (compare `authored_at` timestamps).
+4. Implement LWW resolution for categories (compare `updated_at` timestamps).
+5. Implement name-based category deduplication (merge by name).
+6. Handle body diff conflicts: discard losing side's diff, apply winner's.
+7. Create `sync_conflicts` table and logging.
+8. Write conflict scenario tests (including body diff conflict cases).
 
 ### Phase 4: Active & Passive Sync Client
 
@@ -882,7 +1191,7 @@ type SyncConfig struct {
 
 1. Create `SyncConfig` and config file/env var loading.
 2. Create `sync_state` table for tracking sync progress.
-3. Implement `runSyncCycle()` (push + pull + reconcile).
+3. Implement `runSyncCycle()` (pull + resolve conflicts + push + reconcile).
 4. Implement active sync with configurable polling interval.
 5. Implement passive sync at startup.
 6. Implement exponential backoff on failures.
@@ -988,7 +1297,19 @@ Spoke pushes 50 changes, network drops after 30 are received.
 retries only the un-ACKed changes. Idempotent change application means the 30
 already-received changes are safely skipped if re-sent.
 
-### 8. Subcategory Rename/Reorganization
+### 8. Body Diff Patch Failure
+
+A spoke receives a body diff that cannot be applied cleanly to its local body state
+(e.g., the local state diverged due to a conflict that was resolved differently).
+
+**Handling:** The spoke requests a full snapshot from the hub via
+`GET /api/v1/sync/snapshot?entity_type=note&entity_guid=<guid>`. The snapshot
+contains the complete current body from the hub, bypassing the diff mechanism
+entirely. The spoke replaces its local body with the snapshot. This is a rare
+fallback path -- under normal operation, diffs apply cleanly because pull-first
+ensures the spoke has the correct base state before applying diffs.
+
+### 9. Subcategory Rename/Reorganization
 
 User renames a subcategory on one machine (e.g., "k8s-pod" -> "pods").
 
@@ -1012,7 +1333,13 @@ additions are:
 - **Category change tracking** parallel to the existing note change system
 - **Note-category mapping snapshots** using the existing `FragmentCategories` bitmask
 - **Hub-and-spoke topology** for practical, reliable multi-machine sync
+- **Pull-first sync (rebase model)** -- spokes pull, resolve conflicts locally, then
+  push cleanly. Keeps the hub simple and mirrors the familiar git rebase workflow.
+- **`authored_at` preservation** -- authoring timestamps are never overwritten during
+  sync, ensuring correct LWW conflict resolution across machines
+- **Body diffs** -- note body changes stored as unified diffs instead of full
+  snapshots, massively reducing change log storage for incremental edits
 - **Active polling + passive startup reconciliation** for comprehensive coverage
-- **Last-write-wins conflict resolution** appropriate for single-user scenarios
+- **Spoke-side LWW conflict resolution** appropriate for single-user scenarios
 - **Phased implementation** starting with the data foundation and building up to
   production-ready sync
