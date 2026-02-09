@@ -4,6 +4,8 @@
 
 Add a sync control panel to the GoNotes UI with three capabilities: automatic sync toggle, manual sync button, and sync statistics display. The design integrates into the existing filter panel's Sync section and status bar, keeping the UI concise while surfacing essential sync information.
 
+All sync JavaScript lives in a **new `sync.js` module**, following the same `_internal` pattern used by `cats_subcats.js`.
+
 ---
 
 ## Current State
@@ -13,10 +15,157 @@ Add a sync control panel to the GoNotes UI with three capabilities: automatic sy
 | Toolbar sync button | `web/pages/landing/toolbar.go` | `↻` icon button calls `app.syncNotes()` which just reloads notes from the local API |
 | Filter panel Sync section | `web/pages/landing/filter_panel.go` | Collapsed section with a single "Unsynced only" checkbox filter |
 | Status bar | `web/pages/landing/status_bar.go` | Left: sync-status icon+text ("Ready"), Center: active filters, Right: result count |
-| JS sync logic | `web/static/js/app.js` | `syncNotes()` reloads notes+categories from local API; `state.lastSync` tracked but never populated from a real peer sync |
+| JS sync logic | `web/static/js/app.js` | `syncNotes()` reloads notes+categories from local API; `state.lastSync` tracked but never populated from a real peer sync; `updateSyncStatus()` updates status bar |
 | Backend sync API | `web/api/sync.go` | Full P2P pull/push/snapshot/status endpoints exist; `SyncPushResponse` returns `accepted[]` and `rejected[]` counts |
 
 **Key gap:** The UI has no real peer sync — `syncNotes()` only reloads from the local server. There is no auto-sync, no peer URL configuration, no sync stats tracking, and no conflict resolution UI.
+
+---
+
+## Architecture: `sync.js` Module
+
+### Pattern
+
+Follow the same module pattern as `cats_subcats.js`:
+
+1. **`app.js`** exposes shared internals via `window.app._internal` (already exists)
+2. **`sync.js`** is loaded after `app.js` in `page.go`, accesses `_internal` via lazy accessors
+3. **`sync.js`** registers its public functions on `window.app` (e.g., `window.app.syncNotes`)
+4. **`sync.js`** registers an `_initSyncHandlers()` function called from `app.js` `init()`
+
+### What moves out of `app.js`
+
+| Item | Currently in `app.js` | Action |
+|------|----------------------|--------|
+| `state.lastSync` | Line 29 | Remove from `app.js`; replaced by `state.sync` object managed in `sync.js` |
+| `window.app.syncNotes()` | Lines 1085-1090 | Remove from `app.js`; reimplemented in `sync.js` |
+| `updateSyncStatus()` | Lines 1071-1083 | **Keep in `app.js`** and add to `_internal` — it's also called by `loadNotes()` (lines 305, 312, 315), so it must remain accessible to both modules |
+
+### What stays in `app.js`
+
+- `updateSyncStatus()` — used by `loadNotes()` for "Loading..." / "Synced" / "Failed to load" states
+- `state.lastSync` field removed (sync.js manages its own state on `state.sync`)
+- `loadNotes()`, `_loadCategories()`, `_loadNoteCategoryMappings()` — called by sync.js after sync completes
+
+### Updated `_internal` export (`app.js`)
+
+```js
+window.app._internal = {
+  state,
+  apiRequest,
+  showToast,
+  escapeHtml,
+  renderNoteList,
+  updateResultCount,
+  updateActiveFilters,
+  updateSyncStatus,       // NEW — needed by sync.js
+  loadNotes,              // NEW — needed by sync.js after pull/push
+  generateGUID            // NEW — needed by sync.js for peerId generation
+};
+```
+
+### Updated `init()` in `app.js`
+
+```js
+async function init() {
+  initMarkdownIfReady();
+  window.app._initCategoryHandlers();
+  window.app._initSyncHandlers();  // NEW — initialize sync module
+
+  const isAuthenticated = await checkAuth();
+  if (!isAuthenticated) return;
+
+  await Promise.all([
+    loadNotes(),
+    window.app._loadCategories(),
+    window.app._loadNoteCategoryMappings()
+  ]);
+  renderNoteList();
+}
+```
+
+### Updated script loading in `page.go`
+
+```go
+b.Script("src", "/static/js/app.js?v=5").R(),
+b.Script("src", "/static/js/cats_subcats.js?v=2").R(),
+b.Script("src", "/static/js/sync.js?v=1").R(),     // NEW
+```
+
+---
+
+## `sync.js` Module Structure
+
+```js
+// Sync module for GoNotes
+// Handles: peer sync (pull/push), auto-sync timer, sync stats, conflict resolution
+//
+// Dependencies: Loaded after app.js. Accesses shared internals via
+// window.app._internal which app.js exposes before DOMContentLoaded.
+
+(function() {
+  'use strict';
+
+  // Lazy accessors for shared internals
+  function getState()      { return window.app._internal.state; }
+  function apiRequest(...) { return window.app._internal.apiRequest(...); }
+  function showToast(...)  { return window.app._internal.showToast(...); }
+  function escapeHtml(t)   { return window.app._internal.escapeHtml(t); }
+  function updateSyncStatus(s, t) { return window.app._internal.updateSyncStatus(s, t); }
+  function loadNotes()     { return window.app._internal.loadNotes(); }
+  function renderNoteList(){ return window.app._internal.renderNoteList(); }
+  function generateGUID()  { return window.app._internal.generateGUID(); }
+
+  // ============================================
+  // Sync State (attached to app state)
+  // ============================================
+  //   Initialized in _initSyncHandlers()
+
+  // ============================================
+  // LocalStorage Persistence
+  // ============================================
+  //   saveSyncPrefs(), restoreSyncPrefs()
+
+  // ============================================
+  // Auto-Sync Timer Management
+  // ============================================
+  //   toggleAutoSync(), setSyncInterval(), startTimer(), stopTimer()
+
+  // ============================================
+  // Peer Configuration
+  // ============================================
+  //   setPeerUrl(), testPeerConnection()
+
+  // ============================================
+  // Core Sync Protocol (Pull + Push)
+  // ============================================
+  //   syncNotes(), _runSync(), _pullFromPeer(), _pushToPeer()
+
+  // ============================================
+  // Sync Stats Rendering
+  // ============================================
+  //   renderSyncStats()
+
+  // ============================================
+  // Conflict Resolution UI
+  // ============================================
+  //   showConflicts(), resolveConflict(), renderConflictModal()
+
+  // ============================================
+  // Public API (registered on window.app)
+  // ============================================
+
+  window.app._initSyncHandlers = function() { /* ... */ };
+
+  window.app.syncNotes       = async function() { /* ... */ };
+  window.app.toggleAutoSync  = function(enabled) { /* ... */ };
+  window.app.setSyncInterval = function(minutes) { /* ... */ };
+  window.app.setPeerUrl      = function(url) { /* ... */ };
+  window.app.testPeerConnection = async function() { /* ... */ };
+  window.app.showConflicts   = function() { /* ... */ };
+  window.app.resolveConflict = async function(index, choice) { /* ... */ };
+})();
+```
 
 ---
 
@@ -49,29 +198,30 @@ Add to `renderSyncSection()`, above the existing "Unsynced only" checkbox:
 - **Interval selector:** A compact `<select id="sync-interval">` with options: 1 min, 5 min (default), 15 min, 30 min. `onchange="app.setSyncInterval(this.value)"`
 - **Peer URL input:** A short text input `<input id="sync-peer-url" placeholder="https://peer:port">` with a small "Test" button (`app.testPeerConnection()`) that hits `GET /api/v1/health` on the peer
 
-#### b. JavaScript state & logic (`app.js`)
+#### b. Sync state & logic (`sync.js`)
 
-Add to `state`:
+Add to app state via `_initSyncHandlers()`:
 ```js
-sync: {
+getState().sync = {
   autoEnabled: false,
   intervalMs: 300000,       // 5 min default
   peerUrl: '',
   peerId: '',               // generated once, stored in localStorage
   timerId: null,            // setInterval handle
   lastSyncAt: null,         // Date object
+  _running: false,          // guard against concurrent syncs
   stats: { pulled: 0, pushed: 0, conflicts: 0 },
   conflicts: []             // unresolved conflict objects
-}
+};
 ```
 
-New functions:
+New functions in `sync.js`:
 - `app.toggleAutoSync(enabled)` — Starts/stops the interval timer. Persists preference to `localStorage`.
 - `app.setSyncInterval(minutes)` — Updates interval, restarts timer if running. Persists to `localStorage`.
 - `app.setPeerUrl(url)` — Validates URL format, stores in `localStorage`, updates `state.sync.peerUrl`.
 - `app.testPeerConnection()` — `fetch(peerUrl + '/api/v1/health')`, shows toast success/error.
-- `app._runSync()` — Internal: executes pull then push cycle (see Section 2).
-- On `init()`: restore sync preferences from `localStorage`; if auto-sync was enabled, restart the timer.
+- Internal `startTimer()` / `stopTimer()` — manage `setInterval` handle.
+- On `_initSyncHandlers()`: restore sync preferences from `localStorage`; if auto-sync was enabled and peer URL is set, restart the timer.
 
 #### c. Persistence
 
@@ -114,9 +264,9 @@ No markup change needed — the existing button already calls `app.syncNotes()`.
 
 Add a `<button class="btn btn-secondary btn-sm" onclick="app.syncNotes()">↻ Sync Now</button>` inside `renderSyncSection()`, below the peer URL row.
 
-#### c. Sync protocol implementation (`app.js`)
+#### c. Sync protocol implementation (`sync.js`)
 
-Rewrite `app.syncNotes()`:
+Rewrite `app.syncNotes()` in `sync.js`:
 
 ```
 async syncNotes():
@@ -256,13 +406,13 @@ Reuse the existing modal overlay (`#modal-overlay`). When user clicks "Resolve" 
 
 ### Implementation Steps
 
-#### a. JS: `renderSyncStats()` function (`app.js`)
+#### a. `renderSyncStats()` in `sync.js`
 
 Called after every sync completes and on page load (from localStorage):
 
 ```js
 function renderSyncStats() {
-  const s = state.sync;
+  const s = getState().sync;
 
   // Status bar
   const timeText = s.lastSyncAt
@@ -300,7 +450,9 @@ function renderSyncStats() {
 }
 ```
 
-#### b. JS: `app.showConflicts()` — Conflict resolution modal (`app.js`)
+Note: `renderSyncStats()` needs `formatRelativeTime()`. Either add it to `_internal` or duplicate the small helper in `sync.js`. Adding to `_internal` is preferred.
+
+#### b. `app.showConflicts()` — Conflict resolution modal (`sync.js`)
 
 ```
 function showConflicts():
@@ -358,19 +510,23 @@ Uses the existing snapshot endpoint (`GET /api/v1/sync/snapshot?entity_type=note
 | `web/pages/landing/filter_panel.go` | Expand `renderSyncSection()`: add auto-sync toggle, interval select, peer URL input, "Sync Now" button, stats block, conflict resolve link |
 | `web/pages/landing/status_bar.go` | Add `sync-stat-pulled`, `sync-stat-pushed`, `sync-stat-conflicts` spans to status-left |
 | `web/pages/landing/toolbar.go` | No markup changes needed (existing button is sufficient) |
-| `web/static/js/app.js` | Add `state.sync` object; rewrite `syncNotes()` with real pull/push; add `toggleAutoSync()`, `setSyncInterval()`, `setPeerUrl()`, `testPeerConnection()`, `renderSyncStats()`, `showConflicts()`, `resolveConflict()`; restore sync prefs on init |
+| `web/pages/landing/page.go` | Add `<script src="/static/js/sync.js?v=1">` after `cats_subcats.js` |
+| **`web/static/js/sync.js`** | **NEW file** — all sync logic: state init, auto-sync timer, peer config, pull/push protocol, stats rendering, conflict resolution modal |
+| `web/static/js/app.js` | Remove `syncNotes()` and `state.lastSync`; add `updateSyncStatus`, `loadNotes`, `generateGUID`, `formatRelativeTime` to `_internal`; call `_initSyncHandlers()` in `init()` |
 | `web/static/css/app.css` | Add sync toggle switch, sync stats, spin animation, conflict modal styles |
 
 ---
 
 ## Implementation Order
 
-1. **State & persistence** — Add `state.sync`, localStorage save/restore in `app.js`
-2. **Filter panel markup** — Build the expanded Sync section in `filter_panel.go`
-3. **CSS** — Add all new styles in `app.css`
-4. **Manual sync** — Implement `syncNotes()` with real pull/push protocol
-5. **Stats display** — Implement `renderSyncStats()`, wire to status bar and filter panel
-6. **Auto-sync** — Implement `toggleAutoSync()`, timer management, interval selector
-7. **Conflict detection** — Collect rejected changes during sync, populate `state.sync.conflicts`
-8. **Conflict resolution modal** — Build `showConflicts()` with side-by-side compare and resolve actions
-9. **Polish** — Spin animation, toast feedback, edge cases (peer offline, auth failure, network errors)
+1. **`sync.js` scaffold** — Create `sync.js` with IIFE, lazy accessors, `_initSyncHandlers()`, and `state.sync` initialization
+2. **`app.js` refactor** — Remove `syncNotes()` and `state.lastSync`; expand `_internal` with `updateSyncStatus`, `loadNotes`, `generateGUID`, `formatRelativeTime`; add `_initSyncHandlers()` call in `init()`
+3. **`page.go` script tag** — Add `sync.js` script after `cats_subcats.js`
+4. **Filter panel markup** — Build the expanded Sync section in `filter_panel.go`
+5. **CSS** — Add all new styles in `app.css`
+6. **Manual sync** — Implement `syncNotes()` in `sync.js` with real pull/push protocol
+7. **Stats display** — Implement `renderSyncStats()` in `sync.js`, wire to status bar and filter panel
+8. **Auto-sync** — Implement `toggleAutoSync()`, timer management, interval selector in `sync.js`
+9. **Conflict detection** — Collect rejected changes during sync, populate `state.sync.conflicts`
+10. **Conflict resolution modal** — Build `showConflicts()` in `sync.js` with side-by-side compare and resolve actions
+11. **Polish** — Spin animation, toast feedback, edge cases (peer offline, auth failure, network errors)
