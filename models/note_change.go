@@ -2,11 +2,13 @@ package models
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/rohanthewiz/logger"
 	"github.com/rohanthewiz/serr"
+	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
 // NoteChange tracks note modifications for peer-to-peer sync
@@ -29,17 +31,21 @@ const (
 	OperationSync   = 9 // Change received from peer
 )
 
-// NoteFragment stores delta information - only changed fields are populated
-// The bitmask indicates which fields are active/changed
+// NoteFragment stores delta information - only changed fields are populated.
+// The bitmask indicates which fields are active/changed.
+// When BodyIsDiff is true, the Body field contains a unified diff patch
+// rather than a full snapshot, enabling efficient storage for large notes
+// with small edits.
 type NoteFragment struct {
 	ID          int64          // Primary key
 	Bitmask     int16          // Indicates which fields are active
 	Title       sql.NullString // New title (if changed)
 	Description sql.NullString // New description (if changed)
-	Body        sql.NullString // New body (if changed)
+	Body        sql.NullString // New body (if changed), or unified diff if BodyIsDiff is true
 	Tags        sql.NullString // New tags (if changed)
 	IsPrivate   sql.NullBool   // New privacy value (if changed)
 	Categories  sql.NullString // JSON array of category changes
+	BodyIsDiff  bool           // True if Body contains a diff patch rather than full snapshot
 }
 
 // Bitmask constants indicate which fields are active in a NoteFragment
@@ -76,7 +82,8 @@ CREATE TABLE IF NOT EXISTS note_fragments (
     body        VARCHAR,
     tags        VARCHAR,
     is_private  BOOLEAN,
-    categories  VARCHAR
+    categories  VARCHAR,
+    body_is_diff BOOLEAN DEFAULT false
 );
 `
 
@@ -172,8 +179,51 @@ func sqlNullStringEqualsPointer(ns sql.NullString, sp *string) bool {
 	return ns.String == *sp
 }
 
-// createFragmentFromInput creates a NoteFragment with all fields from input
-// Used for create operations where everything is "changed"
+// computeBodyDiff generates a unified diff patch from oldBody to newBody.
+// Uses diff-match-patch for efficient text diffing. Returns the patch text
+// and a boolean indicating whether the diff is smaller than the full new body.
+// If the diff is larger, the caller should fall back to a full snapshot to
+// avoid bloating the change log for complete rewrites.
+func computeBodyDiff(oldBody, newBody string) (diffText string, isDiffSmaller bool) {
+	dmp := diffmatchpatch.New()
+	// Compute line-level diff for better readability and efficiency
+	charsA, charsB, lineArray := dmp.DiffLinesToChars(oldBody, newBody)
+	diffs := dmp.DiffMain(charsA, charsB, false)
+	diffs = dmp.DiffCharsToLines(diffs, lineArray)
+	patches := dmp.PatchMake(oldBody, diffs)
+	patchText := dmp.PatchToText(patches)
+
+	// Size comparison: only use diff if it's actually smaller than the full body
+	isDiffSmaller = len(patchText) < len(newBody)
+	return patchText, isDiffSmaller
+}
+
+// applyBodyDiff applies a unified diff patch to a base body text.
+// The patch is in diff-match-patch format. Returns the resulting text
+// or an error if the patch could not be applied cleanly.
+func applyBodyDiff(currentBody, patchText string) (string, error) {
+	dmp := diffmatchpatch.New()
+	patches, err := dmp.PatchFromText(patchText)
+	if err != nil {
+		return "", serr.Wrap(err, "failed to parse body diff patch")
+	}
+
+	result, applied := dmp.PatchApply(patches, currentBody)
+
+	// Verify all patches applied successfully — partial application would
+	// leave the body in an inconsistent state
+	for i, ok := range applied {
+		if !ok {
+			return "", serr.New(fmt.Sprintf("body diff patch %d failed to apply", i))
+		}
+	}
+
+	return result, nil
+}
+
+// createFragmentFromInput creates a NoteFragment with all fields from input.
+// Used for create operations where everything is "changed".
+// Body is always stored as full snapshot for creates (no diff against nothing).
 func createFragmentFromInput(input NoteInput, bitmask int16) NoteFragment {
 	fragment := NoteFragment{
 		Bitmask: bitmask,
@@ -201,20 +251,39 @@ func createFragmentFromInput(input NoteInput, bitmask int16) NoteFragment {
 	return fragment
 }
 
-// createDeltaFragment creates a NoteFragment with only changed fields from input
-// Used for update operations where only modified fields are stored
-func createDeltaFragment(input NoteInput, bitmask int16) NoteFragment {
-	// For delta fragments, logic is the same as createFragmentFromInput
-	// because bitmask already indicates only changed fields
-	return createFragmentFromInput(input, bitmask)
+// createDeltaFragment creates a NoteFragment with only changed fields from input.
+// Used for update operations where only modified fields are stored.
+// When the body changed, it computes a diff against the existing body and stores
+// the diff if it's smaller than the full new body (otherwise falls back to snapshot).
+func createDeltaFragment(existing *Note, input NoteInput, bitmask int16) NoteFragment {
+	fragment := createFragmentFromInput(input, bitmask)
+
+	// For body changes, attempt to store as diff rather than full snapshot
+	if bitmask&FragmentBody != 0 && input.Body != nil && existing != nil {
+		existingBody := ""
+		if existing.Body.Valid {
+			existingBody = existing.Body.String
+		}
+
+		diffText, isDiffSmaller := computeBodyDiff(existingBody, *input.Body)
+		if isDiffSmaller {
+			fragment.Body = sql.NullString{String: diffText, Valid: true}
+			fragment.BodyIsDiff = true
+		}
+		// else: keep full snapshot (default from createFragmentFromInput)
+	}
+
+	return fragment
 }
 
-// insertNoteFragment saves a fragment to the database
-// Returns the fragment ID or an error
+// insertNoteFragment saves a fragment to the database.
+// Returns the fragment ID or an error.
+// The body_is_diff flag indicates whether the body column contains a diff patch
+// (true) or a full body snapshot (false).
 func insertNoteFragment(fragment NoteFragment) (int64, error) {
 	query := `
-		INSERT INTO note_fragments (bitmask, title, description, body, tags, is_private, categories)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO note_fragments (bitmask, title, description, body, tags, is_private, categories, body_is_diff)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		RETURNING id
 	`
 
@@ -228,6 +297,7 @@ func insertNoteFragment(fragment NoteFragment) (int64, error) {
 		fragment.Tags,
 		fragment.IsPrivate,
 		fragment.Categories,
+		fragment.BodyIsDiff,
 	).Scan(&fragmentID)
 
 	if err != nil {
@@ -258,11 +328,12 @@ func insertNoteChange(changeGUID, noteGUID string, operation int32, fragmentID s
 	return nil
 }
 
-// GetNoteFragment retrieves a fragment by ID
-// Returns nil if not found
+// GetNoteFragment retrieves a fragment by ID.
+// Returns nil if not found. Includes the body_is_diff flag to indicate
+// whether the body is a diff patch or full snapshot.
 func GetNoteFragment(id int64) (*NoteFragment, error) {
 	query := `
-		SELECT id, bitmask, title, description, body, tags, is_private, categories
+		SELECT id, bitmask, title, description, body, tags, is_private, categories, body_is_diff
 		FROM note_fragments
 		WHERE id = ?
 	`
@@ -277,6 +348,7 @@ func GetNoteFragment(id int64) (*NoteFragment, error) {
 		&fragment.Tags,
 		&fragment.IsPrivate,
 		&fragment.Categories,
+		&fragment.BodyIsDiff,
 	)
 
 	if err == sql.ErrNoRows {

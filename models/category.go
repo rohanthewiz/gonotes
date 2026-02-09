@@ -6,15 +6,19 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rohanthewiz/serr"
 )
 
 // CreateCategoriesTableSQL returns the DDL statement for creating the categories table.
+// The guid column provides cross-machine identity for sync — auto-increment IDs
+// are local and cannot be used to identify the same category across machines.
 const CreateCategoriesTableSQL = `
 CREATE SEQUENCE IF NOT EXISTS categories_id_seq START 1;
 
 CREATE TABLE IF NOT EXISTS categories (
     id            BIGINT PRIMARY KEY DEFAULT nextval('categories_id_seq'),
+    guid          VARCHAR,
     name          VARCHAR NOT NULL,
     description   VARCHAR,
     subcategories VARCHAR,
@@ -45,9 +49,11 @@ DROP TABLE IF EXISTS categories;
 DROP SEQUENCE IF EXISTS categories_id_seq;
 `
 
-// Category represents a category that can be assigned to notes
+// Category represents a category that can be assigned to notes.
+// GUID provides cross-machine identity for peer-to-peer sync.
 type Category struct {
 	ID            int64          `json:"id"`
+	GUID          string         `json:"guid"`
 	Name          string         `json:"name"`
 	Description   sql.NullString `json:"description,omitempty"`
 	Subcategories sql.NullString `json:"subcategories,omitempty"` // JSON array stored as string
@@ -65,6 +71,7 @@ type CategoryInput struct {
 // CategoryOutput is used for API responses with proper null handling
 type CategoryOutput struct {
 	ID            int64     `json:"id"`
+	GUID          string    `json:"guid"`
 	Name          string    `json:"name"`
 	Description   *string   `json:"description,omitempty"`
 	Subcategories []string  `json:"subcategories,omitempty"`
@@ -76,6 +83,7 @@ type CategoryOutput struct {
 func (c *Category) ToOutput() CategoryOutput {
 	output := CategoryOutput{
 		ID:        c.ID,
+		GUID:      c.GUID,
 		Name:      c.Name,
 		CreatedAt: c.CreatedAt,
 		UpdatedAt: c.UpdatedAt,
@@ -131,14 +139,18 @@ func CreateCategory(input CategoryInput) (*Category, error) {
 		description = sql.NullString{String: *input.Description, Valid: true}
 	}
 
+	// Generate a GUID for cross-machine identity
+	categoryGUID := uuid.New().String()
+
 	// Insert into disk database first (source of truth)
-	query := `INSERT INTO categories (name, description, subcategories, created_at, updated_at)
-		VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-		RETURNING id, name, description, subcategories, created_at, updated_at`
+	query := `INSERT INTO categories (guid, name, description, subcategories, created_at, updated_at)
+		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		RETURNING id, guid, name, description, subcategories, created_at, updated_at`
 
 	var category Category
-	err := db.QueryRow(query, input.Name, description, subcatsJSON).Scan(
+	err := db.QueryRow(query, categoryGUID, input.Name, description, subcatsJSON).Scan(
 		&category.ID,
+		&category.GUID,
 		&category.Name,
 		&category.Description,
 		&category.Subcategories,
@@ -149,11 +161,15 @@ func CreateCategory(input CategoryInput) (*Category, error) {
 		return nil, serr.Wrap(err, "failed to create category in disk database")
 	}
 
+	// Record change for sync (non-blocking)
+	recordCategoryCreateChange(category, input)
+
 	// Insert into cache database
-	cacheQuery := `INSERT INTO categories (id, name, description, subcategories, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)`
+	cacheQuery := `INSERT INTO categories (id, guid, name, description, subcategories, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`
 	_, cacheErr := cacheDB.Exec(cacheQuery,
 		category.ID,
+		category.GUID,
 		category.Name,
 		category.Description,
 		category.Subcategories,
@@ -171,12 +187,13 @@ func CreateCategory(input CategoryInput) (*Category, error) {
 
 // GetCategory retrieves a category by ID from cache
 func GetCategory(id int64) (*Category, error) {
-	query := `SELECT id, name, description, subcategories, created_at, updated_at
+	query := `SELECT id, guid, name, description, subcategories, created_at, updated_at
 		FROM categories WHERE id = ?`
 
 	var category Category
 	err := cacheDB.QueryRow(query, id).Scan(
 		&category.ID,
+		&category.GUID,
 		&category.Name,
 		&category.Description,
 		&category.Subcategories,
@@ -195,7 +212,7 @@ func GetCategory(id int64) (*Category, error) {
 
 // ListCategories retrieves all categories from cache
 func ListCategories(limit, offset int) ([]Category, error) {
-	query := `SELECT id, name, description, subcategories, created_at, updated_at
+	query := `SELECT id, guid, name, description, subcategories, created_at, updated_at
 		FROM categories ORDER BY created_at DESC`
 
 	if limit > 0 {
@@ -216,6 +233,7 @@ func ListCategories(limit, offset int) ([]Category, error) {
 		var category Category
 		err := rows.Scan(
 			&category.ID,
+			&category.GUID,
 			&category.Name,
 			&category.Description,
 			&category.Subcategories,
@@ -235,14 +253,15 @@ func ListCategories(limit, offset int) ([]Category, error) {
 	return categories, nil
 }
 
-// UpdateCategory updates a category in both disk and cache databases
+// UpdateCategory updates a category in both disk and cache databases.
+// Records a category change with a delta fragment for sync.
 func UpdateCategory(id int64, input CategoryInput) (*Category, error) {
 	if input.Name == "" {
 		return nil, serr.New("category name is required")
 	}
 
-	// Verify category exists
-	_, err := GetCategory(id)
+	// Fetch existing category for change tracking (need to compare before/after)
+	existing, err := GetCategory(id)
 	if err != nil {
 		return nil, err
 	}
@@ -275,12 +294,13 @@ func UpdateCategory(id int64, input CategoryInput) (*Category, error) {
 	}
 
 	// Fetch the updated record
-	selectQuery := `SELECT id, name, description, subcategories, created_at, updated_at
+	selectQuery := `SELECT id, guid, name, description, subcategories, created_at, updated_at
 		FROM categories WHERE id = ?`
 
 	var category Category
 	err = db.QueryRow(selectQuery, id).Scan(
 		&category.ID,
+		&category.GUID,
 		&category.Name,
 		&category.Description,
 		&category.Subcategories,
@@ -307,13 +327,17 @@ func UpdateCategory(id int64, input CategoryInput) (*Category, error) {
 		return &category, serr.Wrap(cacheErr, "category updated on disk but cache update failed")
 	}
 
+	// Record change for sync (non-blocking)
+	recordCategoryUpdateChange(*existing, category, input)
+
 	return &category, nil
 }
 
-// DeleteCategory deletes a category from both disk and cache databases
+// DeleteCategory deletes a category from both disk and cache databases.
+// Records a category delete change for sync.
 func DeleteCategory(id int64) error {
-	// Verify category exists
-	_, err := GetCategory(id)
+	// Fetch category for GUID (needed for change tracking)
+	existing, err := GetCategory(id)
 	if err != nil {
 		return err
 	}
@@ -330,6 +354,9 @@ func DeleteCategory(id int64) error {
 	if cacheErr != nil {
 		return serr.Wrap(cacheErr, "category deleted from disk but cache delete failed")
 	}
+
+	// Record change for sync (non-blocking)
+	recordCategoryDeleteChange(existing.GUID)
 
 	return nil
 }
@@ -428,6 +455,9 @@ func AddCategoryToNoteWithSubcategories(noteID, categoryID int64, subcategories 
 		return serr.Wrap(cacheErr, "relationship created on disk but cache update failed")
 	}
 
+	// Record note-category mapping change for sync (non-blocking)
+	recordNoteCategoryMappingChange(noteID)
+
 	return nil
 }
 
@@ -467,6 +497,9 @@ func UpdateNoteCategorySubcategories(noteID, categoryID int64, subcategories []s
 		return serr.Wrap(cacheErr, "subcategories updated on disk but cache update failed")
 	}
 
+	// Record note-category mapping change for sync (non-blocking)
+	recordNoteCategoryMappingChange(noteID)
+
 	return nil
 }
 
@@ -493,12 +526,15 @@ func RemoveCategoryFromNote(noteID, categoryID int64) error {
 		return serr.Wrap(cacheErr, "relationship deleted from disk but cache delete failed")
 	}
 
+	// Record note-category mapping change for sync (non-blocking)
+	recordNoteCategoryMappingChange(noteID)
+
 	return nil
 }
 
 // GetNoteCategories retrieves all categories for a note
 func GetNoteCategories(noteID int64) ([]Category, error) {
-	query := `SELECT c.id, c.name, c.description, c.subcategories, c.created_at, c.updated_at
+	query := `SELECT c.id, c.guid, c.name, c.description, c.subcategories, c.created_at, c.updated_at
 		FROM categories c
 		INNER JOIN note_categories nc ON c.id = nc.category_id
 		WHERE nc.note_id = ?
@@ -515,6 +551,7 @@ func GetNoteCategories(noteID int64) ([]Category, error) {
 		var category Category
 		err := rows.Scan(
 			&category.ID,
+			&category.GUID,
 			&category.Name,
 			&category.Description,
 			&category.Subcategories,
@@ -539,7 +576,7 @@ func GetNoteCategories(noteID int64) ([]Category, error) {
 // category data, this also pulls nc.subcategories from the junction table so the caller
 // knows which subcategories the user chose when linking the category to the note.
 func GetNoteCategoryDetails(noteID int64) ([]NoteCategoryDetailOutput, error) {
-	query := `SELECT c.id, c.name, c.description, c.subcategories, c.created_at, c.updated_at,
+	query := `SELECT c.id, c.guid, c.name, c.description, c.subcategories, c.created_at, c.updated_at,
 		nc.subcategories
 		FROM categories c
 		INNER JOIN note_categories nc ON c.id = nc.category_id
@@ -559,7 +596,7 @@ func GetNoteCategoryDetails(noteID int64) ([]NoteCategoryDetailOutput, error) {
 			selectedSubcJSON sql.NullString
 		)
 		err := rows.Scan(
-			&cat.ID, &cat.Name, &cat.Description, &cat.Subcategories,
+			&cat.ID, &cat.GUID, &cat.Name, &cat.Description, &cat.Subcategories,
 			&cat.CreatedAt, &cat.UpdatedAt,
 			&selectedSubcJSON,
 		)
@@ -651,12 +688,13 @@ func GetCategoryNotes(categoryID int64) ([]Note, error) {
 // GetCategoryByName retrieves a category by its name from cache.
 // Returns nil, nil if the category doesn't exist.
 func GetCategoryByName(name string) (*Category, error) {
-	query := `SELECT id, name, description, subcategories, created_at, updated_at
+	query := `SELECT id, guid, name, description, subcategories, created_at, updated_at
 		FROM categories WHERE name = ?`
 
 	var category Category
 	err := cacheDB.QueryRow(query, name).Scan(
 		&category.ID,
+		&category.GUID,
 		&category.Name,
 		&category.Description,
 		&category.Subcategories,

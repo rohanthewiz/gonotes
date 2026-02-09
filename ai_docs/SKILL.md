@@ -528,15 +528,62 @@ specified subcategories selected are returned.
 
 ## Sync API
 
-The sync API enables peer-to-peer synchronization between devices.
+The sync API enables peer-to-peer synchronization between devices using a hub-and-spoke
+topology. Spokes pull changes from the hub first (rebase model), then push their local changes.
 
 ### Change Tracking
 
-Every note create/update/delete automatically creates a change record with:
-- Delta storage: Only changed fields are recorded
+Every note and category create/update/delete automatically creates a change record with:
+- Delta storage: Only changed fields are recorded in fragments
 - Bitmask: Indicates which fields changed
 - User tracking: Who made the change
 - Timestamps: When the change occurred
+- Body diffs: Note body updates may store unified diff patches instead of full text
+
+### Unified SyncChange Envelope
+
+The sync protocol uses a unified `SyncChange` envelope that wraps both note and category
+changes into a single chronologically ordered stream:
+
+```json
+{
+  "id": 42,
+  "guid": "change-uuid",
+  "entity_type": "note",
+  "entity_guid": "note-uuid",
+  "operation": 1,
+  "fragment": {
+    "bitmask": 224,
+    "title": "New Title",
+    "body": "Body content",
+    "body_is_diff": false
+  },
+  "authored_at": "RFC3339 timestamp",
+  "user": "user-guid",
+  "created_at": "RFC3339 timestamp"
+}
+```
+
+**Entity Types:** `"note"` or `"category"`
+
+**Operation Values:**
+- `1`: Create — New entity created
+- `2`: Update — Entity fields modified
+- `3`: Delete — Entity deleted (soft delete for notes, hard delete for categories)
+- `9`: Sync — Change received from a peer
+
+**Note Fragment Bitmask Values:**
+- `0x80` (128): Title changed
+- `0x40` (64): Description changed
+- `0x20` (32): Body changed
+- `0x10` (16): Tags changed (deprecated — tags no longer used by UI)
+- `0x08` (8): IsPrivate changed
+- `0x04` (4): Categories changed
+
+**Category Fragment Bitmask Values:**
+- `0x80` (128): Name changed
+- `0x40` (64): Description changed
+- `0x20` (32): Subcategories changed
 
 ### Sync Endpoints
 
@@ -544,6 +591,9 @@ Every note create/update/delete automatically creates a change record with:
 ```
 GET /api/v1/sync/changes
 ```
+Returns note-only changes for the authenticated user since a timestamp.
+This is the older, note-specific endpoint. For unified note+category sync, use Pull/Push below.
+
 **Query Parameters:**
 - `since` (RFC3339 timestamp, required): Return changes after this time
 - `limit` (int, optional): Maximum number of changes to return
@@ -570,19 +620,207 @@ GET /api/v1/sync/changes
 }
 ```
 
-**Operation Values:**
-- `1`: Create - New note created
-- `2`: Update - Note fields modified
-- `3`: Delete - Note soft-deleted
-- `9`: Sync - Change received from peer
+---
 
-**Fragment Bitmask Values:**
-- `0x80` (128): Title changed
-- `0x40` (64): Description changed
-- `0x20` (32): Body changed
-- `0x10` (16): Tags changed (deprecated — tags no longer used by UI)
-- `0x08` (8): IsPrivate changed
-- `0x04` (4): Categories changed
+#### Pull Changes (Unified)
+```
+GET /api/v1/sync/pull
+```
+Returns a unified, chronologically ordered stream of note and category changes that
+haven't been sent to the requesting peer yet. Changes are automatically marked as
+synced to this peer after delivery.
+
+**Query Parameters:**
+- `peer_id` (string, required): Unique identifier for the requesting peer
+- `limit` (int, optional, default: 100): Maximum number of changes to return
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "changes": [
+      {
+        "id": 1,
+        "guid": "change-uuid",
+        "entity_type": "category",
+        "entity_guid": "cat-uuid",
+        "operation": 1,
+        "fragment": {
+          "bitmask": 224,
+          "name": "Kubernetes",
+          "description": "Container orchestration",
+          "subcategories": "[\"pod\",\"deployment\"]"
+        },
+        "authored_at": "RFC3339 timestamp",
+        "user": "user-guid",
+        "created_at": "RFC3339 timestamp"
+      },
+      {
+        "id": 2,
+        "guid": "change-uuid-2",
+        "entity_type": "note",
+        "entity_guid": "note-uuid",
+        "operation": 1,
+        "fragment": {
+          "bitmask": 224,
+          "title": "My Note",
+          "body": "Note content",
+          "body_is_diff": false
+        },
+        "authored_at": "RFC3339 timestamp",
+        "user": "user-guid",
+        "created_at": "RFC3339 timestamp"
+      }
+    ],
+    "has_more": false
+  }
+}
+```
+
+**Notes:**
+- Categories are sorted before notes at the same timestamp so category definitions exist before note-category mappings reference them
+- `has_more: true` indicates the client should issue another pull for remaining changes
+- Changes are marked as synced to this peer after delivery
+
+---
+
+#### Push Changes (Unified)
+```
+POST /api/v1/sync/push
+```
+Accepts a batch of SyncChanges from a peer and applies them locally. Each change is
+checked for idempotency — duplicate change GUIDs and duplicate entity GUIDs on creates
+are accepted silently (not rejected).
+
+**Request Body:**
+```json
+{
+  "peer_id": "spoke-laptop-001",
+  "changes": [
+    {
+      "guid": "change-uuid",
+      "entity_type": "note",
+      "entity_guid": "note-uuid",
+      "operation": 1,
+      "fragment": {
+        "bitmask": 224,
+        "title": "New Note from Spoke",
+        "body": "Content",
+        "body_is_diff": false
+      },
+      "authored_at": "2025-01-15T10:00:00Z",
+      "user": "user-guid"
+    }
+  ]
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "accepted": ["change-uuid"],
+    "rejected": []
+  }
+}
+```
+
+**Rejected changes include a reason:**
+```json
+{
+  "rejected": [
+    {
+      "guid": "change-uuid-2",
+      "reason": "failed to apply sync note update: note not found"
+    }
+  ]
+}
+```
+
+---
+
+#### Get Entity Snapshot
+```
+GET /api/v1/sync/snapshot
+```
+Returns the full current state of a single entity as a SyncChange with operation=Create
+and all fields populated. Useful for initial sync or conflict resolution.
+
+**Query Parameters:**
+- `entity_type` (string, required): `"note"` or `"category"`
+- `entity_guid` (string, required): GUID of the entity to snapshot
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "guid": "snapshot-guid",
+    "entity_type": "note",
+    "entity_guid": "note-uuid",
+    "operation": 1,
+    "fragment": {
+      "bitmask": 248,
+      "title": "Full Note Title",
+      "description": "Full description",
+      "body": "Full body content",
+      "body_is_diff": false,
+      "is_private": false
+    },
+    "authored_at": "RFC3339 timestamp",
+    "user": "user-guid",
+    "created_at": "RFC3339 timestamp"
+  }
+}
+```
+
+**Errors:**
+- `400`: Missing or invalid `entity_type`/`entity_guid`
+- `404`: Entity not found
+
+---
+
+#### Get Sync Status
+```
+GET /api/v1/sync/status
+```
+Returns note/category counts and a content-based checksum. Peers compare checksums to
+quickly detect whether their data sets have diverged without exchanging records.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "note_count": 42,
+    "category_count": 5,
+    "checksum": "a3f2b8c9d1e4..."
+  }
+}
+```
+
+The checksum is SHA-256 of sorted note GUIDs + sorted category GUIDs (non-deleted entities only).
+
+---
+
+#### Health Check
+```
+GET /api/v1/health
+```
+Lightweight, unauthenticated endpoint. Returns 200 OK if the server is running.
+Used by peers for connectivity checks and monitoring systems.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "status": "ok"
+  }
+}
+```
 
 ---
 
@@ -624,20 +862,27 @@ All error responses follow this format:
 
 ### Tables
 
-1. **users** - User accounts
-2. **notes** - User notes with soft delete support
-3. **categories** - Category definitions
-4. **note_categories** - Many-to-many note-category relationships
-5. **note_changes** - Change tracking for sync
-6. **note_fragments** - Delta storage for changes
-7. **note_change_sync_peers** - Per-peer sync tracking
+1. **users** — User accounts (id, guid, username, password_hash, email, ...)
+2. **notes** — User notes with soft delete (id, guid, title, body, authored_at*, ...)
+3. **categories** — Category definitions (id, guid, name, subcategories, ...)
+4. **note_categories** — Many-to-many note-category junction (note_id, category_id, subcategories)
+5. **note_fragments** — Delta storage for note changes (bitmask, changed fields, body_is_diff)
+6. **note_changes** — Note change log (guid, note_guid, operation, note_fragment_id)
+7. **note_change_sync_peers** — Per-peer note sync tracking (note_change_id, peer_id, synced_at)
+8. **category_fragments** — Delta storage for category changes (bitmask, changed fields)
+9. **category_changes** — Category change log (guid, category_guid, operation, category_fragment_id)
+10. **category_change_sync_peers** — Per-peer category sync tracking (category_change_id, peer_id, synced_at)
+
+*`authored_at` exists only in the disk database, not in the in-memory cache.
 
 ### Key Design Patterns
 
 - **Disk + Cache**: DuckDB disk database is source of truth; in-memory cache for fast reads
-- **Soft Deletes**: Notes use `deleted_at` timestamp instead of hard delete
+- **Soft Deletes**: Notes use `deleted_at` timestamp (categories use hard delete)
 - **User Scoping**: All note operations filter by `created_by` to enforce ownership
-- **Delta Sync**: Only changed fields are stored and transmitted
+- **Delta Sync**: Only changed fields stored in fragments with bitmask indicators
+- **Body Diffs**: Note body updates store unified diff patches (`body_is_diff=true`) to minimize transfer size
+- **Per-Peer Tracking**: Each sync peer has a stable ID; `*_sync_peers` tables track which changes have been sent to which peer
 
 ---
 

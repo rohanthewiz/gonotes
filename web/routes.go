@@ -80,4 +80,13 @@ func setupRoutes(s *rweb.Server) {
 	// =========================================
 	// Used for peer-to-peer synchronization between devices/clients
 	s.Get("/api/v1/sync/changes", api.GetUserChanges) // Get user's changes since timestamp
+
+	// Unified sync protocol endpoints — peers pull/push via these
+	s.Get("/api/v1/sync/pull", api.PullChanges)       // Pull unsent changes for a peer
+	s.Post("/api/v1/sync/push", api.PushChanges)      // Push changes from a peer
+	s.Get("/api/v1/sync/snapshot", api.GetSnapshot)    // Get full entity snapshot
+	s.Get("/api/v1/sync/status", api.GetSyncStatus)    // Get sync status with checksum
+
+	// Health check — no auth required, used by peers and monitoring
+	s.Get("/api/v1/health", api.HealthCheck)
 }

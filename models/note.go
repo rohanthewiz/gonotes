@@ -515,10 +515,11 @@ func UpdateNote(id int64, input NoteInput, userGUID string) (*Note, error) {
 	}
 
 	// Record change for sync (non-blocking)
-	// Only track fields that actually changed
+	// Only track fields that actually changed. Pass existing note so that
+	// body diffs can be computed against the previous body content.
 	bitmask := computeChangeBitmask(existing, input)
 	if bitmask != 0 {
-		fragment := createDeltaFragment(input, bitmask)
+		fragment := createDeltaFragment(existing, input, bitmask)
 		if fragmentID, err := insertNoteFragment(fragment); err != nil {
 			logger.LogErr(err, "failed to record update fragment", "note_id", id)
 		} else {

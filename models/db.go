@@ -98,6 +98,25 @@ func createTables() error {
 		return serr.Wrap(err, "failed to create categories table")
 	}
 
+	// Migration: add guid column to categories for cross-machine identity
+	_, err = db.Exec(`ALTER TABLE categories ADD COLUMN IF NOT EXISTS guid VARCHAR`)
+	if err != nil {
+		return serr.Wrap(err, "failed to add guid column to categories")
+	}
+
+	// Backfill GUIDs for existing categories that don't have one.
+	// Uses DuckDB's built-in uuid() function to generate UUIDs.
+	_, err = db.Exec(`UPDATE categories SET guid = uuid() WHERE guid IS NULL`)
+	if err != nil {
+		return serr.Wrap(err, "failed to backfill category GUIDs")
+	}
+
+	// Create unique index on category guid for sync lookups
+	_, err = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_guid ON categories(guid)`)
+	if err != nil {
+		return serr.Wrap(err, "failed to create categories guid index")
+	}
+
 	_, err = db.Exec(CreateNoteCategoriesTableSQL)
 	if err != nil {
 		return serr.Wrap(err, "failed to create note_categories table")
@@ -120,6 +139,14 @@ func createTables() error {
 	_, err = db.Exec(DDLCreateNoteFragmentsTable)
 	if err != nil {
 		return serr.Wrap(err, "failed to create note_fragments table")
+	}
+
+	// Migration: add body_is_diff column for existing note_fragments tables.
+	// This flag indicates whether the body column contains a unified diff patch
+	// (true) or a full body snapshot (false). Existing rows default to false.
+	_, err = db.Exec(`ALTER TABLE note_fragments ADD COLUMN IF NOT EXISTS body_is_diff BOOLEAN DEFAULT false`)
+	if err != nil {
+		return serr.Wrap(err, "failed to add body_is_diff column to note_fragments")
 	}
 
 	// Create note_changes table (references note_fragments)
@@ -152,6 +179,48 @@ func createTables() error {
 	_, err = db.Exec(DDLCreateNoteChangeSyncPeersIndexPeerID)
 	if err != nil {
 		return serr.Wrap(err, "failed to create note_change_sync_peers peer_id index")
+	}
+
+	// Create category change tracking tables for peer-to-peer sync
+	// Parallel structure to note change tracking
+	_, err = db.Exec(DDLCreateCategoryFragmentsSequence)
+	if err != nil {
+		return serr.Wrap(err, "failed to create category_fragments sequence")
+	}
+
+	_, err = db.Exec(DDLCreateCategoryFragmentsTable)
+	if err != nil {
+		return serr.Wrap(err, "failed to create category_fragments table")
+	}
+
+	_, err = db.Exec(DDLCreateCategoryChangesSequence)
+	if err != nil {
+		return serr.Wrap(err, "failed to create category_changes sequence")
+	}
+
+	_, err = db.Exec(DDLCreateCategoryChangesTable)
+	if err != nil {
+		return serr.Wrap(err, "failed to create category_changes table")
+	}
+
+	_, err = db.Exec(DDLCreateCategoryChangesIndexCategoryGUID)
+	if err != nil {
+		return serr.Wrap(err, "failed to create category_changes category_guid index")
+	}
+
+	_, err = db.Exec(DDLCreateCategoryChangesIndexCreatedAt)
+	if err != nil {
+		return serr.Wrap(err, "failed to create category_changes created_at index")
+	}
+
+	_, err = db.Exec(DDLCreateCategoryChangeSyncPeersTable)
+	if err != nil {
+		return serr.Wrap(err, "failed to create category_change_sync_peers table")
+	}
+
+	_, err = db.Exec(DDLCreateCategoryChangeSyncPeersIndexPeerID)
+	if err != nil {
+		return serr.Wrap(err, "failed to create category_change_sync_peers peer_id index")
 	}
 
 	return nil
@@ -340,7 +409,7 @@ func syncCacheFromDisk() error {
 // syncCategoriesFromDisk loads all categories from the disk database into the cache.
 func syncCategoriesFromDisk() (int, error) {
 	query := `
-		SELECT id, name, description, subcategories, created_at, updated_at
+		SELECT id, guid, name, description, subcategories, created_at, updated_at
 		FROM categories
 	`
 
@@ -351,8 +420,8 @@ func syncCategoriesFromDisk() (int, error) {
 	defer rows.Close()
 
 	insertQuery := `
-		INSERT INTO categories (id, name, description, subcategories, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO categories (id, guid, name, description, subcategories, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`
 
 	count := 0
@@ -360,7 +429,7 @@ func syncCategoriesFromDisk() (int, error) {
 		var category Category
 
 		err := rows.Scan(
-			&category.ID, &category.Name, &category.Description,
+			&category.ID, &category.GUID, &category.Name, &category.Description,
 			&category.Subcategories, &category.CreatedAt, &category.UpdatedAt,
 		)
 		if err != nil {
@@ -368,7 +437,7 @@ func syncCategoriesFromDisk() (int, error) {
 		}
 
 		_, err = cacheDB.Exec(insertQuery,
-			category.ID, category.Name, category.Description,
+			category.ID, category.GUID, category.Name, category.Description,
 			category.Subcategories, category.CreatedAt, category.UpdatedAt,
 		)
 		if err != nil {
@@ -380,9 +449,6 @@ func syncCategoriesFromDisk() (int, error) {
 	if err = rows.Err(); err != nil {
 		return 0, serr.Wrap(err, "error iterating categories from disk")
 	}
-
-	// Note: Sequence syncing is not needed for the cache since all inserts
-	// use explicit IDs from the disk database (source of truth)
 
 	return count, nil
 }
