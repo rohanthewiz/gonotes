@@ -1622,6 +1622,197 @@ input, textarea, select {
 }
 
 /* ============================================
+   Sync Controls & Stats
+   ============================================ */
+
+/* Sync button spin animation */
+#btn-sync.syncing #sync-icon {
+  display: inline-block;
+  animation: spin 1s linear infinite;
+}
+
+/* Sync control rows in filter panel */
+.sync-control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-sm);
+}
+
+.sync-control-label {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  min-width: 70px;
+}
+
+/* Auto-sync toggle switch */
+.sync-toggle {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.sync-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.sync-toggle .slider {
+  position: absolute;
+  inset: 0;
+  background: var(--border-dark);
+  border-radius: 20px;
+  transition: var(--transition-fast);
+  cursor: pointer;
+}
+
+.sync-toggle .slider::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  bottom: 2px;
+  width: 16px;
+  height: 16px;
+  background: white;
+  border-radius: 50%;
+  transition: var(--transition-fast);
+}
+
+.sync-toggle input:checked + .slider {
+  background: var(--primary);
+}
+
+.sync-toggle input:checked + .slider::before {
+  transform: translateX(16px);
+}
+
+/* Sync interval select */
+.sync-select {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  font-size: var(--font-size-xs);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+/* Peer URL row */
+.sync-peer-row {
+  flex-wrap: wrap;
+}
+
+.sync-peer-input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.sync-peer-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+/* Sync Now button */
+.sync-now-btn {
+  width: 100%;
+}
+
+/* Sync stats in filter panel */
+.sync-stats {
+  padding: var(--spacing-sm) 0;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.sync-stat-row {
+  margin-bottom: var(--spacing-xs);
+}
+
+.sync-stat-sep {
+  margin: 0 var(--spacing-sm);
+}
+
+/* Sync stats in status bar */
+.sync-stat {
+  margin-left: var(--spacing-sm);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.sync-stat:empty {
+  display: none;
+}
+
+.sync-conflicts {
+  color: var(--warning);
+  cursor: pointer;
+}
+
+.sync-conflicts:hover {
+  text-decoration: underline;
+}
+
+/* btn-link style for inline links */
+.btn-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.btn-link:hover {
+  opacity: 0.8;
+}
+
+/* btn-sm for small buttons */
+.btn-sm {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: var(--font-size-xs);
+}
+
+/* Conflict resolution actions */
+.conflict-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  justify-content: center;
+  margin-top: var(--spacing-md);
+}
+
+/* Conflict compare layout */
+.conflict-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-lg);
+  margin: var(--spacing-lg) 0;
+}
+
+.conflict-version {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.conflict-version h4 {
+  font-size: var(--font-size-sm);
+  margin-bottom: var(--spacing-sm);
+  color: var(--text-secondary);
+}
+
+/* ============================================
    Responsive Design
    ============================================ */
 
