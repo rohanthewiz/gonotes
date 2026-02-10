@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"gonotes/models"
 
@@ -62,11 +63,11 @@ func Register(ctx rweb.Context) error {
 	if err != nil {
 		errMsg := err.Error()
 		// Check for duplicate username/email
-		if containsSubstr(errMsg, "already exists") {
+		if strings.Contains(errMsg, "already exists") {
 			return writeError(ctx, http.StatusConflict, errMsg)
 		}
 		// Check for validation errors
-		if containsSubstr(errMsg, "must be") || containsSubstr(errMsg, "can only") {
+		if strings.Contains(errMsg, "must be") || strings.Contains(errMsg, "can only") {
 			return writeError(ctx, http.StatusBadRequest, errMsg)
 		}
 		logger.LogErr(serr.Wrap(err, "failed to create user"), "username", input.Username)
@@ -137,7 +138,7 @@ func Login(ctx rweb.Context) error {
 	if err != nil {
 		errMsg := err.Error()
 		// Check for disabled account
-		if containsSubstr(errMsg, "disabled") {
+		if strings.Contains(errMsg, "disabled") {
 			return writeError(ctx, http.StatusForbidden, "account is disabled")
 		}
 		logger.LogErr(serr.Wrap(err, "authentication error"), "username", input.Username)
@@ -258,12 +259,3 @@ func IsAuthenticated(ctx rweb.Context) bool {
 	return auth
 }
 
-// containsSubstr checks if a string contains a substring
-func containsSubstr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if i+len(substr) <= len(s) && s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}

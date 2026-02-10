@@ -2,6 +2,7 @@ package models
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -206,11 +207,11 @@ func CreateUser(input UserRegisterInput) (*User, error) {
 	if err != nil {
 		// Check for unique constraint violations
 		errStr := err.Error()
-		if contains(errStr, "UNIQUE") || contains(errStr, "unique") || contains(errStr, "duplicate") {
-			if contains(errStr, "username") {
+		if strings.Contains(errStr, "UNIQUE") || strings.Contains(errStr, "unique") || strings.Contains(errStr, "duplicate") {
+			if strings.Contains(errStr, "username") {
 				return nil, serr.New("username already exists")
 			}
-			if contains(errStr, "email") {
+			if strings.Contains(errStr, "email") {
 				return nil, serr.New("email already exists")
 			}
 			return nil, serr.New("username or email already exists")
@@ -221,20 +222,6 @@ func CreateUser(input UserRegisterInput) (*User, error) {
 	return user, nil
 }
 
-// contains checks if a string contains a substring (case-insensitive helper)
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
 
 // GetUserByUsername retrieves a user by their username.
 // Returns nil, nil if user not found.
