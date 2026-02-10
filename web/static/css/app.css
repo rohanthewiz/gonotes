@@ -939,6 +939,24 @@ input, textarea, select {
   max-width: 100%;
   height: auto;
   border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+/* Mermaid diagram blocks */
+.markdown-content .mermaid-diagram {
+  display: flex;
+  justify-content: center;
+  margin: var(--spacing-lg) 0;
+  padding: var(--spacing-lg);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+
+.markdown-content .mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
 }
 
 .markdown-content table {
@@ -1225,6 +1243,103 @@ input, textarea, select {
 
 .edit-body:focus {
   outline: none;
+}
+
+/* Drag-over visual feedback for image drop */
+.edit-body.drag-over {
+  background: rgba(59, 130, 246, 0.05);
+  border: 2px dashed var(--primary);
+}
+
+/* Image resize dialog */
+.image-resize-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.image-resize-dialog {
+  background: var(--bg-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: var(--spacing-xl);
+  max-width: 520px;
+  width: 90%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+.image-resize-dialog h3 {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+}
+
+.image-resize-preview {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  min-height: 120px;
+  max-height: 300px;
+  overflow: hidden;
+}
+
+.image-resize-preview img {
+  max-width: 100%;
+  max-height: 280px;
+  object-fit: contain;
+}
+
+.image-resize-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.image-resize-controls label {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.image-resize-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.image-resize-row input[type="range"] {
+  flex: 1;
+}
+
+.image-resize-row .resize-value {
+  min-width: 80px;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.image-resize-info {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+
+.image-resize-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-md);
 }
 
 .edit-footer {

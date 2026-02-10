@@ -49,6 +49,8 @@ func (p Page) renderHead(b *element.Builder) any {
 		b.Script("src", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/languages/sql.min.js").R(),
 		// MsgPack for efficient note body encoding between client and server
 		b.Script("src", "https://unpkg.com/@msgpack/msgpack@latest/dist/msgpack.min.js").R(),
+		// Mermaid.js for rendering diagrams in ```mermaid code blocks
+		b.Script("src", "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js").R(),
 	)
 }
 

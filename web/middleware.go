@@ -117,7 +117,7 @@ func SecurityHeadersMiddleware(c rweb.Context) error {
 	c.Response().SetHeader("Referrer-Policy", "strict-origin-when-cross-origin")
 
 	// Content Security Policy - adjust as needed
-	// Allow CDN domains for external libraries (marked, highlight.js, msgpack, monaco)
+	// Allow CDN domains for external libraries (marked, highlight.js, msgpack, monaco, mermaid)
 	csp := []string{
 		"default-src 'self'",
 		"script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com", // Monaco requires unsafe-eval; CDNs for libraries
