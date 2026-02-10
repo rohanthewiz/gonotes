@@ -54,11 +54,12 @@ func setupRoutes(s *rweb.Server) {
 	// This allows handlers to return proper 401 errors with JSON responses
 
 	// Notes CRUD endpoints following RESTful conventions
-	s.Post("/api/v1/notes", api.CreateNote)       // Create a new note
-	s.Get("/api/v1/notes", api.ListNotes)         // List all notes (with pagination)
-	s.Get("/api/v1/notes/:id", api.GetNote)       // Get a single note by ID
-	s.Put("/api/v1/notes/:id", api.UpdateNote)    // Update a note by ID
-	s.Delete("/api/v1/notes/:id", api.DeleteNote) // Soft delete a note by ID
+	s.Post("/api/v1/notes", api.CreateNote)           // Create a new note
+	s.Get("/api/v1/notes", api.ListNotes)             // List all notes (with pagination)
+	s.Get("/api/v1/notes/search", api.SearchNotes)    // Search notes by title (for note linking autocomplete)
+	s.Get("/api/v1/notes/:id", api.GetNote)           // Get a single note by ID
+	s.Put("/api/v1/notes/:id", api.UpdateNote)        // Update a note by ID
+	s.Delete("/api/v1/notes/:id", api.DeleteNote)     // Soft delete a note by ID
 
 	// Categories CRUD endpoints following RESTful conventions
 	s.Post("/api/v1/categories", api.CreateCategory)       // Create a new category

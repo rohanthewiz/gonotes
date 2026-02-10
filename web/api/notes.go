@@ -398,6 +398,45 @@ func UpdateNote(ctx rweb.Context) error {
 	return writeSuccess(ctx, http.StatusOK, output)
 }
 
+// SearchNotes handles GET /api/v1/notes/search?q=query
+// Returns notes matching the query string in their title, for use in note-linking autocomplete.
+// Results include id, guid, and title. Limited to 20 results.
+func SearchNotes(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
+	query := ctx.Request().QueryParam("q")
+	if query == "" {
+		return writeSuccess(ctx, http.StatusOK, []models.NoteOutput{})
+	}
+
+	notes, err := models.SearchNotesByTitle(query, userGUID, 20)
+	if err != nil {
+		logger.LogErr(serr.Wrap(err, "failed to search notes"), "database error")
+		return writeError(ctx, http.StatusInternalServerError, "database error")
+	}
+
+	// Return lightweight output with only id, guid, title for autocomplete
+	type SearchResult struct {
+		ID    int64  `json:"id"`
+		GUID  string `json:"guid"`
+		Title string `json:"title"`
+	}
+
+	results := make([]SearchResult, len(notes))
+	for i, note := range notes {
+		results[i] = SearchResult{
+			ID:    note.ID,
+			GUID:  note.GUID,
+			Title: note.Title,
+		}
+	}
+
+	return writeSuccess(ctx, http.StatusOK, results)
+}
+
 // DeleteNote handles DELETE /api/v1/notes/:id
 // Performs a soft delete on the note (sets deleted_at timestamp).
 // Only deletes notes owned by the authenticated user.
