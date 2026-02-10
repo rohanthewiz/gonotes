@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"gonotes/models"
@@ -139,6 +140,7 @@ func RateLimitMiddleware(requestsPerMinute int) rweb.Handler {
 		count    int
 	}
 
+	var mu sync.Mutex
 	visitors := make(map[string]*visitor)
 
 	return func(c rweb.Context) error {
@@ -150,6 +152,8 @@ func RateLimitMiddleware(requestsPerMinute int) rweb.Handler {
 			// Fallback to remote address from connection
 			ip = "unknown"
 		}
+
+		mu.Lock()
 
 		// Clean up old entries periodically
 		now := time.Now()
@@ -163,17 +167,21 @@ func RateLimitMiddleware(requestsPerMinute int) rweb.Handler {
 		v, exists := visitors[ip]
 		if !exists {
 			visitors[ip] = &visitor{lastSeen: now, count: 1}
+			mu.Unlock()
 		} else {
 			if now.Sub(v.lastSeen) < time.Minute {
 				v.count++
 				if v.count > requestsPerMinute {
+					mu.Unlock()
 					logger.Info("Rate limit exceeded", "ip", ip)
 					c.SetStatus(http.StatusTooManyRequests)
 					return nil
 				}
+				mu.Unlock()
 			} else {
 				v.lastSeen = now
 				v.count = 1
+				mu.Unlock()
 			}
 		}
 
