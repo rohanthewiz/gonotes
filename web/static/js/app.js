@@ -305,6 +305,28 @@
   };
 
   // ============================================
+  // Theme Toggle
+  // ============================================
+
+  window.app.toggleTheme = function() {
+    const html = document.documentElement;
+    const current = html.getAttribute('data-theme');
+    const next = current === 'dark-green' ? 'light' : 'dark-green';
+    html.setAttribute('data-theme', next);
+    localStorage.setItem('gonotes-theme', next);
+    // Update toggle button icon
+    const btn = document.getElementById('btn-theme-toggle');
+    if (btn) btn.textContent = next === 'dark-green' ? '\u2600' : '\u263E';
+    // Update highlight.js theme for code blocks
+    const hljsLink = document.getElementById('hljs-theme');
+    if (hljsLink) {
+      hljsLink.href = next === 'dark-green'
+        ? 'https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css'
+        : 'https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css';
+    }
+  };
+
+  // ============================================
   // Notes CRUD Functions
   // ============================================
 

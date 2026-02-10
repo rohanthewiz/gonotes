@@ -9,6 +9,12 @@
   --primary-dark: #2563EB;
   --primary-light: #93C5FD;
 
+  /* Colors - Primary Alpha (for focus rings, selections, subtle backgrounds) */
+  --primary-alpha-5: rgba(59, 130, 246, 0.05);
+  --primary-alpha-8: rgba(59, 130, 246, 0.08);
+  --primary-alpha-10: rgba(59, 130, 246, 0.1);
+  --primary-alpha-20: rgba(59, 130, 246, 0.2);
+
   /* Colors - Status */
   --success: #10B981;
   --success-light: #D1FAE5;
@@ -26,6 +32,11 @@
   --text-muted: #9CA3AF;
   --border-light: #E5E7EB;
   --border-dark: #D1D5DB;
+
+  /* Colors - Overlay */
+  --overlay-bg: rgba(0, 0, 0, 0.5);
+  --code-bg: #1e1e1e;
+  --code-text: #d4d4d4;
 
   /* Spacing - Base 4px */
   --spacing-xs: 4px;
@@ -61,6 +72,69 @@
   /* Transitions */
   --transition-fast: 150ms ease;
   --transition-normal: 250ms ease;
+}
+
+/* ============================================
+   Dark Green Theme
+   Charcoal backgrounds with sage green accents
+   ============================================ */
+[data-theme="dark-green"] {
+  /* Colors - Primary (green) */
+  --primary: #6B9F7B;
+  --primary-dark: #5A8E6A;
+  --primary-light: #3D5C45;
+
+  /* Colors - Primary Alpha */
+  --primary-alpha-5: rgba(107, 159, 123, 0.08);
+  --primary-alpha-8: rgba(107, 159, 123, 0.12);
+  --primary-alpha-10: rgba(107, 159, 123, 0.15);
+  --primary-alpha-20: rgba(107, 159, 123, 0.25);
+
+  /* Colors - Status */
+  --success: #4ADE80;
+  --success-light: rgba(74, 222, 128, 0.15);
+  --warning: #FBBF24;
+  --warning-light: rgba(251, 191, 36, 0.15);
+  --danger: #F87171;
+  --danger-light: rgba(248, 113, 113, 0.15);
+
+  /* Colors - Neutral (Dark Mode) */
+  --bg-primary: #2B2B2B;
+  --bg-secondary: #323232;
+  --bg-tertiary: #3A3A3A;
+  --text-primary: #D4DDD0;
+  --text-secondary: #8FA888;
+  --text-muted: #5E7A56;
+  --border-light: #404040;
+  --border-dark: #4A4A4A;
+
+  /* Colors - Overlay */
+  --overlay-bg: rgba(0, 0, 0, 0.65);
+  --code-bg: #1A1A1A;
+  --code-text: #A8D8A8;
+
+  /* Shadows - stronger for dark backgrounds */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.35);
+
+  color-scheme: dark;
+}
+
+/* Theme toggle button */
+.theme-toggle {
+  padding: var(--spacing-sm);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: var(--font-size-md);
+  line-height: 1;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.theme-toggle:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
 }
 
 /* ============================================
@@ -281,7 +355,7 @@ input, textarea, select {
 .search-bar-input:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px var(--primary-alpha-10);
 }
 
 /* Category dropdown in the search bar */
@@ -300,7 +374,7 @@ input, textarea, select {
 .search-bar-select:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px var(--primary-alpha-10);
 }
 
 /* Subcategory chips container — shown when a category with subcats is selected */
@@ -336,7 +410,7 @@ input, textarea, select {
 }
 
 .subcat-chip.active {
-  background: rgba(59, 130, 246, 0.1);
+  background: var(--primary-alpha-10);
   border-color: var(--primary);
   color: var(--primary);
   font-weight: 500;
@@ -384,7 +458,7 @@ input, textarea, select {
 .search-input:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px var(--primary-alpha-10);
 }
 
 .search-icon {
@@ -599,7 +673,7 @@ input, textarea, select {
 }
 
 .note-row.selected {
-  background: rgba(59, 130, 246, 0.05);
+  background: var(--primary-alpha-5);
   border-left: 3px solid var(--primary);
 }
 
@@ -653,8 +727,8 @@ input, textarea, select {
   min-width: 0;
   max-width: 200px;
   padding: 1px 6px;
-  background: rgba(59, 130, 246, 0.08);
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: var(--primary-alpha-8);
+  border: 1px solid var(--primary-alpha-20);
   border-radius: var(--radius-sm);
 }
 
@@ -840,7 +914,7 @@ input, textarea, select {
   font-weight: 700;
   color: var(--primary-dark);
   padding: 2px 8px;
-  background: rgba(59, 130, 246, 0.1);
+  background: var(--primary-alpha-10);
   border-radius: var(--radius-sm);
   white-space: nowrap;
 }
@@ -905,8 +979,8 @@ input, textarea, select {
 }
 
 .markdown-content pre {
-  background: #1e1e1e;
-  color: #d4d4d4;
+  background: var(--code-bg);
+  color: var(--code-text);
   padding: var(--spacing-lg);
   border-radius: var(--radius-md);
   overflow-x: auto;
@@ -1057,12 +1131,13 @@ input, textarea, select {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   background: var(--bg-secondary);
+  color: var(--text-primary);
 }
 
 .edit-input:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px var(--primary-alpha-10);
 }
 
 /* Subcategory selection field - displayed when category has subcats */
@@ -1096,11 +1171,11 @@ input, textarea, select {
 
 .subcat-checkbox-label:hover {
   border-color: var(--primary);
-  background: rgba(59, 130, 246, 0.05);
+  background: var(--primary-alpha-5);
 }
 
 .subcat-checkbox-label:has(.subcat-checkbox:checked) {
-  background: rgba(59, 130, 246, 0.1);
+  background: var(--primary-alpha-10);
   border-color: var(--primary);
   color: var(--primary);
 }
@@ -1239,6 +1314,8 @@ input, textarea, select {
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: var(--font-size-sm);
   line-height: 1.6;
+  background: var(--bg-primary);
+  color: var(--text-primary);
 }
 
 .edit-body:focus {
@@ -1247,7 +1324,7 @@ input, textarea, select {
 
 /* Drag-over visual feedback for image drop */
 .edit-body.drag-over {
-  background: rgba(59, 130, 246, 0.05);
+  background: var(--primary-alpha-5);
   border: 2px dashed var(--primary);
 }
 
@@ -1258,7 +1335,7 @@ input, textarea, select {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--overlay-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1501,13 +1578,15 @@ input, textarea, select {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   font-size: var(--font-size-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
   transition: all var(--transition-fast);
 }
 
 .form-input:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px var(--primary-alpha-10);
 }
 
 .form-input.error {
@@ -1615,7 +1694,7 @@ input, textarea, select {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--overlay-bg);
   display: flex;
   align-items: center;
   justify-content: center;

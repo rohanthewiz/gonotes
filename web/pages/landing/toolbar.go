@@ -24,6 +24,10 @@ func (t Toolbar) Render(b *element.Builder) any {
 
 		// Right section
 		b.DivClass("toolbar-right").R(
+			// Theme toggle
+			b.Button("class", "theme-toggle", "id", "btn-theme-toggle", "onclick", "app.toggleTheme()", "title", "Toggle theme").T("\u2600"),
+			// Init toggle icon based on current theme
+			b.Script().T(`(function(){var t=localStorage.getItem('gonotes-theme')||'dark-green';var b=document.getElementById('btn-theme-toggle');if(b)b.textContent=t==='dark-green'?'\u2600':'\u263E';})()`),
 			// Sort dropdown
 			b.DivClass("dropdown").R(
 				b.ButtonClass("sort-dropdown", "onclick", "app.toggleSortMenu()").R(
