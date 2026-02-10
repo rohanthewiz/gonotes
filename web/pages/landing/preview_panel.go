@@ -89,6 +89,7 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 						b.Span().T("Private (Encrypt this note)"),
 					),
 					b.DivClass("edit-actions").R(
+						b.Button("type", "button", "class", "btn btn-secondary", "onclick", "app.showLinkNotePopup()").T("Link to Note"),
 						b.Button("type", "button", "class", "btn btn-secondary", "onclick", "app.cancelEdit()").T("Cancel"),
 						b.Button("type", "submit", "class", "btn btn-primary", "id", "btn-save").T("Save"),
 					),
