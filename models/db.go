@@ -2,6 +2,8 @@ package models
 
 import (
 	"database/sql"
+	"os"
+	"path/filepath"
 
 	_ "github.com/marcboeker/go-duckdb" // DuckDB driver registration
 	"github.com/rohanthewiz/logger"
@@ -29,6 +31,13 @@ const DBPath = "./data/notes.ddb"
 // Also initializes the in-memory cache and synchronizes it with disk data.
 func InitDB() error {
 	var err error
+
+	// Ensure the parent directory exists before opening the database.
+	// DuckDB creates the file but not the parent directory, so on a fresh
+	// machine the open would fail without this.
+	if err = os.MkdirAll(filepath.Dir(DBPath), 0o755); err != nil {
+		return serr.Wrap(err, "failed to create database directory")
+	}
 
 	// Open connection to disk DuckDB. The driver will create the file if it
 	// doesn't exist, which is the expected behavior for first-run setup.
