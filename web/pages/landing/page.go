@@ -32,10 +32,14 @@ func (p Page) renderHead(b *element.Builder) any {
 		b.Meta("charset", "UTF-8"),
 		b.Meta("name", "viewport", "content", "width=device-width, initial-scale=1.0"),
 		b.Title().T(p.Title),
+		// Inline theme init — runs before CSS to prevent flash of wrong theme
+		b.Script().T(`(function(){var t=localStorage.getItem('gonotes-theme')||'dark-green';document.documentElement.setAttribute('data-theme',t);})()`),
 		// CSS
-		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=3"),
-		// Highlight.js CSS theme - GitHub theme provides familiar, readable syntax colors
-		b.Link("rel", "stylesheet", "href", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css"),
+		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=4"),
+		// Highlight.js CSS theme - chosen based on current theme (default to dark)
+		b.Link("rel", "stylesheet", "id", "hljs-theme", "href", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css"),
+		// Update hljs theme link based on saved preference
+		b.Script().T(`(function(){var t=localStorage.getItem('gonotes-theme')||'dark-green';if(t!=='dark-green'){var l=document.getElementById('hljs-theme');if(l)l.href='https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css';}})();`),
 		// Marked.js for Markdown rendering
 		b.Script("src", "https://cdn.jsdelivr.net/npm/marked/marked.min.js").R(),
 		// DOMPurify for XSS prevention

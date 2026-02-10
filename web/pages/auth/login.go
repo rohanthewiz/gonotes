@@ -31,7 +31,9 @@ func (p LoginPage) renderHead(b *element.Builder) any {
 		b.Meta("charset", "UTF-8"),
 		b.Meta("name", "viewport", "content", "width=device-width, initial-scale=1.0"),
 		b.Title().T(p.Title),
-		b.Link("rel", "stylesheet", "href", "/static/css/app.css"),
+		// Inline theme init — runs before CSS to prevent flash of wrong theme
+		b.Script().T(`(function(){var t=localStorage.getItem('gonotes-theme')||'dark-green';document.documentElement.setAttribute('data-theme',t);})()`),
+		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=4"),
 	)
 }
 
