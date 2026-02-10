@@ -14,9 +14,10 @@
     isEditing: false,
     filters: {
       search: '',
-      categoryId: null,      // selected category ID from search bar dropdown
-      categoryName: '',       // selected category name (for display)
-      subcategories: [],      // selected subcategory chips (AND logic)
+      regex: false,            // when true, search term is treated as a regular expression
+      categoryId: null,        // selected category ID from search bar dropdown
+      categoryName: '',        // selected category name (for display)
+      subcategories: [],       // selected subcategory chips (AND logic)
       privacy: 'all',
       date: 'all',
       unsynced: false
@@ -770,24 +771,44 @@
   function getFilteredNotes() {
     let notes = [...state.notes];
 
-    // Apply search filter — supports both text match and numeric ID match.
+    // Apply search filter — supports text match, numeric ID match, and regex.
     // If the search term is purely numeric, also match against note.id
     // so users can jump directly to a note by its database ID.
     if (state.filters.search) {
       const searchTerm = state.filters.search.trim();
-      const searchLower = searchTerm.toLowerCase();
       const isNumericSearch = /^\d+$/.test(searchTerm);
 
-      notes = notes.filter(note => {
-        // ID match: if the search term is a number, check note.id
-        if (isNumericSearch && note.id === parseInt(searchTerm, 10)) {
-          return true;
+      if (state.filters.regex) {
+        // Regex mode: compile the search term as a case-insensitive regex
+        let re;
+        try {
+          re = new RegExp(searchTerm, 'i');
+        } catch (e) {
+          // Invalid regex — skip filtering until the pattern is valid
+          re = null;
         }
-        // Text match across title, description, and body
-        return note.title.toLowerCase().includes(searchLower) ||
-          (note.body && note.body.toLowerCase().includes(searchLower)) ||
-          (note.description && note.description.toLowerCase().includes(searchLower));
-      });
+        if (re) {
+          notes = notes.filter(note => {
+            if (isNumericSearch && note.id === parseInt(searchTerm, 10)) {
+              return true;
+            }
+            return re.test(note.title) ||
+              (note.body && re.test(note.body)) ||
+              (note.description && re.test(note.description));
+          });
+        }
+      } else {
+        // Substring mode (default): case-insensitive .includes()
+        const searchLower = searchTerm.toLowerCase();
+        notes = notes.filter(note => {
+          if (isNumericSearch && note.id === parseInt(searchTerm, 10)) {
+            return true;
+          }
+          return note.title.toLowerCase().includes(searchLower) ||
+            (note.body && note.body.toLowerCase().includes(searchLower)) ||
+            (note.description && note.description.toLowerCase().includes(searchLower));
+        });
+      }
     }
 
     // Apply category filter from search bar dropdown.
@@ -883,6 +904,24 @@
     }, 300);
   };
 
+  window.app.toggleRegex = function() {
+    state.filters.regex = !state.filters.regex;
+    const btn = document.getElementById('regex-toggle');
+    if (btn) {
+      btn.classList.toggle('active', state.filters.regex);
+    }
+    const input = document.getElementById('search-input');
+    if (input) {
+      input.placeholder = state.filters.regex
+        ? 'Search by regex pattern...'
+        : 'Search by text or ID...';
+    }
+    // Re-apply the current search with updated mode
+    renderNoteList();
+    updateResultCount();
+    updateActiveFilters();
+  };
+
   window.app.clearSearch = function() {
     document.getElementById('search-input').value = '';
     state.filters.search = '';
@@ -891,11 +930,16 @@
     updateActiveFilters();
   };
 
-  // clearSearchBar — resets all search bar state: text input, category dropdown, subcats
+  // clearSearchBar — resets all search bar state: text input, regex, category dropdown, subcats
   window.app.clearSearchBar = function() {
     // Reset text search
     document.getElementById('search-input').value = '';
     state.filters.search = '';
+
+    // Reset regex toggle
+    state.filters.regex = false;
+    const regexBtn = document.getElementById('regex-toggle');
+    if (regexBtn) regexBtn.classList.remove('active');
 
     // Reset category dropdown
     const select = document.getElementById('search-category-select');
@@ -936,6 +980,7 @@
   window.app.clearAllFilters = function() {
     state.filters = {
       search: '',
+      regex: false,
       categoryId: null,
       categoryName: '',
       subcategories: [],
@@ -946,6 +991,8 @@
 
     // Reset search bar UI
     document.getElementById('search-input').value = '';
+    const regexBtn = document.getElementById('regex-toggle');
+    if (regexBtn) regexBtn.classList.remove('active');
     const select = document.getElementById('search-category-select');
     if (select) select.value = '';
     window.app._renderSubcategoryChips([]);
@@ -1113,7 +1160,8 @@
     const badges = [];
 
     if (state.filters.search) {
-      badges.push(`<span class="filter-badge">Search: "${state.filters.search}"</span>`);
+      const mode = state.filters.regex ? 'Regex' : 'Search';
+      badges.push(`<span class="filter-badge">${mode}: "${escapeHtml(state.filters.search)}"</span>`);
     }
     if (state.filters.categoryName) {
       let catBadge = state.filters.categoryName;

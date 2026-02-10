@@ -416,6 +416,33 @@ input, textarea, select {
   font-weight: 500;
 }
 
+/* Regex toggle button in search bar */
+.search-bar-regex-toggle {
+  flex-shrink: 0;
+  font-family: monospace;
+  font-weight: 600;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: var(--font-size-sm);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  line-height: 1;
+}
+
+.search-bar-regex-toggle:hover {
+  border-color: var(--primary-light);
+  color: var(--primary);
+}
+
+.search-bar-regex-toggle.active {
+  background: var(--primary-alpha-10);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
 /* Clear button in search bar */
 .search-bar-clear {
   flex-shrink: 0;
