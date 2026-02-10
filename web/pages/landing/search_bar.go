@@ -26,6 +26,11 @@ func (s SearchBar) Render(b *element.Builder) (x any) {
 				"autocomplete", "off"),
 		),
 
+		// Regex toggle — switches search between substring and regular expression mode
+		b.Button("class", "btn btn-secondary search-bar-regex-toggle", "id", "regex-toggle",
+			"onclick", "app.toggleRegex()",
+			"title", "Toggle regular expression search").T(".*"),
+
 		// Category dropdown — populated from state.categories by JS on init
 		b.Select("class", "search-bar-select", "id", "search-category-select",
 			"onchange", "app.handleCategoryFilter(this.value)").R(
