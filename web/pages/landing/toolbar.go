@@ -12,8 +12,12 @@ type Toolbar struct{}
 // Render implements the element.Component interface
 func (t Toolbar) Render(b *element.Builder) any {
 	b.HeaderClass("toolbar").R(
-		// Left group — search and filter controls pushed to the left edge
+		// Left group — logo, search, and filter controls pushed to the left edge
 		b.DivClass("toolbar-left").R(
+			// App logo — inline SVG so it doesn't require a separate file request
+			b.A("href", "/", "class", "toolbar-logo", "title", "GoNotes").R(
+				b.Text(`<svg width="34" height="34" viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg"><rect width="500" height="500" rx="40" fill="#6b9f7b"/><rect x="40" y="180" width="80" height="25" rx="12.5" fill="white" fill-opacity="0.8"/><rect x="20" y="235" width="110" height="25" rx="12.5" fill="white" fill-opacity="0.9"/><rect x="50" y="290" width="70" height="25" rx="12.5" fill="white" fill-opacity="0.7"/><text x="300" y="285" font-family="Arial,sans-serif" font-weight="900" font-size="180" fill="white" text-anchor="middle">GN</text></svg>`),
+			),
 			// Search input — reuses id="search-input" so "/" shortcut keeps working
 			b.DivClass("search-bar-input-wrapper").R(
 				b.SpanClass("search-bar-icon").T("🔍"),
