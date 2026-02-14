@@ -276,19 +276,52 @@ input, textarea, select {
   font-weight: 400;
 }
 
-.sort-dropdown {
+/* Sort control — two-part button: field name + direction arrow */
+.sort-control {
   display: flex;
   align-items: center;
-  gap: var(--spacing-xs);
+}
+
+/* Keep the dropdown inline so the direction arrow sits beside it */
+.sort-control > .dropdown {
+  display: inline-block;
+}
+
+/* Left half: column name that opens the field picker dropdown */
+.sort-field-btn {
+  display: inline-flex;
+  align-items: center;
   padding: var(--spacing-sm) var(--spacing-md);
   background: var(--bg-tertiary);
   border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
+  border-right: none;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
   cursor: pointer;
+  font-size: var(--font-size-sm);
 }
 
-.sort-dropdown:hover {
+.sort-field-btn:hover {
   border-color: var(--border-dark);
+  background: var(--border-light);
+}
+
+/* Right half: bold arrow that cycles sort direction */
+.sort-dir-btn {
+  display: flex;
+  align-items: center;
+  padding: var(--spacing-sm) var(--spacing-sm);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-light);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: var(--font-size-sm);
+  line-height: 1;
+}
+
+.sort-dir-btn:hover {
+  border-color: var(--border-dark);
+  background: var(--border-light);
 }
 
 .user-menu {
@@ -1918,7 +1951,7 @@ input, textarea, select {
     display: none;
   }
 
-  .sort-dropdown span {
+  .sort-field-btn {
     display: none;
   }
 

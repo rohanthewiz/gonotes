@@ -31,17 +31,25 @@ func (t Toolbar) Render(b *element.Builder) any {
 				"onchange", "app.handleCategoryFilter(this.value)").R(
 				b.Option("value", "").T("All Categories"),
 			),
-			// Sort dropdown — next to category for logical grouping
-			b.DivClass("dropdown").R(
-				b.ButtonClass("sort-dropdown", "onclick", "app.toggleSortMenu()").R(
-					b.Span().T("Sort: "),
-					b.Span("id", "sort-label").T("Modified"),
-					b.Span().T(" ▾"),
+			// Sort control — two-part: column name opens dropdown, arrow cycles direction
+			// Clicking column name: shows field picker (Modified / Created / Title)
+			// Clicking arrow: cycles desc (▼) → asc (▲) → off (—)
+			b.DivClass("sort-control").R(
+				b.DivClass("dropdown").R(
+					b.ButtonClass("sort-field-btn", "onclick", "app.toggleSortMenu()",
+						"title", "Choose sort field").R(
+						b.Span("id", "sort-label").T("Modified"),
+					),
+					b.Div("class", "dropdown-menu", "id", "sort-menu").R(
+						b.Div("class", "dropdown-item", "data-sort", "updated_at", "onclick", "app.setSort('updated_at')").T("Modified"),
+						b.Div("class", "dropdown-item", "data-sort", "created_at", "onclick", "app.setSort('created_at')").T("Created"),
+						b.Div("class", "dropdown-item", "data-sort", "title", "onclick", "app.setSort('title')").T("Title"),
+					),
 				),
-				b.Div("class", "dropdown-menu", "id", "sort-menu").R(
-					b.Div("class", "dropdown-item", "data-sort", "updated_at", "onclick", "app.setSort('updated_at')").T("Modified"),
-					b.Div("class", "dropdown-item", "data-sort", "created_at", "onclick", "app.setSort('created_at')").T("Created"),
-					b.Div("class", "dropdown-item", "data-sort", "title", "onclick", "app.setSort('title')").T("Title"),
+				b.Button("class", "sort-dir-btn", "id", "sort-dir-btn",
+					"onclick", "app.cycleSortDir()",
+					"title", "Toggle sort direction").R(
+					b.Span("id", "sort-dir-icon").T("▼"),
 				),
 			),
 			// Subcategory chips container — hidden until a category with subcats is chosen
@@ -54,13 +62,8 @@ func (t Toolbar) Render(b *element.Builder) any {
 		// Flexible spacer pushes the right group to the far right
 		b.DivClass("toolbar-spacer").R(),
 
-		// Right group — view indicator, new-note, theme, sync, user
+		// Right group — new-note, sync, theme, user
 		b.DivClass("toolbar-right").R(
-			// View indicator (e.g. "All Notes (12)")
-			b.DivClass("view-indicator").R(
-				b.Span("id", "view-title").T("All Notes"),
-				b.Span("class", "view-count", "id", "view-count").T(""),
-			),
 			// New Note button
 			b.Button("class", "btn btn-primary", "id", "btn-new-note", "onclick", "app.newNote()").R(
 				b.Span().T("+"),
