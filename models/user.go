@@ -24,6 +24,7 @@ type User struct {
 	PasswordHash string         `json:"-"` // Never exposed in JSON
 	DisplayName  sql.NullString `json:"display_name"`
 	IsActive     bool           `json:"is_active"`
+	IsAdmin      bool           `json:"is_admin"`
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
 	LastLoginAt  sql.NullTime   `json:"last_login_at"`
@@ -84,6 +85,7 @@ type UserOutput struct {
 	Email       *string   `json:"email,omitempty"`
 	DisplayName *string   `json:"display_name,omitempty"`
 	IsActive    bool      `json:"is_active"`
+	IsAdmin     bool      `json:"is_admin"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -95,6 +97,7 @@ func (u *User) ToOutput() UserOutput {
 		GUID:      u.GUID,
 		Username:  u.Username,
 		IsActive:  u.IsActive,
+		IsAdmin:   u.IsAdmin,
 		CreatedAt: u.CreatedAt,
 		UpdatedAt: u.UpdatedAt,
 	}
@@ -190,18 +193,26 @@ func CreateUser(input UserRegisterInput) (*User, error) {
 		displayName = sql.NullString{String: *input.DisplayName, Valid: true}
 	}
 
+	// First user automatically becomes admin — there's no other way to bootstrap
+	// admin access, and subsequent users can be promoted via invite tokens or DB.
+	isFirst, firstErr := IsFirstUser()
+	if firstErr != nil {
+		return nil, serr.Wrap(firstErr, "failed to check if first user")
+	}
+	isAdmin := isFirst
+
 	// Insert into database
 	query := `
-		INSERT INTO users (guid, username, email, password_hash, display_name)
-		VALUES (?, ?, ?, ?, ?)
-		RETURNING id, guid, username, email, password_hash, display_name, is_active,
+		INSERT INTO users (guid, username, email, password_hash, display_name, is_admin)
+		VALUES (?, ?, ?, ?, ?, ?)
+		RETURNING id, guid, username, email, password_hash, display_name, is_active, is_admin,
 		          created_at, updated_at, last_login_at
 	`
 
 	user := &User{}
-	err = db.QueryRow(query, userGUID, input.Username, email, passwordHash, displayName).Scan(
+	err = db.QueryRow(query, userGUID, input.Username, email, passwordHash, displayName, isAdmin).Scan(
 		&user.ID, &user.GUID, &user.Username, &user.Email, &user.PasswordHash,
-		&user.DisplayName, &user.IsActive, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
+		&user.DisplayName, &user.IsActive, &user.IsAdmin, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
 	)
 
 	if err != nil {
@@ -227,7 +238,7 @@ func CreateUser(input UserRegisterInput) (*User, error) {
 // Returns nil, nil if user not found.
 func GetUserByUsername(username string) (*User, error) {
 	query := `
-		SELECT id, guid, username, email, password_hash, display_name, is_active,
+		SELECT id, guid, username, email, password_hash, display_name, is_active, is_admin,
 		       created_at, updated_at, last_login_at
 		FROM users
 		WHERE username = ?
@@ -236,7 +247,7 @@ func GetUserByUsername(username string) (*User, error) {
 	user := &User{}
 	err := db.QueryRow(query, username).Scan(
 		&user.ID, &user.GUID, &user.Username, &user.Email, &user.PasswordHash,
-		&user.DisplayName, &user.IsActive, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
+		&user.DisplayName, &user.IsActive, &user.IsAdmin, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
 	)
 
 	if err == sql.ErrNoRows {
@@ -253,7 +264,7 @@ func GetUserByUsername(username string) (*User, error) {
 // Returns nil, nil if user not found.
 func GetUserByGUID(guid string) (*User, error) {
 	query := `
-		SELECT id, guid, username, email, password_hash, display_name, is_active,
+		SELECT id, guid, username, email, password_hash, display_name, is_active, is_admin,
 		       created_at, updated_at, last_login_at
 		FROM users
 		WHERE guid = ?
@@ -262,7 +273,7 @@ func GetUserByGUID(guid string) (*User, error) {
 	user := &User{}
 	err := db.QueryRow(query, guid).Scan(
 		&user.ID, &user.GUID, &user.Username, &user.Email, &user.PasswordHash,
-		&user.DisplayName, &user.IsActive, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
+		&user.DisplayName, &user.IsActive, &user.IsAdmin, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
 	)
 
 	if err == sql.ErrNoRows {
@@ -279,7 +290,7 @@ func GetUserByGUID(guid string) (*User, error) {
 // Returns nil, nil if user not found.
 func GetUserByID(id int64) (*User, error) {
 	query := `
-		SELECT id, guid, username, email, password_hash, display_name, is_active,
+		SELECT id, guid, username, email, password_hash, display_name, is_active, is_admin,
 		       created_at, updated_at, last_login_at
 		FROM users
 		WHERE id = ?
@@ -288,7 +299,7 @@ func GetUserByID(id int64) (*User, error) {
 	user := &User{}
 	err := db.QueryRow(query, id).Scan(
 		&user.ID, &user.GUID, &user.Username, &user.Email, &user.PasswordHash,
-		&user.DisplayName, &user.IsActive, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
+		&user.DisplayName, &user.IsActive, &user.IsAdmin, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
 	)
 
 	if err == sql.ErrNoRows {
@@ -352,6 +363,27 @@ func IsFirstUser() (bool, error) {
 		return false, serr.Wrap(err, "failed to count users")
 	}
 	return count == 0, nil
+}
+
+// MigrateOrphanedCategories assigns all categories with NULL created_by to the specified user.
+// Should be called after the first user registers, alongside MigrateOrphanedNotes.
+// Returns the count of migrated categories.
+func MigrateOrphanedCategories(userGUID string) (int, error) {
+	query := `UPDATE categories SET created_by = ? WHERE created_by IS NULL`
+
+	result, err := db.Exec(query, userGUID)
+	if err != nil {
+		return 0, serr.Wrap(err, "failed to migrate orphaned categories")
+	}
+
+	// Also update cache
+	_, cacheErr := cacheDB.Exec(query, userGUID)
+	if cacheErr != nil {
+		// Log but don't fail - disk is source of truth
+	}
+
+	count, _ := result.RowsAffected()
+	return int(count), nil
 }
 
 // MigrateOrphanedNotes assigns all notes with NULL created_by to the specified user.

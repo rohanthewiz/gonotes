@@ -86,9 +86,10 @@ func JWTAuthMiddleware(c rweb.Context) error {
 		return c.Next()
 	}
 
-	// Valid token - set user context
+	// Valid token - set user context including admin status for authorization checks
 	c.Set("user_guid", claims.UserGUID)
 	c.Set("username", claims.Username)
+	c.Set("is_admin", claims.IsAdmin)
 	c.Set("authenticated", true)
 
 	return c.Next()

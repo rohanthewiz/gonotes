@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 
 	"gonotes/models"
@@ -38,10 +39,20 @@ type AuthResponse struct {
 //   - 400: Invalid input (missing/weak password, invalid username)
 //   - 409: Username or email already exists
 func Register(ctx rweb.Context) error {
-	var input models.UserRegisterInput
-	if err := json.Unmarshal(ctx.Request().Body(), &input); err != nil {
+	// Registration gating logic (checked in priority order):
+	// 1. First user → allow freely (becomes admin via CreateUser)
+	// 2. invite_token → validate single-use token created by an admin
+	// 3. registration_secret → check shared env var (backward compatible)
+	// 4. Neither → reject with 403
+	var rawBody struct {
+		models.UserRegisterInput
+		RegistrationSecret string `json:"registration_secret"`
+		InviteToken        string `json:"invite_token"`
+	}
+	if err := json.Unmarshal(ctx.Request().Body(), &rawBody); err != nil {
 		return writeError(ctx, http.StatusBadRequest, "invalid request body")
 	}
+	input := rawBody.UserRegisterInput
 
 	// Validate required fields
 	if input.Username == "" {
@@ -51,11 +62,28 @@ func Register(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusBadRequest, "password is required")
 	}
 
-	// Check if this is the first user (for orphaned notes migration)
+	// Check if this is the first user (for orphaned notes migration and free registration)
 	isFirst, err := models.IsFirstUser()
 	if err != nil {
 		logger.LogErr(serr.Wrap(err, "failed to check first user"), "registration check")
 		// Continue anyway - migration is best-effort
+	}
+
+	// Apply registration gating — first user is always allowed (becomes admin),
+	// otherwise require either an invite token or registration secret
+	if !isFirst {
+		if rawBody.InviteToken != "" {
+			// Validate the invite token before proceeding with registration
+			if _, err := models.ValidateInviteToken(rawBody.InviteToken); err != nil {
+				return writeError(ctx, http.StatusForbidden, err.Error())
+			}
+		} else if requiredSecret := os.Getenv("GONOTES_REGISTRATION_SECRET"); requiredSecret != "" {
+			if rawBody.RegistrationSecret != requiredSecret {
+				return writeError(ctx, http.StatusForbidden, "invalid registration secret")
+			}
+		} else {
+			return writeError(ctx, http.StatusForbidden, "registration requires an invite token")
+		}
 	}
 
 	// Create the user
@@ -74,7 +102,14 @@ func Register(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusInternalServerError, "failed to create user")
 	}
 
-	// Migrate orphaned notes if this is the first user
+	// Redeem invite token after successful user creation (single-use enforcement)
+	if rawBody.InviteToken != "" {
+		if err := models.RedeemInviteToken(rawBody.InviteToken, user.GUID); err != nil {
+			logger.LogErr(serr.Wrap(err, "failed to redeem invite token"), "user_guid", user.GUID)
+		}
+	}
+
+	// Migrate orphaned notes and categories if this is the first user
 	if isFirst {
 		migratedCount, err := models.MigrateOrphanedNotes(user.GUID)
 		if err != nil {
@@ -82,6 +117,14 @@ func Register(ctx rweb.Context) error {
 		} else if migratedCount > 0 {
 			logger.Info("Migrated orphaned notes to first user",
 				"count", migratedCount, "user", user.Username)
+		}
+
+		catCount, err := models.MigrateOrphanedCategories(user.GUID)
+		if err != nil {
+			logger.LogErr(serr.Wrap(err, "failed to migrate orphaned categories"), "user_guid", user.GUID)
+		} else if catCount > 0 {
+			logger.Info("Migrated orphaned categories to first user",
+				"count", catCount, "user", user.Username)
 		}
 	}
 
@@ -259,3 +302,9 @@ func IsAuthenticated(ctx rweb.Context) bool {
 	return auth
 }
 
+// IsAdmin checks if the authenticated user has admin privileges.
+// Returns false if not authenticated or not an admin.
+func IsAdmin(ctx rweb.Context) bool {
+	admin, _ := ctx.Get("is_admin").(bool)
+	return admin
+}

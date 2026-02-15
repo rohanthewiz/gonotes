@@ -2394,3 +2394,62 @@ input, textarea, select {
   display: flex;
   justify-content: flex-end;
 }
+
+/* ============================================
+   Settings Modal
+   ============================================ */
+
+.settings-section {
+  padding: var(--spacing-lg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--spacing-lg);
+}
+
+.settings-section h3 {
+  margin: 0 0 var(--spacing-sm) 0;
+  font-size: var(--font-size-lg);
+}
+
+.settings-description {
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  margin-bottom: var(--spacing-md);
+  line-height: 1.5;
+}
+
+/* ============================================
+   Setup Page (Spoke Config Import)
+   ============================================ */
+
+.config-preview {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  margin-bottom: var(--spacing-lg);
+}
+
+.config-preview h3 {
+  margin: 0 0 var(--spacing-sm) 0;
+  font-size: var(--font-size-md);
+}
+
+.config-field {
+  padding: var(--spacing-xs) 0;
+  font-size: var(--font-size-sm);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.config-field:last-child {
+  border-bottom: none;
+}
+
+.setup-success {
+  background: var(--success-light, rgba(34, 197, 94, 0.1));
+  color: var(--success, #22c55e);
+  padding: var(--spacing-md);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--spacing-lg);
+  text-align: center;
+}

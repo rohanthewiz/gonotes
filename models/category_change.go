@@ -306,20 +306,44 @@ func GetCategoryChangeWithFragment(changeID int64) (*CategoryChangeOutput, error
 
 // GetUnsentCategoryChangesForPeer retrieves category changes not yet sent to a peer.
 // Returns up to 'limit' changes ordered by creation time (oldest first).
-func GetUnsentCategoryChangesForPeer(peerID string, limit int) ([]CategoryChange, error) {
-	query := `
-		SELECT cc.id, cc.guid, cc.category_guid, cc.operation, cc.category_fragment_id, cc.user, cc.created_at
-		FROM category_changes cc
-		WHERE cc.id NOT IN (
-			SELECT category_change_id
-			FROM category_change_sync_peers
-			WHERE peer_id = ?
-		)
-		ORDER BY cc.created_at ASC
-		LIMIT ?
-	`
+// When userGUID is non-empty, only changes for categories owned by that user are
+// returned (multi-user hub isolation). When empty, all changes are returned (spoke).
+func GetUnsentCategoryChangesForPeer(peerID string, userGUID string, limit int) ([]CategoryChange, error) {
+	var query string
+	var args []any
 
-	rows, err := db.Query(query, peerID, limit)
+	if userGUID != "" {
+		// Multi-user hub: filter to only the authenticated user's categories
+		query = `
+			SELECT cc.id, cc.guid, cc.category_guid, cc.operation, cc.category_fragment_id, cc.user, cc.created_at
+			FROM category_changes cc
+			INNER JOIN categories c ON cc.category_guid = c.guid AND c.created_by = ?
+			WHERE cc.id NOT IN (
+				SELECT category_change_id
+				FROM category_change_sync_peers
+				WHERE peer_id = ?
+			)
+			ORDER BY cc.created_at ASC
+			LIMIT ?
+		`
+		args = []any{userGUID, peerID, limit}
+	} else {
+		// Single-user spoke: no user filter needed
+		query = `
+			SELECT cc.id, cc.guid, cc.category_guid, cc.operation, cc.category_fragment_id, cc.user, cc.created_at
+			FROM category_changes cc
+			WHERE cc.id NOT IN (
+				SELECT category_change_id
+				FROM category_change_sync_peers
+				WHERE peer_id = ?
+			)
+			ORDER BY cc.created_at ASC
+			LIMIT ?
+		`
+		args = []any{peerID, limit}
+	}
+
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to query unsent category changes for peer")
 	}
@@ -499,8 +523,10 @@ func recordNoteCategoryMappingChange(noteID int64) {
 
 // GetCategoryByGUID retrieves a category by its GUID from cache.
 // Used for sync operations where cross-machine identity is needed.
+// Intentionally does NOT filter by user — sync internals need to look up
+// any category by GUID regardless of ownership.
 func GetCategoryByGUID(guid string) (*Category, error) {
-	query := `SELECT id, guid, name, description, subcategories, created_at, updated_at
+	query := `SELECT id, guid, name, description, subcategories, created_by, created_at, updated_at
 		FROM categories WHERE guid = ?`
 
 	var category Category
@@ -510,6 +536,7 @@ func GetCategoryByGUID(guid string) (*Category, error) {
 		&category.Name,
 		&category.Description,
 		&category.Subcategories,
+		&category.CreatedBy,
 		&category.CreatedAt,
 		&category.UpdatedAt,
 	)

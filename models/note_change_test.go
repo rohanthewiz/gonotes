@@ -55,7 +55,7 @@ func TestNoteChangeOnCreate(t *testing.T) {
 	}
 
 	// Retrieve unsent changes for a peer
-	changes, err := models.GetUnsentChangesForPeer("peer1", 10)
+	changes, err := models.GetUnsentChangesForPeer("peer1", "", 10)
 	if err != nil {
 		t.Fatalf("failed to get unsent changes: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestNoteChangeOnUpdate(t *testing.T) {
 	}
 
 	// Mark the create change as synced to clear it
-	createChanges, _ := models.GetUnsentChangesForPeer("peer1", 10)
+	createChanges, _ := models.GetUnsentChangesForPeer("peer1", "", 10)
 	if len(createChanges) > 0 {
 		models.MarkChangeSyncedToPeer(createChanges[0].ID, "peer1")
 	}
@@ -160,7 +160,7 @@ func TestNoteChangeOnUpdate(t *testing.T) {
 	}
 
 	// Get the update change
-	changes, err := models.GetUnsentChangesForPeer("peer1", 10)
+	changes, err := models.GetUnsentChangesForPeer("peer1", "", 10)
 	if err != nil {
 		t.Fatalf("failed to get unsent changes: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestNoteChangeOnDelete(t *testing.T) {
 	}
 
 	// Mark the create change as synced
-	createChanges, _ := models.GetUnsentChangesForPeer("peer1", 10)
+	createChanges, _ := models.GetUnsentChangesForPeer("peer1", "", 10)
 	if len(createChanges) > 0 {
 		models.MarkChangeSyncedToPeer(createChanges[0].ID, "peer1")
 	}
@@ -241,7 +241,7 @@ func TestNoteChangeOnDelete(t *testing.T) {
 	}
 
 	// Get the delete change
-	changes, err := models.GetUnsentChangesForPeer("peer1", 10)
+	changes, err := models.GetUnsentChangesForPeer("peer1", "", 10)
 	if err != nil {
 		t.Fatalf("failed to get unsent changes: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestUnsentChangesForPeer(t *testing.T) {
 	}
 
 	// Get unsent changes for peer1 (should get all 3)
-	peer1Changes, err := models.GetUnsentChangesForPeer("peer1", 10)
+	peer1Changes, err := models.GetUnsentChangesForPeer("peer1", "", 10)
 	if err != nil {
 		t.Fatalf("failed to get unsent changes for peer1: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestUnsentChangesForPeer(t *testing.T) {
 	}
 
 	// Get unsent changes for peer2 (should also get all 3)
-	peer2Changes, err := models.GetUnsentChangesForPeer("peer2", 10)
+	peer2Changes, err := models.GetUnsentChangesForPeer("peer2", "", 10)
 	if err != nil {
 		t.Fatalf("failed to get unsent changes for peer2: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestUnsentChangesForPeer(t *testing.T) {
 	}
 
 	// Get unsent changes for peer1 again (should get 2)
-	peer1ChangesAfter, err := models.GetUnsentChangesForPeer("peer1", 10)
+	peer1ChangesAfter, err := models.GetUnsentChangesForPeer("peer1", "", 10)
 	if err != nil {
 		t.Fatalf("failed to get unsent changes for peer1 after sync: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestUnsentChangesForPeer(t *testing.T) {
 	}
 
 	// peer2 should still have all 3
-	peer2ChangesAfter, err := models.GetUnsentChangesForPeer("peer2", 10)
+	peer2ChangesAfter, err := models.GetUnsentChangesForPeer("peer2", "", 10)
 	if err != nil {
 		t.Fatalf("failed to get unsent changes for peer2 after peer1 sync: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestMarkChangeSyncedToPeer(t *testing.T) {
 	}
 
 	// Get the change
-	changes, err := models.GetUnsentChangesForPeer("peer1", 10)
+	changes, err := models.GetUnsentChangesForPeer("peer1", "", 10)
 	if err != nil {
 		t.Fatalf("failed to get unsent changes: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestMarkChangeSyncedToPeer(t *testing.T) {
 	}
 
 	// Should now be empty for peer1
-	changesAfter, err := models.GetUnsentChangesForPeer("peer1", 10)
+	changesAfter, err := models.GetUnsentChangesForPeer("peer1", "", 10)
 	if err != nil {
 		t.Fatalf("failed to get unsent changes after sync: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestMarkChangeSyncedToPeer(t *testing.T) {
 	}
 
 	// Should be empty for peer2 as well
-	peer2Changes, err := models.GetUnsentChangesForPeer("peer2", 10)
+	peer2Changes, err := models.GetUnsentChangesForPeer("peer2", "", 10)
 	if err != nil {
 		t.Fatalf("failed to get unsent changes for peer2: %v", err)
 	}
@@ -408,7 +408,7 @@ func TestChangeBitmaskComputation(t *testing.T) {
 	}
 
 	// Clear the create change
-	createChanges, _ := models.GetUnsentChangesForPeer("peer1", 10)
+	createChanges, _ := models.GetUnsentChangesForPeer("peer1", "", 10)
 	if len(createChanges) > 0 {
 		models.MarkChangeSyncedToPeer(createChanges[0].ID, "peer1")
 	}
@@ -426,7 +426,7 @@ func TestChangeBitmaskComputation(t *testing.T) {
 		t.Fatalf("failed to update note (case 1): %v", err)
 	}
 
-	changes1, _ := models.GetUnsentChangesForPeer("peer1", 10)
+	changes1, _ := models.GetUnsentChangesForPeer("peer1", "", 10)
 	if len(changes1) > 0 {
 		fragment1, _ := models.GetNoteFragment(changes1[0].NoteFragmentID.Int64)
 		if fragment1.Bitmask != models.FragmentTitle {
@@ -448,7 +448,7 @@ func TestChangeBitmaskComputation(t *testing.T) {
 		t.Fatalf("failed to update note (case 2): %v", err)
 	}
 
-	changes2, _ := models.GetUnsentChangesForPeer("peer1", 10)
+	changes2, _ := models.GetUnsentChangesForPeer("peer1", "", 10)
 	if len(changes2) > 0 {
 		fragment2, _ := models.GetNoteFragment(changes2[0].NoteFragmentID.Int64)
 		if fragment2.Bitmask != models.FragmentIsPrivate {
@@ -472,7 +472,7 @@ func TestChangeBitmaskComputation(t *testing.T) {
 		t.Fatalf("failed to update note (case 3): %v", err)
 	}
 
-	changes3, _ := models.GetUnsentChangesForPeer("peer1", 10)
+	changes3, _ := models.GetUnsentChangesForPeer("peer1", "", 10)
 	if len(changes3) > 0 {
 		fragment3, _ := models.GetNoteFragment(changes3[0].NoteFragmentID.Int64)
 		expectedBitmask := int16(models.FragmentDescription | models.FragmentBody)
@@ -501,7 +501,7 @@ func TestGetNoteChangeWithFragment(t *testing.T) {
 	}
 
 	// Get the change
-	changes, err := models.GetUnsentChangesForPeer("peer1", 10)
+	changes, err := models.GetUnsentChangesForPeer("peer1", "", 10)
 	if err != nil {
 		t.Fatalf("failed to get unsent changes: %v", err)
 	}

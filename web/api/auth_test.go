@@ -19,9 +19,11 @@ func TestAuthAPI(t *testing.T) {
 	// ----------------------------------------------------------------
 
 	t.Run("RegisterSuccess", func(t *testing.T) {
+		// Second user registration requires a registration secret or invite token
 		input := map[string]string{
-			"username": "authuser",
-			"password": "securepass123",
+			"username":            "authuser",
+			"password":            "securepass123",
+			"registration_secret": "test-reg-secret",
 		}
 
 		status, resp := ts.request("POST", "/api/v1/auth/register", input)
@@ -46,8 +48,9 @@ func TestAuthAPI(t *testing.T) {
 
 	t.Run("RegisterDuplicateUsername", func(t *testing.T) {
 		input := map[string]string{
-			"username": "authuser",
-			"password": "anotherpass123",
+			"username":            "authuser",
+			"password":            "anotherpass123",
+			"registration_secret": "test-reg-secret",
 		}
 
 		status, resp := ts.request("POST", "/api/v1/auth/register", input)
@@ -83,8 +86,9 @@ func TestAuthAPI(t *testing.T) {
 
 	t.Run("RegisterShortPassword", func(t *testing.T) {
 		input := map[string]string{
-			"username": "shortpw",
-			"password": "short",
+			"username":            "shortpw",
+			"password":            "short",
+			"registration_secret": "test-reg-secret",
 		}
 
 		status, _ := ts.request("POST", "/api/v1/auth/register", input)
@@ -96,8 +100,9 @@ func TestAuthAPI(t *testing.T) {
 
 	t.Run("RegisterShortUsername", func(t *testing.T) {
 		input := map[string]string{
-			"username": "ab",
-			"password": "longpassword",
+			"username":            "ab",
+			"password":            "longpassword",
+			"registration_secret": "test-reg-secret",
 		}
 
 		status, _ := ts.request("POST", "/api/v1/auth/register", input)
@@ -109,8 +114,9 @@ func TestAuthAPI(t *testing.T) {
 
 	t.Run("RegisterInvalidUsernameChars", func(t *testing.T) {
 		input := map[string]string{
-			"username": "user@name",
-			"password": "longpassword",
+			"username":            "user@name",
+			"password":            "longpassword",
+			"registration_secret": "test-reg-secret",
 		}
 
 		status, _ := ts.request("POST", "/api/v1/auth/register", input)
