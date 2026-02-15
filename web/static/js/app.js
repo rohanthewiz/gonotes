@@ -1270,14 +1270,105 @@
 
   window.app.closeModal = function() {
     document.getElementById('modal-overlay').classList.remove('open');
+    // Restore default footer visibility in case a modal hid it
+    const footer = document.getElementById('modal-footer');
+    if (footer) footer.style.display = '';
   };
 
   window.app.confirmModal = function() {
     window.app.closeModal();
   };
 
+  // ============================================
+  // Settings Modal
+  // ============================================
+
   window.app.showSettings = function() {
-    showToast('Settings coming soon', 'warning');
+    const modalTitle = document.getElementById('modal-title');
+    const modalBody = document.getElementById('modal-body');
+    const modalFooter = document.getElementById('modal-footer');
+
+    modalTitle.textContent = 'Settings';
+
+    // Build settings content — export section visible only to admins
+    let html = '';
+    if (state.user && state.user.is_admin) {
+      html += `
+        <div class="settings-section">
+          <h3>Spoke Configuration Export</h3>
+          <p class="settings-description">
+            Generate a config file for setting up a new spoke instance.
+            This creates an invite token and packages all required settings.
+          </p>
+          <div class="form-group">
+            <label class="form-label" for="export-password">Confirm your password</label>
+            <input type="password" class="form-input" id="export-password"
+                   placeholder="Enter your login password" autocomplete="current-password">
+          </div>
+          <button class="btn btn-primary" onclick="app.exportSpokeConfig()">
+            Export Spoke Config
+          </button>
+        </div>
+      `;
+    }
+    if (!html) {
+      html = '<p>No settings available.</p>';
+    }
+
+    modalBody.innerHTML = html;
+    // Hide default footer buttons — this modal uses its own inline buttons
+    modalFooter.style.display = 'none';
+    document.getElementById('modal-overlay').classList.add('open');
+  };
+
+  // exportSpokeConfig sends the admin's password to the hub, which verifies
+  // it and returns a downloadable JSON file containing all spoke env vars.
+  window.app.exportSpokeConfig = async function() {
+    const passwordInput = document.getElementById('export-password');
+    const password = passwordInput ? passwordInput.value : '';
+    if (!password) {
+      showToast('Please enter your password', 'warning');
+      return;
+    }
+
+    const token = localStorage.getItem('token');
+    try {
+      const response = await fetch(`${API_BASE}/admin/export-spoke-config`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ password })
+      });
+
+      if (!response.ok) {
+        // The error response is JSON even though success is a file download
+        const data = await response.json();
+        showToast(data.error || 'Export failed', 'error');
+        return;
+      }
+
+      // Trigger browser file download from the response blob
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      // Extract filename from Content-Disposition header, fall back to default
+      const disposition = response.headers.get('Content-Disposition') || '';
+      const match = disposition.match(/filename="?([^"]+)"?/);
+      a.download = match ? match[1] : 'gonotes-spoke-config.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+
+      showToast('Spoke config exported successfully', 'success');
+      window.app.closeModal();
+    } catch (err) {
+      console.error('Export error:', err);
+      showToast('Network error during export', 'error');
+    }
   };
 
   function escapeHtml(text) {

@@ -4,6 +4,7 @@ import (
 	"gonotes/web/api"
 	"gonotes/web/pages/auth"
 	"gonotes/web/pages/landing"
+	"gonotes/web/pages/setup"
 
 	"github.com/rohanthewiz/rweb"
 )
@@ -30,6 +31,13 @@ func setupRoutes(s *rweb.Server) {
 	s.Get("/register", func(ctx rweb.Context) error {
 		ctx.Response().SetHeader("Content-Type", "text/html; charset=utf-8")
 		page := auth.NewRegisterPage()
+		return ctx.WriteHTML(page.Render())
+	})
+
+	// Spoke setup page — upload a hub-exported config to configure sync
+	s.Get("/setup", func(ctx rweb.Context) error {
+		ctx.Response().SetHeader("Content-Type", "text/html; charset=utf-8")
+		page := setup.NewPage()
 		return ctx.WriteHTML(page.Render())
 	})
 
@@ -75,6 +83,18 @@ func setupRoutes(s *rweb.Server) {
 	s.Get("/api/v1/notes/:id/categories", api.GetNoteCategories)                      // Get all categories for a note
 	s.Get("/api/v1/categories/:id/notes", api.GetCategoryNotes)                       // Get all notes for a category
 	s.Get("/api/v1/note-category-mappings", api.GetNoteCategoryMappings)              // Bulk: all note-category mappings for search bar
+
+	// =========================================
+	// Admin endpoints — require admin role
+	// =========================================
+	s.Post("/api/v1/admin/invites", api.CreateInviteToken)              // Create invite token
+	s.Get("/api/v1/admin/invites", api.ListInviteTokens)                // List invite tokens
+	s.Post("/api/v1/admin/export-spoke-config", api.ExportSpokeConfig)  // Export spoke config file
+
+	// =========================================
+	// Spoke setup endpoints — no auth (first-run)
+	// =========================================
+	s.Post("/api/v1/setup/apply", api.ApplySpokeConfig) // Apply imported spoke config
 
 	// =========================================
 	// Sync endpoints

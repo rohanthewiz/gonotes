@@ -23,7 +23,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT false
 - Add `IsAdmin bool` to `User` struct and `UserOutput`
 - Update `ToOutput()` to copy `IsAdmin`
 - Update all `Scan()` calls in `GetUserByUsername`, `GetUserByGUID`, `GetUserByID`, `CreateUser` to include `is_admin`
-- In `CreateUser`: check `IsFirstUser()` — if true, set `is_admin = true` in INSERT
+- In `CreateUser`: call existing `IsFirstUser()` (already returns `count == 0`) — if true, set `is_admin = true` in INSERT
 
 ### `models/token.go`:
 - Add `IsAdmin bool` to `TokenClaims`
@@ -101,13 +101,19 @@ s.Get("/api/v1/admin/invites", api.ListInviteTokens)
 
 ## Step 3: Category User-Scoping
 
-**Files**: `models/category.go`, `models/db.go`, `web/api/categories.go`, `models/sync_apply.go`, `models/sync_protocol.go`, `models/category_change.go`
+**Files**: `models/category.go`, `models/db.go`, `web/api/categories.go`, `models/sync_apply.go`, `models/sync_protocol.go`, `models/category_change.go`, `models/note_category.go`
 
 ### Schema migration in `db.go`:
 ```sql
 ALTER TABLE categories ADD COLUMN IF NOT EXISTS created_by VARCHAR
 ```
-Backfill: `UPDATE categories SET created_by = (SELECT guid FROM users ORDER BY id LIMIT 1) WHERE created_by IS NULL`
+Backfill (guarded — only runs when at least one user exists):
+```sql
+UPDATE categories SET created_by = (
+    SELECT guid FROM users ORDER BY id LIMIT 1
+) WHERE created_by IS NULL
+AND EXISTS (SELECT 1 FROM users)
+```
 
 ### Update cache DDL:
 - `initCacheDB()` category table must include `created_by VARCHAR`
@@ -127,6 +133,20 @@ Backfill: `UPDATE categories SET created_by = (SELECT guid FROM users ORDER BY i
 
 ### `models/sync_apply.go`:
 - `ApplySyncCategoryCreate` accepts `userGUID` from `SyncChange.User`, stores as `created_by`
+
+### Note-Category Relation Endpoints in `web/api/categories.go`:
+These endpoints currently operate by note ID and category ID without verifying ownership. With multi-user isolation, each must verify the authenticated user owns both the note and the category before allowing the operation.
+
+- `AddCategoryToNote`: extract `userGUID`, verify the note's `created_by` matches `userGUID` AND the category's `created_by` matches `userGUID` before inserting into `note_categories`
+- `UpdateNoteCategory`: same ownership check on both note and category before updating subcategories
+- `RemoveCategoryFromNote`: same ownership check before deleting from `note_categories`
+- `GetNoteCategories`: extract `userGUID`, verify note ownership, then filter returned categories to those owned by `userGUID`
+- `GetCategoryNotes`: extract `userGUID`, verify category ownership, then filter returned notes to those owned by `userGUID`
+- `GetNoteCategoryMappings`: filter the bulk mapping query to only include notes and categories owned by `userGUID`
+
+### `models/note_category.go` (or wherever `AddCategoryToNote`, `GetNoteCategoryDetails` etc. live):
+- Add `userGUID string` parameter to `AddCategoryToNote`, `AddCategoryToNoteWithSubcategories`, `RemoveCategoryFromNote`, `GetNoteCategoryDetails`, `GetCategoryNotes`, and bulk mapping functions
+- These functions should JOIN against `notes` and `categories` to enforce `created_by = userGUID` rather than trusting the caller-provided IDs alone
 
 ---
 
@@ -150,6 +170,14 @@ Backfill: `UPDATE categories SET created_by = (SELECT guid FROM users ORDER BY i
 - `PullChanges`: pass `userGUID` to `GetUnifiedChangesForPeer(peerID, userGUID, limit)`
 - `PushChanges`: override `change.User = userGUID` on each incoming change (prevents impersonation)
 - `GetSyncStatus`: pass `userGUID` to `GetSyncStatus(userGUID)`
+- `GetUserChanges`: already uses `userGUID` — verify it also filters category changes by user (currently only returns `NoteChangeOutput`)
+- `GetSnapshot`: pass `userGUID` to `GetEntitySnapshot(entityType, entityGUID, userGUID)` — verify the requested entity belongs to the authenticated user before returning it
+
+### `models/sync_protocol.go` — snapshot scoping:
+- `GetEntitySnapshot(entityType, entityGUID, userGUID string)` — add `userGUID` parameter
+- `getNoteSnapshot(noteGUID, userGUID)` — verify `note.CreatedBy == userGUID` before returning
+- `getCategorySnapshot(categoryGUID, userGUID)` — verify `category.CreatedBy == userGUID` before returning
+- This prevents User B from fetching User A's entity via a known GUID
 
 ### Spoke `pushChanges` in `models/sync_client.go`:
 - Pass `""` as `userGUID` to local `GetUnifiedChangesForPeer` (spoke has one user, no filter needed)
@@ -177,3 +205,7 @@ Step 4: Sync scoping        (depends on Step 3 for created_by on categories)
 6. Create notes/categories as User A → verify User B cannot see them via API
 7. Sync as User A → verify only User A's changes are pulled
 8. Push changes from spoke → verify `change.User` is overridden to authenticated user
+9. User A adds category to note → User B cannot see the mapping or use either entity
+10. User B attempts `GET /api/v1/sync/snapshot?entity_type=note&entity_guid=<A's GUID>` → returns 404/403
+11. Category backfill migration runs safely on fresh DB with no users (no-op)
+12. Category backfill migration runs correctly on existing DB — all orphaned categories assigned to first user

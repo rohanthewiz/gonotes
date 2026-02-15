@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/base64"
 	"os"
 	"strconv"
 	"time"
@@ -20,11 +21,12 @@ import (
 // All values are loaded from environment variables to keep
 // deployment configuration external to the binary.
 type SyncConfig struct {
-	Enabled  bool          // Whether sync is active (GONOTES_SYNC_ENABLED)
-	HubURL   string        // Base URL of the hub instance (GONOTES_SYNC_HUB_URL)
-	Username string        // Authentication username (GONOTES_SYNC_USERNAME)
-	Password string        // Authentication password (GONOTES_SYNC_PASSWORD)
-	Interval time.Duration // Polling interval between sync cycles (GONOTES_SYNC_INTERVAL)
+	Enabled     bool          // Whether sync is active (GONOTES_SYNC_ENABLED)
+	HubURL      string        // Base URL of the hub instance (GONOTES_SYNC_HUB_URL)
+	Username    string        // Authentication username (GONOTES_SYNC_USERNAME)
+	Password    string        // Authentication password (decoded from GONOTES_SYNC_PASSWORD_B64)
+	Interval    time.Duration // Polling interval between sync cycles (GONOTES_SYNC_INTERVAL)
+	InviteToken string        // One-time token for auto-registration on hub (GONOTES_SYNC_INVITE_TOKEN)
 }
 
 // defaultSyncInterval is used when GONOTES_SYNC_INTERVAL is not set.
@@ -51,7 +53,20 @@ func LoadSyncConfig() (*SyncConfig, error) {
 
 	cfg.HubURL = os.Getenv("GONOTES_SYNC_HUB_URL")
 	cfg.Username = os.Getenv("GONOTES_SYNC_USERNAME")
-	cfg.Password = os.Getenv("GONOTES_SYNC_PASSWORD")
+	cfg.InviteToken = os.Getenv("GONOTES_SYNC_INVITE_TOKEN")
+
+	// Password is base64-encoded in the env var to prevent casual exposure
+	// (e.g. shoulder-surfing, screenshots). Fall back to the legacy plaintext
+	// var for backward compatibility during migration.
+	if pwB64 := os.Getenv("GONOTES_SYNC_PASSWORD_B64"); pwB64 != "" {
+		decoded, err := base64.StdEncoding.DecodeString(pwB64)
+		if err != nil {
+			return nil, serr.Wrap(err, "invalid GONOTES_SYNC_PASSWORD_B64 value: not valid base64")
+		}
+		cfg.Password = string(decoded)
+	} else {
+		cfg.Password = os.Getenv("GONOTES_SYNC_PASSWORD")
+	}
 
 	// Parse interval — allow overriding the default for testing or
 	// environments that need faster/slower sync cycles
@@ -81,7 +96,7 @@ func (c *SyncConfig) Validate() error {
 		return serr.New("GONOTES_SYNC_USERNAME is required when sync is enabled")
 	}
 	if c.Password == "" {
-		return serr.New("GONOTES_SYNC_PASSWORD is required when sync is enabled")
+		return serr.New("GONOTES_SYNC_PASSWORD_B64 (or GONOTES_SYNC_PASSWORD) is required when sync is enabled")
 	}
 	if c.Interval < 10*time.Second {
 		return serr.New("GONOTES_SYNC_INTERVAL must be at least 10s to avoid overwhelming the hub")

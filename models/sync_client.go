@@ -308,6 +308,11 @@ func (sc *SyncClient) healthCheck(ctx context.Context) error {
 // authenticate obtains a JWT from the hub. Reuses the cached token if it's
 // still valid (determined by trying authenticated requests first and falling
 // back to login on 401).
+//
+// If login fails and an invite token is configured, the client will
+// auto-register on the hub first, then retry login. This enables hands-free
+// spoke onboarding: set env vars and start — the first sync cycle handles
+// registration automatically.
 func (sc *SyncClient) authenticate(ctx context.Context) error {
 	// If we have a cached token, try it first — tokens last 7 days,
 	// so most of the time this saves a round trip
@@ -315,7 +320,22 @@ func (sc *SyncClient) authenticate(ctx context.Context) error {
 		return nil // Will re-auth on 401 during pull/push
 	}
 
-	return sc.login(ctx)
+	err := sc.login(ctx)
+	if err == nil {
+		return nil
+	}
+
+	// Login failed — if we have an invite token, try auto-registering
+	if sc.config.InviteToken != "" {
+		logger.Info("Login failed, attempting auto-registration with invite token")
+		if regErr := sc.registerWithInviteToken(ctx); regErr != nil {
+			return serr.Wrap(regErr, "auto-registration failed (original login error: "+err.Error()+")")
+		}
+		// Registration succeeded — now login with the new credentials
+		return sc.login(ctx)
+	}
+
+	return err
 }
 
 // login posts credentials to the hub's auth endpoint and caches the JWT.
@@ -367,6 +387,41 @@ func (sc *SyncClient) login(ctx context.Context) error {
 		logger.LogErr(err, "failed to persist auth token")
 	}
 
+	return nil
+}
+
+// registerWithInviteToken sends a registration request to the hub using the
+// configured invite token. Called automatically when login fails and an invite
+// token is available — enables zero-touch spoke onboarding.
+func (sc *SyncClient) registerWithInviteToken(ctx context.Context) error {
+	url := sc.config.HubURL + "/api/v1/auth/register"
+
+	body, err := json.Marshal(map[string]string{
+		"username":     sc.config.Username,
+		"password":     sc.config.Password,
+		"invite_token": sc.config.InviteToken,
+	})
+	if err != nil {
+		return serr.Wrap(err, "failed to marshal registration request")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return serr.Wrap(err, "failed to create registration request")
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := sc.httpClient.Do(req)
+	if err != nil {
+		return serr.Wrap(err, "registration request failed")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		return serr.New(fmt.Sprintf("registration failed with status %d", resp.StatusCode))
+	}
+
+	logger.Info("Auto-registered on hub with invite token", "username", sc.config.Username)
 	return nil
 }
 
@@ -544,7 +599,8 @@ func (sc *SyncClient) applyChangeWithConflictDetection(change SyncChange) error 
 func (sc *SyncClient) pushChanges(ctx context.Context) error {
 	// Use the same unified change stream that the hub uses for pulls,
 	// but from our local perspective: changes not yet sent to the hub.
-	response, err := GetUnifiedChangesForPeer(sc.peerID, 100)
+	// Empty userGUID: spoke is single-user, no per-user filtering needed locally
+	response, err := GetUnifiedChangesForPeer(sc.peerID, "", 100)
 	if err != nil {
 		return serr.Wrap(err, "failed to get local changes for push")
 	}
@@ -616,7 +672,8 @@ func (sc *SyncClient) verifyConsistency(ctx context.Context) error {
 		return serr.Wrap(err, "failed to decode status response")
 	}
 
-	localStatus, err := GetSyncStatus()
+	// Empty userGUID: spoke is single-user, no per-user filtering needed
+	localStatus, err := GetSyncStatus("")
 	if err != nil {
 		return serr.Wrap(err, "failed to get local sync status")
 	}

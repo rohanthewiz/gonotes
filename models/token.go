@@ -33,6 +33,7 @@ type TokenClaims struct {
 	jwt.RegisteredClaims
 	UserGUID string `json:"user_guid"`
 	Username string `json:"username"`
+	IsAdmin  bool   `json:"is_admin"`
 }
 
 // InitJWT loads the JWT signing key from environment.
@@ -74,6 +75,7 @@ func GenerateToken(user *User) (string, error) {
 		},
 		UserGUID: user.GUID,
 		Username: user.Username,
+		IsAdmin:  user.IsAdmin,
 	}
 
 	// Create token with claims

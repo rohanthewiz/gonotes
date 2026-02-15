@@ -379,23 +379,46 @@ func MarkChangeSyncedToPeer(noteChangeID int64, peerID string) error {
 	return nil
 }
 
-// GetUnsentChangesForPeer retrieves changes that haven't been sent to a specific peer
-// Returns up to 'limit' changes, ordered by creation time (oldest first)
-// This is the key function for identifying what needs to be synced to a peer
-func GetUnsentChangesForPeer(peerID string, limit int) ([]NoteChange, error) {
-	query := `
-		SELECT nc.id, nc.guid, nc.note_guid, nc.operation, nc.note_fragment_id, nc.user, nc.created_at
-		FROM note_changes nc
-		WHERE nc.id NOT IN (
-			SELECT note_change_id
-			FROM note_change_sync_peers
-			WHERE peer_id = ?
-		)
-		ORDER BY nc.created_at ASC
-		LIMIT ?
-	`
+// GetUnsentChangesForPeer retrieves changes that haven't been sent to a specific peer.
+// Returns up to 'limit' changes, ordered by creation time (oldest first).
+// When userGUID is non-empty, only changes for notes owned by that user are returned
+// (multi-user hub isolation). When empty, all changes are returned (single-user spoke).
+func GetUnsentChangesForPeer(peerID string, userGUID string, limit int) ([]NoteChange, error) {
+	var query string
+	var args []any
 
-	rows, err := db.Query(query, peerID, limit)
+	if userGUID != "" {
+		// Multi-user hub: filter to only the authenticated user's notes
+		query = `
+			SELECT nc.id, nc.guid, nc.note_guid, nc.operation, nc.note_fragment_id, nc.user, nc.created_at
+			FROM note_changes nc
+			INNER JOIN notes n ON nc.note_guid = n.guid AND n.created_by = ?
+			WHERE nc.id NOT IN (
+				SELECT note_change_id
+				FROM note_change_sync_peers
+				WHERE peer_id = ?
+			)
+			ORDER BY nc.created_at ASC
+			LIMIT ?
+		`
+		args = []any{userGUID, peerID, limit}
+	} else {
+		// Single-user spoke: no user filter needed
+		query = `
+			SELECT nc.id, nc.guid, nc.note_guid, nc.operation, nc.note_fragment_id, nc.user, nc.created_at
+			FROM note_changes nc
+			WHERE nc.id NOT IN (
+				SELECT note_change_id
+				FROM note_change_sync_peers
+				WHERE peer_id = ?
+			)
+			ORDER BY nc.created_at ASC
+			LIMIT ?
+		`
+		args = []any{peerID, limit}
+	}
+
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to query unsent changes for peer")
 	}

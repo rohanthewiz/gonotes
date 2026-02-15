@@ -39,6 +39,46 @@ func (s *categoryTestServer) createAuthenticatedRequest(method, url string, body
 	return req, nil
 }
 
+// doAuthGet performs an authenticated GET request.
+func (s *categoryTestServer) doAuthGet(url string) (*http.Response, error) {
+	req, err := s.createAuthenticatedRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	return s.client.Do(req)
+}
+
+// doAuthPost performs an authenticated POST request with a JSON body.
+func (s *categoryTestServer) doAuthPost(url string, body []byte) (*http.Response, error) {
+	var bodyReader io.Reader
+	if body != nil {
+		bodyReader = bytes.NewBuffer(body)
+	}
+	req, err := s.createAuthenticatedRequest("POST", url, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+	return s.client.Do(req)
+}
+
+// doAuthPut performs an authenticated PUT request with a JSON body.
+func (s *categoryTestServer) doAuthPut(url string, body []byte) (*http.Response, error) {
+	req, err := s.createAuthenticatedRequest("PUT", url, bytes.NewBuffer(body))
+	if err != nil {
+		return nil, err
+	}
+	return s.client.Do(req)
+}
+
+// doAuthDelete performs an authenticated DELETE request.
+func (s *categoryTestServer) doAuthDelete(url string) (*http.Response, error) {
+	req, err := s.createAuthenticatedRequest("DELETE", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	return s.client.Do(req)
+}
+
 // registerAndLogin registers a test user and obtains a JWT token.
 // This token is stored in the server struct for use in authenticated requests.
 func (s *categoryTestServer) registerAndLogin(t *testing.T) {
@@ -126,10 +166,13 @@ func TestCategoryAPI(t *testing.T) {
 	server, cleanup := setupCategoryTestServer(t)
 	defer cleanup()
 
+	// All category endpoints now require authentication
+	server.registerAndLogin(t)
+
 	var categoryID int64
 
 	t.Run("list empty categories", func(t *testing.T) {
-		resp, err := http.Get(server.baseURL + "/api/v1/categories")
+		resp, err := server.doAuthGet(server.baseURL + "/api/v1/categories")
 		if err != nil {
 			t.Fatalf("failed to get categories: %v", err)
 		}
@@ -167,7 +210,7 @@ func TestCategoryAPI(t *testing.T) {
 		}
 
 		body, _ := json.Marshal(input)
-		resp, err := http.Post(server.baseURL+"/api/v1/categories", "application/json", bytes.NewBuffer(body))
+		resp, err := server.doAuthPost(server.baseURL+"/api/v1/categories", body)
 		if err != nil {
 			t.Fatalf("failed to create category: %v", err)
 		}
@@ -207,7 +250,7 @@ func TestCategoryAPI(t *testing.T) {
 	})
 
 	t.Run("get category by id", func(t *testing.T) {
-		resp, err := http.Get(fmt.Sprintf("%s/api/v1/categories/%d", server.baseURL, categoryID))
+		resp, err := server.doAuthGet(fmt.Sprintf("%s/api/v1/categories/%d", server.baseURL, categoryID))
 		if err != nil {
 			t.Fatalf("failed to get category: %v", err)
 		}
@@ -245,10 +288,7 @@ func TestCategoryAPI(t *testing.T) {
 		}
 
 		body, _ := json.Marshal(input)
-		req, _ := http.NewRequest(http.MethodPut, fmt.Sprintf("%s/api/v1/categories/%d", server.baseURL, categoryID), bytes.NewBuffer(body))
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := server.doAuthPut(fmt.Sprintf("%s/api/v1/categories/%d", server.baseURL, categoryID), body)
 		if err != nil {
 			t.Fatalf("failed to update category: %v", err)
 		}
@@ -282,7 +322,7 @@ func TestCategoryAPI(t *testing.T) {
 	})
 
 	t.Run("list categories", func(t *testing.T) {
-		resp, err := http.Get(server.baseURL + "/api/v1/categories")
+		resp, err := server.doAuthGet(server.baseURL + "/api/v1/categories")
 		if err != nil {
 			t.Fatalf("failed to get categories: %v", err)
 		}
@@ -312,9 +352,7 @@ func TestCategoryAPI(t *testing.T) {
 	})
 
 	t.Run("delete category", func(t *testing.T) {
-		req, _ := http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/api/v1/categories/%d", server.baseURL, categoryID), nil)
-
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := server.doAuthDelete(fmt.Sprintf("%s/api/v1/categories/%d", server.baseURL, categoryID))
 		if err != nil {
 			t.Fatalf("failed to delete category: %v", err)
 		}
@@ -335,7 +373,7 @@ func TestCategoryAPI(t *testing.T) {
 	})
 
 	t.Run("get deleted category returns 404", func(t *testing.T) {
-		resp, err := http.Get(fmt.Sprintf("%s/api/v1/categories/%d", server.baseURL, categoryID))
+		resp, err := server.doAuthGet(fmt.Sprintf("%s/api/v1/categories/%d", server.baseURL, categoryID))
 		if err != nil {
 			t.Fatalf("failed to get category: %v", err)
 		}
@@ -352,7 +390,7 @@ func TestCategoryAPI(t *testing.T) {
 		}
 
 		body, _ := json.Marshal(input)
-		resp, err := http.Post(server.baseURL+"/api/v1/categories", "application/json", bytes.NewBuffer(body))
+		resp, err := server.doAuthPost(server.baseURL+"/api/v1/categories", body)
 		if err != nil {
 			t.Fatalf("failed to send request: %v", err)
 		}
@@ -364,7 +402,7 @@ func TestCategoryAPI(t *testing.T) {
 	})
 
 	t.Run("get non-existent category", func(t *testing.T) {
-		resp, err := http.Get(fmt.Sprintf("%s/api/v1/categories/99999", server.baseURL))
+		resp, err := server.doAuthGet(fmt.Sprintf("%s/api/v1/categories/99999", server.baseURL))
 		if err != nil {
 			t.Fatalf("failed to get category: %v", err)
 		}
@@ -381,10 +419,7 @@ func TestCategoryAPI(t *testing.T) {
 		}
 
 		body, _ := json.Marshal(input)
-		req, _ := http.NewRequest(http.MethodPut, fmt.Sprintf("%s/api/v1/categories/99999", server.baseURL), bytes.NewBuffer(body))
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := server.doAuthPut(fmt.Sprintf("%s/api/v1/categories/99999", server.baseURL), body)
 		if err != nil {
 			t.Fatalf("failed to update category: %v", err)
 		}
@@ -396,9 +431,7 @@ func TestCategoryAPI(t *testing.T) {
 	})
 
 	t.Run("delete non-existent category", func(t *testing.T) {
-		req, _ := http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/api/v1/categories/99999", server.baseURL), nil)
-
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := server.doAuthDelete(fmt.Sprintf("%s/api/v1/categories/99999", server.baseURL))
 		if err != nil {
 			t.Fatalf("failed to delete category: %v", err)
 		}
@@ -416,7 +449,7 @@ func TestCategoryAPI(t *testing.T) {
 				Name: fmt.Sprintf("Pagination Test %d", i),
 			}
 			body, _ := json.Marshal(input)
-			resp, err := http.Post(server.baseURL+"/api/v1/categories", "application/json", bytes.NewBuffer(body))
+			resp, err := server.doAuthPost(server.baseURL+"/api/v1/categories", body)
 			if err != nil {
 				t.Fatalf("failed to create category: %v", err)
 			}
@@ -424,7 +457,7 @@ func TestCategoryAPI(t *testing.T) {
 		}
 
 		// Test limit
-		resp, err := http.Get(server.baseURL + "/api/v1/categories?limit=2")
+		resp, err := server.doAuthGet(server.baseURL + "/api/v1/categories?limit=2")
 		if err != nil {
 			t.Fatalf("failed to get categories: %v", err)
 		}
@@ -445,7 +478,7 @@ func TestCategoryAPI(t *testing.T) {
 		}
 
 		// Test offset
-		resp2, err := http.Get(server.baseURL + "/api/v1/categories?limit=2&offset=2")
+		resp2, err := server.doAuthGet(server.baseURL + "/api/v1/categories?limit=2&offset=2")
 		if err != nil {
 			t.Fatalf("failed to get categories: %v", err)
 		}
@@ -467,7 +500,7 @@ func TestCategoryAPI(t *testing.T) {
 	})
 
 	t.Run("invalid category id", func(t *testing.T) {
-		resp, err := http.Get(server.baseURL + "/api/v1/categories/invalid")
+		resp, err := server.doAuthGet(server.baseURL + "/api/v1/categories/invalid")
 		if err != nil {
 			t.Fatalf("failed to send request: %v", err)
 		}
@@ -516,20 +549,20 @@ func TestNoteCategoryRelationshipAPI(t *testing.T) {
 		data := result.Data.(map[string]interface{})
 		noteID = int64(data["id"].(float64))
 
-		// Create categories
+		// Create categories (now require authentication)
 		for i := 1; i <= 2; i++ {
 			catInput := models.CategoryInput{
 				Name: fmt.Sprintf("Relationship Category %d", i),
 			}
-			body, _ := json.Marshal(catInput)
-			resp, err := http.Post(server.baseURL+"/api/v1/categories", "application/json", bytes.NewBuffer(body))
+			catBody, _ := json.Marshal(catInput)
+			catResp, err := server.doAuthPost(server.baseURL+"/api/v1/categories", catBody)
 			if err != nil {
 				t.Fatalf("failed to create category: %v", err)
 			}
 
 			var catResult api.APIResponse
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			bodyBytes, _ := io.ReadAll(catResp.Body)
+			catResp.Body.Close()
 			json.Unmarshal(bodyBytes, &catResult)
 			catData := catResult.Data.(map[string]interface{})
 			catID := int64(catData["id"].(float64))
@@ -543,7 +576,7 @@ func TestNoteCategoryRelationshipAPI(t *testing.T) {
 	})
 
 	t.Run("add category to note", func(t *testing.T) {
-		resp, err := http.Post(fmt.Sprintf("%s/api/v1/notes/%d/categories/%d", server.baseURL, noteID, categoryID1), "application/json", nil)
+		resp, err := server.doAuthPost(fmt.Sprintf("%s/api/v1/notes/%d/categories/%d", server.baseURL, noteID, categoryID1), nil)
 		if err != nil {
 			t.Fatalf("failed to add category to note: %v", err)
 		}
@@ -564,7 +597,7 @@ func TestNoteCategoryRelationshipAPI(t *testing.T) {
 	})
 
 	t.Run("get note categories", func(t *testing.T) {
-		resp, err := http.Get(fmt.Sprintf("%s/api/v1/notes/%d/categories", server.baseURL, noteID))
+		resp, err := server.doAuthGet(fmt.Sprintf("%s/api/v1/notes/%d/categories", server.baseURL, noteID))
 		if err != nil {
 			t.Fatalf("failed to get note categories: %v", err)
 		}
@@ -590,7 +623,7 @@ func TestNoteCategoryRelationshipAPI(t *testing.T) {
 	})
 
 	t.Run("add second category to note", func(t *testing.T) {
-		resp, err := http.Post(fmt.Sprintf("%s/api/v1/notes/%d/categories/%d", server.baseURL, noteID, categoryID2), "application/json", nil)
+		resp, err := server.doAuthPost(fmt.Sprintf("%s/api/v1/notes/%d/categories/%d", server.baseURL, noteID, categoryID2), nil)
 		if err != nil {
 			t.Fatalf("failed to add category to note: %v", err)
 		}
@@ -601,7 +634,7 @@ func TestNoteCategoryRelationshipAPI(t *testing.T) {
 		}
 
 		// Verify we now have 2 categories
-		resp2, err := http.Get(fmt.Sprintf("%s/api/v1/notes/%d/categories", server.baseURL, noteID))
+		resp2, err := server.doAuthGet(fmt.Sprintf("%s/api/v1/notes/%d/categories", server.baseURL, noteID))
 		if err != nil {
 			t.Fatalf("failed to get note categories: %v", err)
 		}
@@ -617,7 +650,7 @@ func TestNoteCategoryRelationshipAPI(t *testing.T) {
 	})
 
 	t.Run("add duplicate category", func(t *testing.T) {
-		resp, err := http.Post(fmt.Sprintf("%s/api/v1/notes/%d/categories/%d", server.baseURL, noteID, categoryID1), "application/json", nil)
+		resp, err := server.doAuthPost(fmt.Sprintf("%s/api/v1/notes/%d/categories/%d", server.baseURL, noteID, categoryID1), nil)
 		if err != nil {
 			t.Fatalf("failed to send request: %v", err)
 		}
@@ -629,7 +662,7 @@ func TestNoteCategoryRelationshipAPI(t *testing.T) {
 	})
 
 	t.Run("get category notes", func(t *testing.T) {
-		resp, err := http.Get(fmt.Sprintf("%s/api/v1/categories/%d/notes", server.baseURL, categoryID1))
+		resp, err := server.doAuthGet(fmt.Sprintf("%s/api/v1/categories/%d/notes", server.baseURL, categoryID1))
 		if err != nil {
 			t.Fatalf("failed to get category notes: %v", err)
 		}
@@ -655,9 +688,7 @@ func TestNoteCategoryRelationshipAPI(t *testing.T) {
 	})
 
 	t.Run("remove category from note", func(t *testing.T) {
-		req, _ := http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/api/v1/notes/%d/categories/%d", server.baseURL, noteID, categoryID1), nil)
-
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := server.doAuthDelete(fmt.Sprintf("%s/api/v1/notes/%d/categories/%d", server.baseURL, noteID, categoryID1))
 		if err != nil {
 			t.Fatalf("failed to remove category from note: %v", err)
 		}
@@ -668,7 +699,7 @@ func TestNoteCategoryRelationshipAPI(t *testing.T) {
 		}
 
 		// Verify we now have 1 category
-		resp2, err := http.Get(fmt.Sprintf("%s/api/v1/notes/%d/categories", server.baseURL, noteID))
+		resp2, err := server.doAuthGet(fmt.Sprintf("%s/api/v1/notes/%d/categories", server.baseURL, noteID))
 		if err != nil {
 			t.Fatalf("failed to get note categories: %v", err)
 		}
@@ -684,9 +715,7 @@ func TestNoteCategoryRelationshipAPI(t *testing.T) {
 	})
 
 	t.Run("remove non-existent relationship", func(t *testing.T) {
-		req, _ := http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/api/v1/notes/%d/categories/%d", server.baseURL, noteID, categoryID1), nil)
-
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := server.doAuthDelete(fmt.Sprintf("%s/api/v1/notes/%d/categories/%d", server.baseURL, noteID, categoryID1))
 		if err != nil {
 			t.Fatalf("failed to send request: %v", err)
 		}
@@ -698,7 +727,7 @@ func TestNoteCategoryRelationshipAPI(t *testing.T) {
 	})
 
 	t.Run("add category to non-existent note", func(t *testing.T) {
-		resp, err := http.Post(fmt.Sprintf("%s/api/v1/notes/99999/categories/%d", server.baseURL, categoryID1), "application/json", nil)
+		resp, err := server.doAuthPost(fmt.Sprintf("%s/api/v1/notes/99999/categories/%d", server.baseURL, categoryID1), nil)
 		if err != nil {
 			t.Fatalf("failed to send request: %v", err)
 		}
@@ -710,7 +739,7 @@ func TestNoteCategoryRelationshipAPI(t *testing.T) {
 	})
 
 	t.Run("add non-existent category to note", func(t *testing.T) {
-		resp, err := http.Post(fmt.Sprintf("%s/api/v1/notes/%d/categories/99999", server.baseURL, noteID), "application/json", nil)
+		resp, err := server.doAuthPost(fmt.Sprintf("%s/api/v1/notes/%d/categories/99999", server.baseURL, noteID), nil)
 		if err != nil {
 			t.Fatalf("failed to send request: %v", err)
 		}
@@ -722,7 +751,7 @@ func TestNoteCategoryRelationshipAPI(t *testing.T) {
 	})
 
 	t.Run("invalid note id in relationship", func(t *testing.T) {
-		resp, err := http.Post(fmt.Sprintf("%s/api/v1/notes/invalid/categories/%d", server.baseURL, categoryID1), "application/json", nil)
+		resp, err := server.doAuthPost(fmt.Sprintf("%s/api/v1/notes/invalid/categories/%d", server.baseURL, categoryID1), nil)
 		if err != nil {
 			t.Fatalf("failed to send request: %v", err)
 		}
@@ -734,7 +763,7 @@ func TestNoteCategoryRelationshipAPI(t *testing.T) {
 	})
 
 	t.Run("invalid category id in relationship", func(t *testing.T) {
-		resp, err := http.Post(fmt.Sprintf("%s/api/v1/notes/%d/categories/invalid", server.baseURL, noteID), "application/json", nil)
+		resp, err := server.doAuthPost(fmt.Sprintf("%s/api/v1/notes/%d/categories/invalid", server.baseURL, noteID), nil)
 		if err != nil {
 			t.Fatalf("failed to send request: %v", err)
 		}
