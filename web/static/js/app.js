@@ -1027,6 +1027,7 @@
     updateSortDirIcon();
     window.app.toggleSortMenu();
     renderNoteList();
+    updateActiveFilters();
   };
 
   // cycleSortDir — cycles through desc → asc → off (default updated_at desc)
@@ -1042,6 +1043,7 @@
     }
     updateSortDirIcon();
     renderNoteList();
+    updateActiveFilters();
   };
 
   // updateSortDirIcon — syncs the arrow icon with current sort direction
@@ -1176,34 +1178,70 @@
     }
   }
 
-  function updateActiveFilters() {
-    const container = document.getElementById('active-filters');
-    if (!container) return;
-
-    const badges = [];
+  // buildQueryString — produces a human-readable query string from the current
+  // filter and sort state, e.g.: search:"golang" regex:on cat:"Programming" sort:updated_at↓
+  // When no filters are active, returns a minimal string like "all notes sort:updated_at↓"
+  function buildQueryString() {
+    const parts = [];
 
     if (state.filters.search) {
-      const mode = state.filters.regex ? 'Regex' : 'Search';
-      badges.push(`<span class="filter-badge">${mode}: "${escapeHtml(state.filters.search)}"</span>`);
+      parts.push(`search:"${state.filters.search}"`);
+    }
+    if (state.filters.regex) {
+      parts.push('regex:on');
     }
     if (state.filters.categoryName) {
-      let catBadge = state.filters.categoryName;
+      parts.push(`cat:"${state.filters.categoryName}"`);
       if (state.filters.subcategories.length > 0) {
-        catBadge += ' > ' + state.filters.subcategories.join(', ');
+        parts.push(`subcats:"${state.filters.subcategories.join(',')}"`);
       }
-      badges.push(`<span class="filter-badge">${escapeHtml(catBadge)}</span>`);
     }
     if (state.filters.privacy !== 'all') {
-      badges.push(`<span class="filter-badge">${state.filters.privacy}</span>`);
+      parts.push(`privacy:${state.filters.privacy}`);
     }
     if (state.filters.date !== 'all') {
-      badges.push(`<span class="filter-badge">${state.filters.date}</span>`);
+      parts.push(`date:${state.filters.date}`);
     }
 
-    container.innerHTML = badges.length > 0
-      ? '<span>Filters: </span>' + badges.join(' ')
-      : '';
+    // Always include sort so the user knows the ordering
+    const arrow = state.sort.order === 'desc' ? '\u2193' : '\u2191';
+    parts.push(`sort:${state.sort.field}${arrow}`);
+
+    // If the only part is sort, prefix with "all notes" for clarity
+    if (parts.length === 1) {
+      return 'all notes ' + parts[0];
+    }
+    return parts.join(' ');
   }
+
+  function updateActiveFilters() {
+    const queryDisplay = document.getElementById('query-display');
+    const queryPopupText = document.getElementById('query-popup-text');
+    if (!queryDisplay) return;
+
+    const fullQuery = buildQueryString();
+
+    // Truncate the visible display to ~60 chars with ellipsis
+    const maxLen = 60;
+    queryDisplay.textContent = fullQuery.length > maxLen
+      ? fullQuery.substring(0, maxLen) + '\u2026'
+      : fullQuery;
+
+    // Popup always shows the full, untruncated query
+    if (queryPopupText) {
+      queryPopupText.textContent = fullQuery;
+    }
+  }
+
+  // copyQuery — copies the full query condition string to the clipboard
+  window.app.copyQuery = function() {
+    const fullQuery = buildQueryString();
+    navigator.clipboard.writeText(fullQuery).then(() => {
+      showToast('Query copied', 'success');
+    }).catch(() => {
+      showToast('Failed to copy query', 'error');
+    });
+  };
 
   function updateSyncStatus(status, text) {
     const statusEl = document.getElementById('sync-status');

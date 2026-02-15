@@ -16,10 +16,19 @@ func (s StatusBar) Render(b *element.Builder) any {
 			),
 		),
 
-		// Center section - Active filters
+		// Center section - Query condition display
+		// Shows a truncated, monospace query string representing active filters.
+		// On hover, a popup reveals the full query with a copy-to-clipboard button.
 		b.DivClass("status-center").R(
-			b.Div("class", "active-filters", "id", "active-filters").R(
-				// Active filters will be populated by JavaScript
+			b.Div("class", "query-display-wrapper", "id", "query-display-wrapper").R(
+				b.Span("class", "query-display", "id", "query-display").T(""),
+				b.Div("class", "query-popup", "id", "query-popup").R(
+					b.Text(`<code class="query-popup-text" id="query-popup-text"></code>`),
+					b.Button("class", "query-copy-btn", "onclick", "app.copyQuery()", "title", "Copy query").R(
+						// Double-rectangle (copy) SVG icon — raw HTML since element doesn't have SVG helpers
+						b.Text(`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`),
+					),
+				),
 			),
 		),
 

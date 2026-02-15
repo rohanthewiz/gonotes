@@ -1566,16 +1566,72 @@ input, textarea, select {
   color: var(--danger);
 }
 
-.active-filters {
+/* Query display — monospace, truncated query string in the status bar center */
+.query-display-wrapper {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: var(--spacing-xs);
+  max-width: 100%;
+  cursor: default;
 }
 
-.filter-badge {
-  background: var(--bg-tertiary);
-  padding: 2px 8px;
+.query-display {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 480px;
+}
+
+/* Hover popup — absolute-positioned above the query display, shows full query + copy btn */
+.query-popup {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--spacing-sm) var(--spacing-md);
+  z-index: 200;
+  white-space: nowrap;
+  max-width: 600px;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.query-display-wrapper:hover .query-popup {
+  display: flex;
+}
+
+.query-popup-text {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.query-copy-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: var(--spacing-xs);
   border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.query-copy-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--primary);
 }
 
 .result-count {
