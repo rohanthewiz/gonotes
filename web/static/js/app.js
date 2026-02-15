@@ -26,8 +26,7 @@
       field: 'updated_at',
       order: 'desc'
     },
-    user: null,
-    lastSync: null
+    user: null
   };
 
   // API configuration
@@ -1257,13 +1256,6 @@
     if (textEl) textEl.textContent = text;
   }
 
-  window.app.syncNotes = async function() {
-    await loadNotes();
-    await window.app._loadCategories();
-    await window.app._loadNoteCategoryMappings();
-    renderNoteList();
-  };
-
   // ============================================
   // Modal Dialogs
   // ============================================
@@ -1491,7 +1483,11 @@
     escapeHtml,
     renderNoteList,
     updateResultCount,
-    updateActiveFilters
+    updateActiveFilters,
+    updateSyncStatus,
+    loadNotes,
+    generateGUID,
+    formatRelativeTime
   };
 
   async function init() {
@@ -1510,6 +1506,8 @@
     // Initialize category input handlers (defined in cats_subcats.js)
     window.app._initCategoryHandlers();
 
+    // Initialize sync module (defined in sync.js)
+    window.app._initSyncHandlers();
     // Set up image paste and drag-and-drop handlers on the body textarea
     // (delegated to image_embed.js)
     if (window.app._setupImagePasteHandler) window.app._setupImagePasteHandler();

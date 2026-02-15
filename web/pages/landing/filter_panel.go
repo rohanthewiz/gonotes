@@ -112,6 +112,54 @@ func (f FilterPanel) renderSyncSection(b *element.Builder) any {
 			b.SpanClass("filter-toggle").T("▼"),
 		),
 		b.DivClass("filter-content").R(
+			// Auto-sync toggle row
+			b.Div("class", "sync-control-row").R(
+				b.SpanClass("sync-control-label").T("Auto-sync"),
+				b.Label("class", "sync-toggle").R(
+					b.Input("type", "checkbox", "id", "auto-sync-toggle",
+						"onchange", "app.toggleAutoSync(this.checked)"),
+					b.Span("class", "slider").R(),
+				),
+			),
+			// Interval selector row
+			b.Div("class", "sync-control-row").R(
+				b.SpanClass("sync-control-label").T("Interval"),
+				b.Select("class", "sync-select", "id", "sync-interval",
+					"onchange", "app.setSyncInterval(this.value)").R(
+					b.Option("value", "1").T("1 min"),
+					b.Option("value", "5", "selected", "selected").T("5 min"),
+					b.Option("value", "15").T("15 min"),
+					b.Option("value", "30").T("30 min"),
+				),
+			),
+			// Peer URL input row
+			b.Div("class", "sync-control-row sync-peer-row").R(
+				b.SpanClass("sync-control-label").T("Peer URL"),
+				b.Input("type", "text", "class", "sync-peer-input", "id", "sync-peer-url",
+					"placeholder", "https://peer:port",
+					"onchange", "app.setPeerUrl(this.value)"),
+				b.Button("class", "btn btn-secondary btn-sm", "id", "sync-test-btn",
+					"onclick", "app.testPeerConnection()").T("Test"),
+			),
+			// Sync Now button
+			b.Div("class", "sync-control-row").R(
+				b.Button("class", "btn btn-secondary btn-sm sync-now-btn",
+					"onclick", "app.syncNotes()").T("↻ Sync Now"),
+			),
+			// Sync stats block
+			b.Div("class", "sync-stats", "id", "sync-stats").R(
+				b.Div("class", "sync-stat-row", "id", "sync-last-time").T("Last sync: Never"),
+				b.Div("class", "sync-stat-row").R(
+					b.Span("id", "sync-received").T("Received: 0"),
+					b.Span("class", "sync-stat-sep").T(" "),
+					b.Span("id", "sync-pushed").T("Pushed: 0"),
+				),
+				b.Div("class", "sync-stat-row", "id", "sync-conflict-row", "style", "display:none").R(
+					b.Span("class", "text-warning", "id", "sync-conflict-count").T("Conflicts: 0"),
+					b.Button("class", "btn-link text-warning", "onclick", "app.showConflicts()").T("Resolve"),
+				),
+			),
+			// Unsynced only filter
 			b.LabelClass("filter-item").R(
 				b.Input("type", "checkbox", "class", "filter-checkbox", "id", "filter-unsynced",
 					"onchange", "app.toggleUnsyncedFilter(this.checked)"),
