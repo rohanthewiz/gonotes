@@ -48,6 +48,8 @@ github.com/rohanthewiz/element v0.5.5-0.20250730211845-a097f2feeb11 h1:49jp7xRDV
 github.com/rohanthewiz/element v0.5.5-0.20250730211845-a097f2feeb11/go.mod h1:cA57S9UGRSaWrMmGC1M+8QCQw/y8kgODiBB0KEwIyzo=
 github.com/rohanthewiz/logger v1.2.20 h1:VIhsYEEIkEmt2u04+YzRSVVwnKrcMZ0cc27CfE5PEGk=
 github.com/rohanthewiz/logger v1.2.20/go.mod h1:EeolhGJQrNieymuiRM/vH7chzHs1Fz579XCkVZTfOEU=
+github.com/rohanthewiz/rutil v0.1.9-0.20250728223252-483502c18c1d h1:1TStdjtBHJlBvGlJ1LpEUYOp0vC5eroJVSd1uBk33eU=
+github.com/rohanthewiz/rutil v0.1.9-0.20250728223252-483502c18c1d/go.mod h1:1someaaSfx4LwK3LiNtfMcp4ZbTfGrTgsa4YLECQkiI=
 github.com/rohanthewiz/rweb v0.1.21-0.20250827011452-5ff5413205fc h1:Xw0bBeHWApfyKFxOolloDd2Bl2Zpf0I1SNYX0g3pSN0=
 github.com/rohanthewiz/rweb v0.1.21-0.20250827011452-5ff5413205fc/go.mod h1:esRbqdso5FllxreXnmoRNz3XJv4Otr2OIDUX81wRr0c=
 github.com/rohanthewiz/serr v1.2.16 h1:NDV7yhoHVkZMMSKrJzxysZHUcS7vo3QU88D2B7MHGio=

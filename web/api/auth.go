@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 
 	"gonotes/models"
@@ -38,9 +39,24 @@ type AuthResponse struct {
 //   - 400: Invalid input (missing/weak password, invalid username)
 //   - 409: Username or email already exists
 func Register(ctx rweb.Context) error {
-	var input models.UserRegisterInput
-	if err := json.Unmarshal(ctx.Request().Body(), &input); err != nil {
+	// Gate registration behind a shared secret when GONOTES_REGISTRATION_SECRET
+	// is set. This prevents unauthorized account creation on hub instances
+	// exposed to the network while still allowing spoke machines to register
+	// programmatically by including the secret in the request body.
+	// When the env var is unset, registration is open (backwards compatible).
+	var rawBody struct {
+		models.UserRegisterInput
+		RegistrationSecret string `json:"registration_secret"`
+	}
+	if err := json.Unmarshal(ctx.Request().Body(), &rawBody); err != nil {
 		return writeError(ctx, http.StatusBadRequest, "invalid request body")
+	}
+	input := rawBody.UserRegisterInput
+
+	if requiredSecret := os.Getenv("GONOTES_REGISTRATION_SECRET"); requiredSecret != "" {
+		if rawBody.RegistrationSecret != requiredSecret {
+			return writeError(ctx, http.StatusForbidden, "invalid registration secret")
+		}
 	}
 
 	// Validate required fields
@@ -258,4 +274,3 @@ func IsAuthenticated(ctx rweb.Context) bool {
 	auth, _ := ctx.Get("authenticated").(bool)
 	return auth
 }
-

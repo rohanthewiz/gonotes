@@ -232,6 +232,30 @@ func createTables() error {
 		return serr.Wrap(err, "failed to create category_change_sync_peers peer_id index")
 	}
 
+	// Create sync_conflicts table for conflict audit logging (Phase 3)
+	_, err = db.Exec(DDLCreateSyncConflictsSequence)
+	if err != nil {
+		return serr.Wrap(err, "failed to create sync_conflicts sequence")
+	}
+
+	_, err = db.Exec(DDLCreateSyncConflictsTable)
+	if err != nil {
+		return serr.Wrap(err, "failed to create sync_conflicts table")
+	}
+
+	_, err = db.Exec(DDLCreateSyncConflictsIndexEntityGUID)
+	if err != nil {
+		return serr.Wrap(err, "failed to create sync_conflicts entity_guid index")
+	}
+
+	// Create sync_state table for persisting sync client state (Phase 4).
+	// Stores peer identity, auth tokens, and timestamps per hub URL
+	// so sync can resume across restarts without re-authenticating.
+	_, err = db.Exec(DDLCreateSyncStateTable)
+	if err != nil {
+		return serr.Wrap(err, "failed to create sync_state table")
+	}
+
 	return nil
 }
 
