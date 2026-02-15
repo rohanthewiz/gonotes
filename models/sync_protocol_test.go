@@ -53,7 +53,7 @@ func createTestCategory(t *testing.T, name string) *models.Category {
 		Name:        name,
 		Description: &desc,
 	}
-	cat, err := models.CreateCategory(input)
+	cat, err := models.CreateCategory(input, spTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to create test category %q: %v", name, err)
 	}
@@ -82,7 +82,7 @@ func TestGetUnifiedChangesForPeer(t *testing.T) {
 	_ = createTestNote(t, "sync-unified-note-1", "Sync Note 1")
 
 	// Fetch unified changes — should have both types
-	response, err := models.GetUnifiedChangesForPeer(peerID, 100)
+	response, err := models.GetUnifiedChangesForPeer(peerID, "", 100)
 	if err != nil {
 		t.Fatalf("GetUnifiedChangesForPeer failed: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestGetUnifiedChangesForPeer_Pagination(t *testing.T) {
 	}
 
 	// Pull with limit=2 — should get 2 changes and has_more=true
-	response, err := models.GetUnifiedChangesForPeer(peerID, 2)
+	response, err := models.GetUnifiedChangesForPeer(peerID, "", 2)
 	if err != nil {
 		t.Fatalf("GetUnifiedChangesForPeer failed: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestApplyIncomingSyncChange_NoteCategoryMapping(t *testing.T) {
 	}
 
 	// Verify the note-category mapping exists
-	categories, err := models.GetNoteCategories(note.ID)
+	categories, err := models.GetNoteCategories(note.ID, spTestUserGUID)
 	if err != nil {
 		t.Fatalf("failed to get note categories: %v", err)
 	}
@@ -495,7 +495,7 @@ func TestGetEntitySnapshot(t *testing.T) {
 
 	note := createTestNote(t, "snapshot-note-guid", "Snapshot Test Note")
 
-	snapshot, err := models.GetEntitySnapshot("note", note.GUID)
+	snapshot, err := models.GetEntitySnapshot("note", note.GUID, "")
 	if err != nil {
 		t.Fatalf("GetEntitySnapshot failed: %v", err)
 	}
@@ -533,7 +533,7 @@ func TestGetEntitySnapshot_Category(t *testing.T) {
 
 	cat := createTestCategory(t, "Snapshot Category")
 
-	snapshot, err := models.GetEntitySnapshot("category", cat.GUID)
+	snapshot, err := models.GetEntitySnapshot("category", cat.GUID, "")
 	if err != nil {
 		t.Fatalf("GetEntitySnapshot for category failed: %v", err)
 	}
@@ -559,7 +559,7 @@ func TestGetEntitySnapshot_NotFound(t *testing.T) {
 	cleanup := setupSyncProtocolTestDB(t)
 	defer cleanup()
 
-	_, err := models.GetEntitySnapshot("note", "nonexistent-guid")
+	_, err := models.GetEntitySnapshot("note", "nonexistent-guid", "")
 	if err == nil {
 		t.Error("expected error for nonexistent entity, got nil")
 	}
@@ -575,7 +575,7 @@ func TestGetSyncStatus(t *testing.T) {
 	defer cleanup()
 
 	// Get status with empty DB
-	statusEmpty, err := models.GetSyncStatus()
+	statusEmpty, err := models.GetSyncStatus("")
 	if err != nil {
 		t.Fatalf("GetSyncStatus failed on empty DB: %v", err)
 	}
@@ -594,7 +594,7 @@ func TestGetSyncStatus(t *testing.T) {
 	_ = createTestNote(t, "status-note-2", "Status Note 2")
 	_ = createTestCategory(t, "Status Category 1")
 
-	status, err := models.GetSyncStatus()
+	status, err := models.GetSyncStatus("")
 	if err != nil {
 		t.Fatalf("GetSyncStatus failed: %v", err)
 	}
@@ -614,7 +614,7 @@ func TestGetSyncStatus(t *testing.T) {
 	}
 
 	// Getting status again with same data should produce same checksum
-	status2, err := models.GetSyncStatus()
+	status2, err := models.GetSyncStatus("")
 	if err != nil {
 		t.Fatalf("GetSyncStatus second call failed: %v", err)
 	}

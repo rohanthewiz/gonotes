@@ -57,6 +57,7 @@ type Category struct {
 	Name          string         `json:"name"`
 	Description   sql.NullString `json:"description,omitempty"`
 	Subcategories sql.NullString `json:"subcategories,omitempty"` // JSON array stored as string
+	CreatedBy     sql.NullString `json:"created_by,omitempty"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
 }
@@ -117,8 +118,9 @@ type NoteCategoryDetailOutput struct {
 	UpdatedAt             time.Time `json:"updated_at"`
 }
 
-// CreateCategory creates a new category in both disk and cache databases
-func CreateCategory(input CategoryInput) (*Category, error) {
+// CreateCategory creates a new category in both disk and cache databases.
+// The userGUID parameter sets the created_by field for multi-user data isolation.
+func CreateCategory(input CategoryInput, userGUID string) (*Category, error) {
 	if input.Name == "" {
 		return nil, serr.New("category name is required")
 	}
@@ -142,18 +144,25 @@ func CreateCategory(input CategoryInput) (*Category, error) {
 	// Generate a GUID for cross-machine identity
 	categoryGUID := uuid.New().String()
 
+	// Convert userGUID to NullString for storage
+	createdBy := sql.NullString{}
+	if userGUID != "" {
+		createdBy = sql.NullString{String: userGUID, Valid: true}
+	}
+
 	// Insert into disk database first (source of truth)
-	query := `INSERT INTO categories (guid, name, description, subcategories, created_at, updated_at)
-		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-		RETURNING id, guid, name, description, subcategories, created_at, updated_at`
+	query := `INSERT INTO categories (guid, name, description, subcategories, created_by, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		RETURNING id, guid, name, description, subcategories, created_by, created_at, updated_at`
 
 	var category Category
-	err := db.QueryRow(query, categoryGUID, input.Name, description, subcatsJSON).Scan(
+	err := db.QueryRow(query, categoryGUID, input.Name, description, subcatsJSON, createdBy).Scan(
 		&category.ID,
 		&category.GUID,
 		&category.Name,
 		&category.Description,
 		&category.Subcategories,
+		&category.CreatedBy,
 		&category.CreatedAt,
 		&category.UpdatedAt,
 	)
@@ -165,14 +174,15 @@ func CreateCategory(input CategoryInput) (*Category, error) {
 	recordCategoryCreateChange(category, input)
 
 	// Insert into cache database
-	cacheQuery := `INSERT INTO categories (id, guid, name, description, subcategories, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`
+	cacheQuery := `INSERT INTO categories (id, guid, name, description, subcategories, created_by, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	_, cacheErr := cacheDB.Exec(cacheQuery,
 		category.ID,
 		category.GUID,
 		category.Name,
 		category.Description,
 		category.Subcategories,
+		category.CreatedBy,
 		category.CreatedAt,
 		category.UpdatedAt,
 	)
@@ -185,18 +195,26 @@ func CreateCategory(input CategoryInput) (*Category, error) {
 	return &category, nil
 }
 
-// GetCategory retrieves a category by ID from cache
-func GetCategory(id int64) (*Category, error) {
-	query := `SELECT id, guid, name, description, subcategories, created_at, updated_at
+// GetCategory retrieves a category by ID from cache.
+// When userGUID is non-empty, enforces ownership via created_by filter.
+func GetCategory(id int64, userGUID string) (*Category, error) {
+	query := `SELECT id, guid, name, description, subcategories, created_by, created_at, updated_at
 		FROM categories WHERE id = ?`
+	args := []any{id}
+
+	if userGUID != "" {
+		query += ` AND created_by = ?`
+		args = append(args, userGUID)
+	}
 
 	var category Category
-	err := cacheDB.QueryRow(query, id).Scan(
+	err := cacheDB.QueryRow(query, args...).Scan(
 		&category.ID,
 		&category.GUID,
 		&category.Name,
 		&category.Description,
 		&category.Subcategories,
+		&category.CreatedBy,
 		&category.CreatedAt,
 		&category.UpdatedAt,
 	)
@@ -210,10 +228,19 @@ func GetCategory(id int64) (*Category, error) {
 	return &category, nil
 }
 
-// ListCategories retrieves all categories from cache
-func ListCategories(limit, offset int) ([]Category, error) {
-	query := `SELECT id, guid, name, description, subcategories, created_at, updated_at
-		FROM categories ORDER BY created_at DESC`
+// ListCategories retrieves categories from cache.
+// When userGUID is non-empty, only returns categories owned by that user.
+func ListCategories(limit, offset int, userGUID string) ([]Category, error) {
+	query := `SELECT id, guid, name, description, subcategories, created_by, created_at, updated_at
+		FROM categories`
+
+	var args []any
+	if userGUID != "" {
+		query += ` WHERE created_by = ?`
+		args = append(args, userGUID)
+	}
+
+	query += ` ORDER BY created_at DESC`
 
 	if limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", limit)
@@ -222,7 +249,7 @@ func ListCategories(limit, offset int) ([]Category, error) {
 		query += fmt.Sprintf(" OFFSET %d", offset)
 	}
 
-	rows, err := cacheDB.Query(query)
+	rows, err := cacheDB.Query(query, args...)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to list categories")
 	}
@@ -237,6 +264,7 @@ func ListCategories(limit, offset int) ([]Category, error) {
 			&category.Name,
 			&category.Description,
 			&category.Subcategories,
+			&category.CreatedBy,
 			&category.CreatedAt,
 			&category.UpdatedAt,
 		)
@@ -255,13 +283,15 @@ func ListCategories(limit, offset int) ([]Category, error) {
 
 // UpdateCategory updates a category in both disk and cache databases.
 // Records a category change with a delta fragment for sync.
-func UpdateCategory(id int64, input CategoryInput) (*Category, error) {
+// When userGUID is non-empty, verifies ownership before allowing the update.
+func UpdateCategory(id int64, input CategoryInput, userGUID string) (*Category, error) {
 	if input.Name == "" {
 		return nil, serr.New("category name is required")
 	}
 
-	// Fetch existing category for change tracking (need to compare before/after)
-	existing, err := GetCategory(id)
+	// Fetch existing category for change tracking (need to compare before/after).
+	// The userGUID filter ensures the caller owns this category.
+	existing, err := GetCategory(id, userGUID)
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +324,7 @@ func UpdateCategory(id int64, input CategoryInput) (*Category, error) {
 	}
 
 	// Fetch the updated record
-	selectQuery := `SELECT id, guid, name, description, subcategories, created_at, updated_at
+	selectQuery := `SELECT id, guid, name, description, subcategories, created_by, created_at, updated_at
 		FROM categories WHERE id = ?`
 
 	var category Category
@@ -304,6 +334,7 @@ func UpdateCategory(id int64, input CategoryInput) (*Category, error) {
 		&category.Name,
 		&category.Description,
 		&category.Subcategories,
+		&category.CreatedBy,
 		&category.CreatedAt,
 		&category.UpdatedAt,
 	)
@@ -335,9 +366,11 @@ func UpdateCategory(id int64, input CategoryInput) (*Category, error) {
 
 // DeleteCategory deletes a category from both disk and cache databases.
 // Records a category delete change for sync.
-func DeleteCategory(id int64) error {
-	// Fetch category for GUID (needed for change tracking)
-	existing, err := GetCategory(id)
+// When userGUID is non-empty, verifies ownership before allowing the delete.
+func DeleteCategory(id int64, userGUID string) error {
+	// Fetch category for GUID (needed for change tracking).
+	// The userGUID filter ensures the caller owns this category.
+	existing, err := GetCategory(id, userGUID)
 	if err != nil {
 		return err
 	}
@@ -399,23 +432,29 @@ func (nc *NoteCategory) ToOutput() NoteCategoryOutput {
 
 // AddCategoryToNote adds a category to a note without subcategories.
 // For adding with subcategories, use AddCategoryToNoteWithSubcategories.
-func AddCategoryToNote(noteID, categoryID int64) error {
-	return AddCategoryToNoteWithSubcategories(noteID, categoryID, nil)
+func AddCategoryToNote(noteID, categoryID int64, userGUID string) error {
+	return AddCategoryToNoteWithSubcategories(noteID, categoryID, nil, userGUID)
 }
 
 // AddCategoryToNoteWithSubcategories adds a category to a note with optional subcategories.
 // The subcategories slice can be nil or empty for no subcategories.
-// Note: The caller (API layer) should verify note ownership before calling this function.
-func AddCategoryToNoteWithSubcategories(noteID, categoryID int64, subcategories []string) error {
-	// Verify note exists using a simple existence check (ownership verified by API layer)
+// When userGUID is non-empty, verifies both note and category ownership.
+func AddCategoryToNoteWithSubcategories(noteID, categoryID int64, subcategories []string, userGUID string) error {
+	// Verify note exists and belongs to the user
+	noteQuery := `SELECT 1 FROM notes WHERE id = ? AND deleted_at IS NULL`
+	noteArgs := []any{noteID}
+	if userGUID != "" {
+		noteQuery += ` AND created_by = ?`
+		noteArgs = append(noteArgs, userGUID)
+	}
 	var exists int
-	err := cacheDB.QueryRow(`SELECT 1 FROM notes WHERE id = ? AND deleted_at IS NULL`, noteID).Scan(&exists)
+	err := cacheDB.QueryRow(noteQuery, noteArgs...).Scan(&exists)
 	if err != nil {
 		return serr.New("note not found")
 	}
 
-	// Verify category exists
-	_, err = GetCategory(categoryID)
+	// Verify category exists and belongs to the user
+	_, err = GetCategory(categoryID, userGUID)
 	if err != nil {
 		return err
 	}
@@ -532,15 +571,23 @@ func RemoveCategoryFromNote(noteID, categoryID int64) error {
 	return nil
 }
 
-// GetNoteCategories retrieves all categories for a note
-func GetNoteCategories(noteID int64) ([]Category, error) {
-	query := `SELECT c.id, c.guid, c.name, c.description, c.subcategories, c.created_at, c.updated_at
+// GetNoteCategories retrieves all categories for a note.
+// When userGUID is non-empty, only returns categories owned by that user.
+func GetNoteCategories(noteID int64, userGUID string) ([]Category, error) {
+	query := `SELECT c.id, c.guid, c.name, c.description, c.subcategories, c.created_by, c.created_at, c.updated_at
 		FROM categories c
 		INNER JOIN note_categories nc ON c.id = nc.category_id
-		WHERE nc.note_id = ?
-		ORDER BY c.name ASC`
+		WHERE nc.note_id = ?`
+	args := []any{noteID}
 
-	rows, err := cacheDB.Query(query, noteID)
+	if userGUID != "" {
+		query += ` AND c.created_by = ?`
+		args = append(args, userGUID)
+	}
+
+	query += ` ORDER BY c.name ASC`
+
+	rows, err := cacheDB.Query(query, args...)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to get note categories")
 	}
@@ -555,6 +602,7 @@ func GetNoteCategories(noteID int64) ([]Category, error) {
 			&category.Name,
 			&category.Description,
 			&category.Subcategories,
+			&category.CreatedBy,
 			&category.CreatedAt,
 			&category.UpdatedAt,
 		)
@@ -575,15 +623,22 @@ func GetNoteCategories(noteID int64) ([]Category, error) {
 // are specifically selected for this note. Unlike GetNoteCategories which only returns
 // category data, this also pulls nc.subcategories from the junction table so the caller
 // knows which subcategories the user chose when linking the category to the note.
-func GetNoteCategoryDetails(noteID int64) ([]NoteCategoryDetailOutput, error) {
+func GetNoteCategoryDetails(noteID int64, userGUID string) ([]NoteCategoryDetailOutput, error) {
 	query := `SELECT c.id, c.guid, c.name, c.description, c.subcategories, c.created_at, c.updated_at,
 		nc.subcategories
 		FROM categories c
 		INNER JOIN note_categories nc ON c.id = nc.category_id
-		WHERE nc.note_id = ?
-		ORDER BY c.name ASC`
+		WHERE nc.note_id = ?`
+	args := []any{noteID}
 
-	rows, err := cacheDB.Query(query, noteID)
+	if userGUID != "" {
+		query += ` AND c.created_by = ?`
+		args = append(args, userGUID)
+	}
+
+	query += ` ORDER BY c.name ASC`
+
+	rows, err := cacheDB.Query(query, args...)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to get note category details")
 	}
@@ -637,17 +692,25 @@ func GetNoteCategoryDetails(noteID int64) ([]NoteCategoryDetailOutput, error) {
 	return results, nil
 }
 
-// GetCategoryNotes retrieves all notes for a category
-func GetCategoryNotes(categoryID int64) ([]Note, error) {
+// GetCategoryNotes retrieves all notes for a category.
+// When userGUID is non-empty, only returns notes owned by that user.
+func GetCategoryNotes(categoryID int64, userGUID string) ([]Note, error) {
 	query := `SELECT n.id, n.guid, n.title, n.description, n.body, n.tags,
 		n.is_private, n.encryption_iv, n.created_by, n.updated_by,
 		n.created_at, n.updated_at, n.synced_at, n.deleted_at
 		FROM notes n
 		INNER JOIN note_categories nc ON n.id = nc.note_id
-		WHERE nc.category_id = ? AND n.deleted_at IS NULL
-		ORDER BY n.created_at DESC`
+		WHERE nc.category_id = ? AND n.deleted_at IS NULL`
+	args := []any{categoryID}
 
-	rows, err := cacheDB.Query(query, categoryID)
+	if userGUID != "" {
+		query += ` AND n.created_by = ?`
+		args = append(args, userGUID)
+	}
+
+	query += ` ORDER BY n.created_at DESC`
+
+	rows, err := cacheDB.Query(query, args...)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to get category notes")
 	}
@@ -686,18 +749,26 @@ func GetCategoryNotes(categoryID int64) ([]Note, error) {
 }
 
 // GetCategoryByName retrieves a category by its name from cache.
+// When userGUID is non-empty, scopes by ownership.
 // Returns nil, nil if the category doesn't exist.
-func GetCategoryByName(name string) (*Category, error) {
-	query := `SELECT id, guid, name, description, subcategories, created_at, updated_at
+func GetCategoryByName(name string, userGUID string) (*Category, error) {
+	query := `SELECT id, guid, name, description, subcategories, created_by, created_at, updated_at
 		FROM categories WHERE name = ?`
+	args := []any{name}
+
+	if userGUID != "" {
+		query += ` AND created_by = ?`
+		args = append(args, userGUID)
+	}
 
 	var category Category
-	err := cacheDB.QueryRow(query, name).Scan(
+	err := cacheDB.QueryRow(query, args...).Scan(
 		&category.ID,
 		&category.GUID,
 		&category.Name,
 		&category.Description,
 		&category.Subcategories,
+		&category.CreatedBy,
 		&category.CreatedAt,
 		&category.UpdatedAt,
 	)

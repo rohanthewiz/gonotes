@@ -231,20 +231,27 @@ func ApplySyncNoteDelete(noteGUID string) error {
 }
 
 // ApplySyncCategoryCreate creates a category from sync data.
-func ApplySyncCategoryCreate(categoryGUID, name string, fragment CategoryFragment) (*Category, error) {
+// The userGUID parameter sets created_by for multi-user data isolation on the hub.
+func ApplySyncCategoryCreate(categoryGUID, name string, fragment CategoryFragment, userGUID string) (*Category, error) {
 	// Extract field values from fragment
 	description := fragment.Description
 	subcategories := fragment.Subcategories
 
+	// Convert userGUID to NullString
+	createdBy := sql.NullString{}
+	if userGUID != "" {
+		createdBy = sql.NullString{String: userGUID, Valid: true}
+	}
+
 	// Insert into disk database
-	query := `INSERT INTO categories (guid, name, description, subcategories, created_at, updated_at)
-		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-		RETURNING id, guid, name, description, subcategories, created_at, updated_at`
+	query := `INSERT INTO categories (guid, name, description, subcategories, created_by, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		RETURNING id, guid, name, description, subcategories, created_by, created_at, updated_at`
 
 	var category Category
-	err := db.QueryRow(query, categoryGUID, name, description, subcategories).Scan(
+	err := db.QueryRow(query, categoryGUID, name, description, subcategories, createdBy).Scan(
 		&category.ID, &category.GUID, &category.Name, &category.Description,
-		&category.Subcategories, &category.CreatedAt, &category.UpdatedAt,
+		&category.Subcategories, &category.CreatedBy, &category.CreatedAt, &category.UpdatedAt,
 	)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to insert synced category into disk")
@@ -261,11 +268,11 @@ func ApplySyncCategoryCreate(categoryGUID, name string, fragment CategoryFragmen
 	}
 
 	// Insert into cache
-	cacheQuery := `INSERT INTO categories (id, guid, name, description, subcategories, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`
+	cacheQuery := `INSERT INTO categories (id, guid, name, description, subcategories, created_by, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err = cacheDB.Exec(cacheQuery,
 		category.ID, category.GUID, category.Name, category.Description,
-		category.Subcategories, category.CreatedAt, category.UpdatedAt,
+		category.Subcategories, category.CreatedBy, category.CreatedAt, category.UpdatedAt,
 	)
 	if err != nil {
 		return &category, serr.Wrap(err, "synced category created on disk but cache insert failed")

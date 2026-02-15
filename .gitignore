@@ -9,10 +9,13 @@ test_db/
 
 *.gob
 *.csv
+*.zip
 
 *.sqlite
 *.ddb
 data/
+
+.env
 
 gonotes.exe
 gonotes

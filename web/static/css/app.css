@@ -9,6 +9,12 @@
   --primary-dark: #2563EB;
   --primary-light: #93C5FD;
 
+  /* Colors - Primary Alpha (for focus rings, selections, subtle backgrounds) */
+  --primary-alpha-5: rgba(59, 130, 246, 0.05);
+  --primary-alpha-8: rgba(59, 130, 246, 0.08);
+  --primary-alpha-10: rgba(59, 130, 246, 0.1);
+  --primary-alpha-20: rgba(59, 130, 246, 0.2);
+
   /* Colors - Status */
   --success: #10B981;
   --success-light: #D1FAE5;
@@ -26,6 +32,11 @@
   --text-muted: #9CA3AF;
   --border-light: #E5E7EB;
   --border-dark: #D1D5DB;
+
+  /* Colors - Overlay */
+  --overlay-bg: rgba(0, 0, 0, 0.5);
+  --code-bg: #1e1e1e;
+  --code-text: #d4d4d4;
 
   /* Spacing - Base 4px */
   --spacing-xs: 4px;
@@ -45,7 +56,6 @@
 
   /* Layout */
   --toolbar-height: 52px;
-  --search-bar-height: 48px;
   --status-bar-height: 36px;
   --left-panel-width: 220px;
   --right-panel-width: 40%;
@@ -61,6 +71,69 @@
   /* Transitions */
   --transition-fast: 150ms ease;
   --transition-normal: 250ms ease;
+}
+
+/* ============================================
+   Dark Green Theme
+   Charcoal backgrounds with sage green accents
+   ============================================ */
+[data-theme="dark-green"] {
+  /* Colors - Primary (green) */
+  --primary: #6B9F7B;
+  --primary-dark: #5A8E6A;
+  --primary-light: #3D5C45;
+
+  /* Colors - Primary Alpha */
+  --primary-alpha-5: rgba(107, 159, 123, 0.08);
+  --primary-alpha-8: rgba(107, 159, 123, 0.12);
+  --primary-alpha-10: rgba(107, 159, 123, 0.15);
+  --primary-alpha-20: rgba(107, 159, 123, 0.25);
+
+  /* Colors - Status */
+  --success: #4ADE80;
+  --success-light: rgba(74, 222, 128, 0.15);
+  --warning: #FBBF24;
+  --warning-light: rgba(251, 191, 36, 0.15);
+  --danger: #F87171;
+  --danger-light: rgba(248, 113, 113, 0.15);
+
+  /* Colors - Neutral (Dark Mode) */
+  --bg-primary: #2B2B2B;
+  --bg-secondary: #323232;
+  --bg-tertiary: #3A3A3A;
+  --text-primary: #D4DDD0;
+  --text-secondary: #8FA888;
+  --text-muted: #5E7A56;
+  --border-light: #404040;
+  --border-dark: #4A4A4A;
+
+  /* Colors - Overlay */
+  --overlay-bg: rgba(0, 0, 0, 0.65);
+  --code-bg: #1A1A1A;
+  --code-text: #A8D8A8;
+
+  /* Shadows - stronger for dark backgrounds */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.35);
+
+  color-scheme: dark;
+}
+
+/* Theme toggle button */
+.theme-toggle {
+  padding: var(--spacing-sm);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: var(--font-size-md);
+  line-height: 1;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.theme-toggle:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
 }
 
 /* ============================================
@@ -125,9 +198,9 @@ input, textarea, select {
 .toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   height: var(--toolbar-height);
   padding: 0 var(--spacing-lg);
+  gap: var(--spacing-md);
   background: var(--bg-primary);
   border-bottom: 1px solid var(--border-light);
   flex-shrink: 0;
@@ -136,13 +209,27 @@ input, textarea, select {
 .toolbar-left {
   display: flex;
   align-items: center;
-  gap: var(--spacing-lg);
+  gap: var(--spacing-md);
+}
+
+/* App logo in the toolbar */
+.toolbar-logo {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  background: none;
+}
+
+/* Flexible spacer between left filter controls and right action controls */
+.toolbar-spacer {
+  flex: 1;
 }
 
 .toolbar-right {
   display: flex;
   align-items: center;
   gap: var(--spacing-md);
+  flex-shrink: 0;
 }
 
 .btn {
@@ -197,19 +284,52 @@ input, textarea, select {
   font-weight: 400;
 }
 
-.sort-dropdown {
+/* Sort control — two-part button: field name + direction arrow */
+.sort-control {
   display: flex;
   align-items: center;
-  gap: var(--spacing-xs);
+}
+
+/* Keep the dropdown inline so the direction arrow sits beside it */
+.sort-control > .dropdown {
+  display: inline-block;
+}
+
+/* Left half: column name that opens the field picker dropdown */
+.sort-field-btn {
+  display: inline-flex;
+  align-items: center;
   padding: var(--spacing-sm) var(--spacing-md);
   background: var(--bg-tertiary);
   border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
+  border-right: none;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
   cursor: pointer;
+  font-size: var(--font-size-sm);
 }
 
-.sort-dropdown:hover {
+.sort-field-btn:hover {
   border-color: var(--border-dark);
+  background: var(--border-light);
+}
+
+/* Right half: bold arrow that cycles sort direction */
+.sort-dir-btn {
+  display: flex;
+  align-items: center;
+  padding: var(--spacing-sm) var(--spacing-sm);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-light);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: var(--font-size-sm);
+  line-height: 1;
+}
+
+.sort-dir-btn:hover {
+  border-color: var(--border-dark);
+  background: var(--border-light);
 }
 
 .user-menu {
@@ -238,25 +358,16 @@ input, textarea, select {
 }
 
 /* ============================================
-   Search Bar - Full-width between toolbar and content
+   Search Bar elements - now inline within the toolbar
    ============================================ */
-.search-bar {
-  display: flex;
-  align-items: center;
-  height: var(--search-bar-height);
-  padding: 0 var(--spacing-lg);
-  gap: var(--spacing-md);
-  background: var(--bg-primary);
-  border-bottom: 1px solid var(--border-light);
-  flex-shrink: 0;
-}
 
 .search-bar-input-wrapper {
   position: relative;
   display: flex;
   align-items: center;
-  flex: 1;
-  min-width: 0;
+  width: 280px;
+  min-width: 180px;
+  flex-shrink: 1;
 }
 
 .search-bar-icon {
@@ -281,7 +392,7 @@ input, textarea, select {
 .search-bar-input:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px var(--primary-alpha-10);
 }
 
 /* Category dropdown in the search bar */
@@ -300,7 +411,7 @@ input, textarea, select {
 .search-bar-select:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px var(--primary-alpha-10);
 }
 
 /* Subcategory chips container — shown when a category with subcats is selected */
@@ -336,10 +447,37 @@ input, textarea, select {
 }
 
 .subcat-chip.active {
-  background: rgba(59, 130, 246, 0.1);
+  background: var(--primary-alpha-10);
   border-color: var(--primary);
   color: var(--primary);
   font-weight: 500;
+}
+
+/* Regex toggle button in search bar */
+.search-bar-regex-toggle {
+  flex-shrink: 0;
+  font-family: monospace;
+  font-weight: 600;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: var(--font-size-sm);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  line-height: 1;
+}
+
+.search-bar-regex-toggle:hover {
+  border-color: var(--primary-light);
+  color: var(--primary);
+}
+
+.search-bar-regex-toggle.active {
+  background: var(--primary-alpha-10);
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 /* Clear button in search bar */
@@ -384,7 +522,7 @@ input, textarea, select {
 .search-input:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px var(--primary-alpha-10);
 }
 
 .search-icon {
@@ -599,7 +737,7 @@ input, textarea, select {
 }
 
 .note-row.selected {
-  background: rgba(59, 130, 246, 0.05);
+  background: var(--primary-alpha-5);
   border-left: 3px solid var(--primary);
 }
 
@@ -653,8 +791,8 @@ input, textarea, select {
   min-width: 0;
   max-width: 200px;
   padding: 1px 6px;
-  background: rgba(59, 130, 246, 0.08);
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: var(--primary-alpha-8);
+  border: 1px solid var(--primary-alpha-20);
   border-radius: var(--radius-sm);
 }
 
@@ -840,7 +978,7 @@ input, textarea, select {
   font-weight: 700;
   color: var(--primary-dark);
   padding: 2px 8px;
-  background: rgba(59, 130, 246, 0.1);
+  background: var(--primary-alpha-10);
   border-radius: var(--radius-sm);
   white-space: nowrap;
 }
@@ -905,8 +1043,8 @@ input, textarea, select {
 }
 
 .markdown-content pre {
-  background: #1e1e1e;
-  color: #d4d4d4;
+  background: var(--code-bg);
+  color: var(--code-text);
   padding: var(--spacing-lg);
   border-radius: var(--radius-md);
   overflow-x: auto;
@@ -939,6 +1077,24 @@ input, textarea, select {
   max-width: 100%;
   height: auto;
   border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+/* Mermaid diagram blocks */
+.markdown-content .mermaid-diagram {
+  display: flex;
+  justify-content: center;
+  margin: var(--spacing-lg) 0;
+  padding: var(--spacing-lg);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+
+.markdown-content .mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
 }
 
 .markdown-content table {
@@ -1039,12 +1195,13 @@ input, textarea, select {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   background: var(--bg-secondary);
+  color: var(--text-primary);
 }
 
 .edit-input:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px var(--primary-alpha-10);
 }
 
 /* Subcategory selection field - displayed when category has subcats */
@@ -1078,11 +1235,11 @@ input, textarea, select {
 
 .subcat-checkbox-label:hover {
   border-color: var(--primary);
-  background: rgba(59, 130, 246, 0.05);
+  background: var(--primary-alpha-5);
 }
 
 .subcat-checkbox-label:has(.subcat-checkbox:checked) {
-  background: rgba(59, 130, 246, 0.1);
+  background: var(--primary-alpha-10);
   border-color: var(--primary);
   color: var(--primary);
 }
@@ -1221,10 +1378,109 @@ input, textarea, select {
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: var(--font-size-sm);
   line-height: 1.6;
+  background: var(--bg-primary);
+  color: var(--text-primary);
 }
 
 .edit-body:focus {
   outline: none;
+}
+
+/* Drag-over visual feedback for image drop */
+.edit-body.drag-over {
+  background: var(--primary-alpha-5);
+  border: 2px dashed var(--primary);
+}
+
+/* Image resize dialog */
+.image-resize-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--overlay-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.image-resize-dialog {
+  background: var(--bg-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: var(--spacing-xl);
+  max-width: 520px;
+  width: 90%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+.image-resize-dialog h3 {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+}
+
+.image-resize-preview {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  min-height: 120px;
+  max-height: 300px;
+  overflow: hidden;
+}
+
+.image-resize-preview img {
+  max-width: 100%;
+  max-height: 280px;
+  object-fit: contain;
+}
+
+.image-resize-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.image-resize-controls label {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.image-resize-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.image-resize-row input[type="range"] {
+  flex: 1;
+}
+
+.image-resize-row .resize-value {
+  min-width: 80px;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.image-resize-info {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+
+.image-resize-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-md);
 }
 
 .edit-footer {
@@ -1310,16 +1566,72 @@ input, textarea, select {
   color: var(--danger);
 }
 
-.active-filters {
+/* Query display — monospace, truncated query string in the status bar center */
+.query-display-wrapper {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: var(--spacing-xs);
+  max-width: 100%;
+  cursor: default;
 }
 
-.filter-badge {
-  background: var(--bg-tertiary);
-  padding: 2px 8px;
+.query-display {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 480px;
+}
+
+/* Hover popup — absolute-positioned above the query display, shows full query + copy btn */
+.query-popup {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--spacing-sm) var(--spacing-md);
+  z-index: 200;
+  white-space: nowrap;
+  max-width: 600px;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.query-display-wrapper:hover .query-popup {
+  display: flex;
+}
+
+.query-popup-text {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.query-copy-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: var(--spacing-xs);
   border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.query-copy-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--primary);
 }
 
 .result-count {
@@ -1386,13 +1698,15 @@ input, textarea, select {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   font-size: var(--font-size-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
   transition: all var(--transition-fast);
 }
 
 .form-input:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px var(--primary-alpha-10);
 }
 
 .form-input.error {
@@ -1500,7 +1814,7 @@ input, textarea, select {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--overlay-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1829,7 +2143,7 @@ input, textarea, select {
   .left-panel {
     position: fixed;
     left: 0;
-    top: calc(var(--toolbar-height) + var(--search-bar-height));
+    top: var(--toolbar-height);
     bottom: var(--status-bar-height);
     z-index: 50;
     transform: translateX(-100%);
@@ -1844,7 +2158,7 @@ input, textarea, select {
   .right-panel {
     position: fixed;
     right: 0;
-    top: calc(var(--toolbar-height) + var(--search-bar-height));
+    top: var(--toolbar-height);
     bottom: var(--status-bar-height);
     z-index: 50;
     width: 50%;
@@ -1866,12 +2180,12 @@ input, textarea, select {
 @media (max-width: 768px) {
   :root {
     --toolbar-height: 56px;
-    --search-bar-height: auto;
     --left-panel-width: 280px;
   }
 
   /* Stack search bar fields vertically on small screens */
-  .search-bar {
+  /* On mobile, let toolbar wrap and hide less critical elements */
+  .toolbar {
     flex-wrap: wrap;
     height: auto;
     padding: var(--spacing-sm) var(--spacing-lg);
@@ -1879,7 +2193,8 @@ input, textarea, select {
   }
 
   .search-bar-input-wrapper {
-    flex-basis: 100%;
+    width: 100%;
+    min-width: unset;
   }
 
   .search-bar-select {
@@ -1891,7 +2206,7 @@ input, textarea, select {
     display: none;
   }
 
-  .sort-dropdown span {
+  .sort-field-btn {
     display: none;
   }
 
@@ -2141,4 +2456,191 @@ input, textarea, select {
   padding: var(--spacing-lg);
   text-align: center;
   color: var(--text-muted);
+}
+
+/* ============================================
+   Note Linking - Preview Links & Popup
+   ============================================ */
+
+/* Note link rendered in preview content */
+.note-link {
+  color: var(--primary);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--primary-light);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.note-link:hover {
+  color: var(--primary-dark);
+  border-bottom-style: solid;
+  text-decoration: none;
+}
+
+/* Link to Note popup overlay */
+.note-link-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--overlay-bg);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 15vh;
+  z-index: 2000;
+}
+
+.note-link-dialog {
+  background: var(--bg-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: var(--spacing-xl);
+  max-width: 480px;
+  width: 90%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.note-link-dialog h3 {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.note-link-search {
+  width: 100%;
+  padding: var(--spacing-md);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: var(--font-size-md);
+  transition: all var(--transition-fast);
+}
+
+.note-link-search:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-alpha-10);
+}
+
+.note-link-results {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.note-link-hint {
+  padding: var(--spacing-lg);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.note-link-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-sm) var(--spacing-md);
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-light);
+  transition: background var(--transition-fast);
+}
+
+.note-link-result:last-child {
+  border-bottom: none;
+}
+
+.note-link-result:hover,
+.note-link-result.active {
+  background: var(--primary-alpha-8);
+}
+
+.note-link-result-title {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-right: var(--spacing-md);
+}
+
+.note-link-result-guid {
+  font-size: var(--font-size-xs);
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.note-link-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ============================================
+   Settings Modal
+   ============================================ */
+
+.settings-section {
+  padding: var(--spacing-lg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--spacing-lg);
+}
+
+.settings-section h3 {
+  margin: 0 0 var(--spacing-sm) 0;
+  font-size: var(--font-size-lg);
+}
+
+.settings-description {
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  margin-bottom: var(--spacing-md);
+  line-height: 1.5;
+}
+
+/* ============================================
+   Setup Page (Spoke Config Import)
+   ============================================ */
+
+.config-preview {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  margin-bottom: var(--spacing-lg);
+}
+
+.config-preview h3 {
+  margin: 0 0 var(--spacing-sm) 0;
+  font-size: var(--font-size-md);
+}
+
+.config-field {
+  padding: var(--spacing-xs) 0;
+  font-size: var(--font-size-sm);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.config-field:last-child {
+  border-bottom: none;
+}
+
+.setup-success {
+  background: var(--success-light, rgba(34, 197, 94, 0.1));
+  color: var(--success, #22c55e);
+  padding: var(--spacing-md);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--spacing-lg);
+  text-align: center;
 }

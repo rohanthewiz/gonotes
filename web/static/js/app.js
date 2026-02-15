@@ -14,9 +14,10 @@
     isEditing: false,
     filters: {
       search: '',
-      categoryId: null,      // selected category ID from search bar dropdown
-      categoryName: '',       // selected category name (for display)
-      subcategories: [],      // selected subcategory chips (AND logic)
+      regex: false,            // when true, search term is treated as a regular expression
+      categoryId: null,        // selected category ID from search bar dropdown
+      categoryName: '',        // selected category name (for display)
+      subcategories: [],       // selected subcategory chips (AND logic)
       privacy: 'all',
       date: 'all',
       unsynced: false
@@ -38,6 +39,7 @@
   // Configure Marked.js to use highlight.js for code blocks.
   // This provides syntax highlighting for Go, Python, JavaScript, TypeScript,
   // HTML, CSS, JSON, SQL, and Bash code blocks in note previews.
+  // Mermaid code blocks are rendered as diagrams instead of code.
   function configureMarkdown() {
     const renderer = new marked.Renderer();
 
@@ -49,6 +51,12 @@
       const language = token.lang || '';
       // Normalize language identifier - handle null/undefined and trim whitespace
       const lang = (language || '').trim().toLowerCase();
+
+      // Mermaid diagrams: render as a special div that mermaid.js will process
+      if (lang === 'mermaid') {
+        const id = 'mermaid-' + Math.random().toString(36).substr(2, 9);
+        return `<div class="mermaid-diagram" id="${id}">${escapeHtmlForCode(code)}</div>`;
+      }
 
       // Map common language aliases to highlight.js recognized names
       // This improves UX by accepting variations users commonly type
@@ -294,6 +302,28 @@
   window.app.logout = function() {
     clearAuthToken();
     window.location.href = '/login';
+  };
+
+  // ============================================
+  // Theme Toggle
+  // ============================================
+
+  window.app.toggleTheme = function() {
+    const html = document.documentElement;
+    const current = html.getAttribute('data-theme');
+    const next = current === 'dark-green' ? 'light' : 'dark-green';
+    html.setAttribute('data-theme', next);
+    localStorage.setItem('gonotes-theme', next);
+    // Update toggle button icon
+    const btn = document.getElementById('btn-theme-toggle');
+    if (btn) btn.textContent = next === 'dark-green' ? '\u2600' : '\u263E';
+    // Update highlight.js theme for code blocks
+    const hljsLink = document.getElementById('hljs-theme');
+    if (hljsLink) {
+      hljsLink.href = next === 'dark-green'
+        ? 'https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css'
+        : 'https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css';
+    }
   };
 
   // ============================================
@@ -552,10 +582,51 @@
     // Each row displays a bold category name followed by its selected subcategories.
     window.app._renderPreviewCategories(note.id);
 
-    // Render markdown content
+    // Render markdown content.
+    // DOMPurify must allow data: URIs for base64 embedded images.
     const content = note.body || '';
-    const html = DOMPurify.sanitize(marked.parse(content));
+    const html = DOMPurify.sanitize(marked.parse(content), {
+      ADD_ATTR: ['class', 'id', 'data-note-guid'],
+      ADD_TAGS: ['div', 'a'],
+    });
     document.getElementById('preview-content').innerHTML = html || '<p class="text-muted">No content</p>';
+
+    // Convert note link syntax [[note:UUID|Title]] to clickable links
+    // (delegated to note_links.js)
+    if (window.app._renderNoteLinks) window.app._renderNoteLinks();
+
+    // Render any mermaid diagrams found in the preview content
+    renderMermaidDiagrams();
+  }
+
+  // ============================================
+  // Mermaid Diagram Rendering
+  // ============================================
+
+  // Process all mermaid-diagram divs in the preview content.
+  // Each div contains escaped mermaid source; mermaid.run() renders them as SVG.
+  function renderMermaidDiagrams() {
+    if (typeof mermaid === 'undefined') return;
+
+    const container = document.getElementById('preview-content');
+    if (!container) return;
+
+    const diagrams = container.querySelectorAll('.mermaid-diagram');
+    if (diagrams.length === 0) return;
+
+    // Decode HTML entities back to plain text for mermaid processing
+    diagrams.forEach(el => {
+      const tmp = document.createElement('textarea');
+      tmp.innerHTML = el.innerHTML;
+      el.textContent = tmp.value;
+    });
+
+    // Use mermaid.run() to render the specific elements
+    try {
+      mermaid.run({ nodes: diagrams });
+    } catch (err) {
+      console.warn('Mermaid rendering error:', err);
+    }
   }
 
   function clearPreview() {
@@ -703,24 +774,44 @@
   function getFilteredNotes() {
     let notes = [...state.notes];
 
-    // Apply search filter — supports both text match and numeric ID match.
+    // Apply search filter — supports text match, numeric ID match, and regex.
     // If the search term is purely numeric, also match against note.id
     // so users can jump directly to a note by its database ID.
     if (state.filters.search) {
       const searchTerm = state.filters.search.trim();
-      const searchLower = searchTerm.toLowerCase();
       const isNumericSearch = /^\d+$/.test(searchTerm);
 
-      notes = notes.filter(note => {
-        // ID match: if the search term is a number, check note.id
-        if (isNumericSearch && note.id === parseInt(searchTerm, 10)) {
-          return true;
+      if (state.filters.regex) {
+        // Regex mode: compile the search term as a case-insensitive regex
+        let re;
+        try {
+          re = new RegExp(searchTerm, 'i');
+        } catch (e) {
+          // Invalid regex — skip filtering until the pattern is valid
+          re = null;
         }
-        // Text match across title, description, and body
-        return note.title.toLowerCase().includes(searchLower) ||
-          (note.body && note.body.toLowerCase().includes(searchLower)) ||
-          (note.description && note.description.toLowerCase().includes(searchLower));
-      });
+        if (re) {
+          notes = notes.filter(note => {
+            if (isNumericSearch && note.id === parseInt(searchTerm, 10)) {
+              return true;
+            }
+            return re.test(note.title) ||
+              (note.body && re.test(note.body)) ||
+              (note.description && re.test(note.description));
+          });
+        }
+      } else {
+        // Substring mode (default): case-insensitive .includes()
+        const searchLower = searchTerm.toLowerCase();
+        notes = notes.filter(note => {
+          if (isNumericSearch && note.id === parseInt(searchTerm, 10)) {
+            return true;
+          }
+          return note.title.toLowerCase().includes(searchLower) ||
+            (note.body && note.body.toLowerCase().includes(searchLower)) ||
+            (note.description && note.description.toLowerCase().includes(searchLower));
+        });
+      }
     }
 
     // Apply category filter from search bar dropdown.
@@ -816,6 +907,24 @@
     }, 300);
   };
 
+  window.app.toggleRegex = function() {
+    state.filters.regex = !state.filters.regex;
+    const btn = document.getElementById('regex-toggle');
+    if (btn) {
+      btn.classList.toggle('active', state.filters.regex);
+    }
+    const input = document.getElementById('search-input');
+    if (input) {
+      input.placeholder = state.filters.regex
+        ? 'Search by regex pattern...'
+        : 'Search by text or ID...';
+    }
+    // Re-apply the current search with updated mode
+    renderNoteList();
+    updateResultCount();
+    updateActiveFilters();
+  };
+
   window.app.clearSearch = function() {
     document.getElementById('search-input').value = '';
     state.filters.search = '';
@@ -824,11 +933,16 @@
     updateActiveFilters();
   };
 
-  // clearSearchBar — resets all search bar state: text input, category dropdown, subcats
+  // clearSearchBar — resets all search bar state: text input, regex, category dropdown, subcats
   window.app.clearSearchBar = function() {
     // Reset text search
     document.getElementById('search-input').value = '';
     state.filters.search = '';
+
+    // Reset regex toggle
+    state.filters.regex = false;
+    const regexBtn = document.getElementById('regex-toggle');
+    if (regexBtn) regexBtn.classList.remove('active');
 
     // Reset category dropdown
     const select = document.getElementById('search-category-select');
@@ -869,6 +983,7 @@
   window.app.clearAllFilters = function() {
     state.filters = {
       search: '',
+      regex: false,
       categoryId: null,
       categoryName: '',
       subcategories: [],
@@ -879,6 +994,8 @@
 
     // Reset search bar UI
     document.getElementById('search-input').value = '';
+    const regexBtn = document.getElementById('regex-toggle');
+    if (regexBtn) regexBtn.classList.remove('active');
     const select = document.getElementById('search-category-select');
     if (select) select.value = '';
     window.app._renderSubcategoryChips([]);
@@ -898,21 +1015,42 @@
   // Sorting
   // ============================================
 
+  // setSort — selects a sort field from the dropdown, resets direction to desc
   window.app.setSort = function(field) {
-    if (state.sort.field === field) {
-      state.sort.order = state.sort.order === 'asc' ? 'desc' : 'asc';
-    } else {
-      state.sort.field = field;
-      state.sort.order = 'desc';
-    }
+    state.sort.field = field;
+    state.sort.order = 'desc';
 
-    // Update label
     const labels = { updated_at: 'Modified', created_at: 'Created', title: 'Title' };
     document.getElementById('sort-label').textContent = labels[field] || field;
 
+    updateSortDirIcon();
     window.app.toggleSortMenu();
     renderNoteList();
+    updateActiveFilters();
   };
+
+  // cycleSortDir — cycles through desc → asc → off (default updated_at desc)
+  // "off" resets to the default sort (Modified descending)
+  window.app.cycleSortDir = function() {
+    if (state.sort.order === 'desc') {
+      state.sort.order = 'asc';
+    } else if (state.sort.order === 'asc') {
+      // Reset to default sort
+      state.sort.field = 'updated_at';
+      state.sort.order = 'desc';
+      document.getElementById('sort-label').textContent = 'Modified';
+    }
+    updateSortDirIcon();
+    renderNoteList();
+    updateActiveFilters();
+  };
+
+  // updateSortDirIcon — syncs the arrow icon with current sort direction
+  function updateSortDirIcon() {
+    var icon = document.getElementById('sort-dir-icon');
+    if (!icon) return;
+    icon.textContent = state.sort.order === 'desc' ? '\u25BC' : '\u25B2';
+  }
 
   window.app.toggleSortMenu = function() {
     const menu = document.getElementById('sort-menu');
@@ -1039,33 +1177,70 @@
     }
   }
 
-  function updateActiveFilters() {
-    const container = document.getElementById('active-filters');
-    if (!container) return;
-
-    const badges = [];
+  // buildQueryString — produces a human-readable query string from the current
+  // filter and sort state, e.g.: search:"golang" regex:on cat:"Programming" sort:updated_at↓
+  // When no filters are active, returns a minimal string like "all notes sort:updated_at↓"
+  function buildQueryString() {
+    const parts = [];
 
     if (state.filters.search) {
-      badges.push(`<span class="filter-badge">Search: "${state.filters.search}"</span>`);
+      parts.push(`search:"${state.filters.search}"`);
+    }
+    if (state.filters.regex) {
+      parts.push('regex:on');
     }
     if (state.filters.categoryName) {
-      let catBadge = state.filters.categoryName;
+      parts.push(`cat:"${state.filters.categoryName}"`);
       if (state.filters.subcategories.length > 0) {
-        catBadge += ' > ' + state.filters.subcategories.join(', ');
+        parts.push(`subcats:"${state.filters.subcategories.join(',')}"`);
       }
-      badges.push(`<span class="filter-badge">${escapeHtml(catBadge)}</span>`);
     }
     if (state.filters.privacy !== 'all') {
-      badges.push(`<span class="filter-badge">${state.filters.privacy}</span>`);
+      parts.push(`privacy:${state.filters.privacy}`);
     }
     if (state.filters.date !== 'all') {
-      badges.push(`<span class="filter-badge">${state.filters.date}</span>`);
+      parts.push(`date:${state.filters.date}`);
     }
 
-    container.innerHTML = badges.length > 0
-      ? '<span>Filters: </span>' + badges.join(' ')
-      : '';
+    // Always include sort so the user knows the ordering
+    const arrow = state.sort.order === 'desc' ? '\u2193' : '\u2191';
+    parts.push(`sort:${state.sort.field}${arrow}`);
+
+    // If the only part is sort, prefix with "all notes" for clarity
+    if (parts.length === 1) {
+      return 'all notes ' + parts[0];
+    }
+    return parts.join(' ');
   }
+
+  function updateActiveFilters() {
+    const queryDisplay = document.getElementById('query-display');
+    const queryPopupText = document.getElementById('query-popup-text');
+    if (!queryDisplay) return;
+
+    const fullQuery = buildQueryString();
+
+    // Truncate the visible display to ~60 chars with ellipsis
+    const maxLen = 60;
+    queryDisplay.textContent = fullQuery.length > maxLen
+      ? fullQuery.substring(0, maxLen) + '\u2026'
+      : fullQuery;
+
+    // Popup always shows the full, untruncated query
+    if (queryPopupText) {
+      queryPopupText.textContent = fullQuery;
+    }
+  }
+
+  // copyQuery — copies the full query condition string to the clipboard
+  window.app.copyQuery = function() {
+    const fullQuery = buildQueryString();
+    navigator.clipboard.writeText(fullQuery).then(() => {
+      showToast('Query copied', 'success');
+    }).catch(() => {
+      showToast('Failed to copy query', 'error');
+    });
+  };
 
   function updateSyncStatus(status, text) {
     const statusEl = document.getElementById('sync-status');
@@ -1087,14 +1262,105 @@
 
   window.app.closeModal = function() {
     document.getElementById('modal-overlay').classList.remove('open');
+    // Restore default footer visibility in case a modal hid it
+    const footer = document.getElementById('modal-footer');
+    if (footer) footer.style.display = '';
   };
 
   window.app.confirmModal = function() {
     window.app.closeModal();
   };
 
+  // ============================================
+  // Settings Modal
+  // ============================================
+
   window.app.showSettings = function() {
-    showToast('Settings coming soon', 'warning');
+    const modalTitle = document.getElementById('modal-title');
+    const modalBody = document.getElementById('modal-body');
+    const modalFooter = document.getElementById('modal-footer');
+
+    modalTitle.textContent = 'Settings';
+
+    // Build settings content — export section visible only to admins
+    let html = '';
+    if (state.user && state.user.is_admin) {
+      html += `
+        <div class="settings-section">
+          <h3>Spoke Configuration Export</h3>
+          <p class="settings-description">
+            Generate a config file for setting up a new spoke instance.
+            This creates an invite token and packages all required settings.
+          </p>
+          <div class="form-group">
+            <label class="form-label" for="export-password">Confirm your password</label>
+            <input type="password" class="form-input" id="export-password"
+                   placeholder="Enter your login password" autocomplete="current-password">
+          </div>
+          <button class="btn btn-primary" onclick="app.exportSpokeConfig()">
+            Export Spoke Config
+          </button>
+        </div>
+      `;
+    }
+    if (!html) {
+      html = '<p>No settings available.</p>';
+    }
+
+    modalBody.innerHTML = html;
+    // Hide default footer buttons — this modal uses its own inline buttons
+    modalFooter.style.display = 'none';
+    document.getElementById('modal-overlay').classList.add('open');
+  };
+
+  // exportSpokeConfig sends the admin's password to the hub, which verifies
+  // it and returns a downloadable JSON file containing all spoke env vars.
+  window.app.exportSpokeConfig = async function() {
+    const passwordInput = document.getElementById('export-password');
+    const password = passwordInput ? passwordInput.value : '';
+    if (!password) {
+      showToast('Please enter your password', 'warning');
+      return;
+    }
+
+    const token = localStorage.getItem('token');
+    try {
+      const response = await fetch(`${API_BASE}/admin/export-spoke-config`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ password })
+      });
+
+      if (!response.ok) {
+        // The error response is JSON even though success is a file download
+        const data = await response.json();
+        showToast(data.error || 'Export failed', 'error');
+        return;
+      }
+
+      // Trigger browser file download from the response blob
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      // Extract filename from Content-Disposition header, fall back to default
+      const disposition = response.headers.get('Content-Disposition') || '';
+      const match = disposition.match(/filename="?([^"]+)"?/);
+      a.download = match ? match[1] : 'gonotes-spoke-config.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+
+      showToast('Spoke config exported successfully', 'success');
+      window.app.closeModal();
+    } catch (err) {
+      console.error('Export error:', err);
+      showToast('Network error during export', 'error');
+    }
   };
 
   function escapeHtml(text) {
@@ -1228,11 +1494,24 @@
     // Ensure markdown/highlight.js is configured (retry in case CDN scripts loaded late)
     initMarkdownIfReady();
 
+    // Initialize mermaid with sensible defaults (no auto-render — we trigger manually)
+    if (typeof mermaid !== 'undefined') {
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: 'default',
+        securityLevel: 'loose',
+      });
+    }
+
     // Initialize category input handlers (defined in cats_subcats.js)
     window.app._initCategoryHandlers();
 
     // Initialize sync module (defined in sync.js)
     window.app._initSyncHandlers();
+    // Set up image paste and drag-and-drop handlers on the body textarea
+    // (delegated to image_embed.js)
+    if (window.app._setupImagePasteHandler) window.app._setupImagePasteHandler();
+    if (window.app._setupImageDropHandler) window.app._setupImageDropHandler();
 
     const isAuthenticated = await checkAuth();
     if (!isAuthenticated) return;

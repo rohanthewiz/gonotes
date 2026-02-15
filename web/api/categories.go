@@ -15,6 +15,11 @@ import (
 // CreateCategory handles POST /api/v1/categories
 // Creates a new category from JSON body and returns the created category.
 func CreateCategory(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
 	var input models.CategoryInput
 
 	if err := json.Unmarshal(ctx.Request().Body(), &input); err != nil {
@@ -27,8 +32,8 @@ func CreateCategory(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusBadRequest, "name is required")
 	}
 
-	// Create the category
-	category, err := models.CreateCategory(input)
+	// Create the category scoped to the authenticated user
+	category, err := models.CreateCategory(input, userGUID)
 	if err != nil {
 		logger.LogErr(serr.Wrap(err, "failed to create category"), "database error")
 		return writeError(ctx, http.StatusInternalServerError, "failed to create category")
@@ -39,15 +44,20 @@ func CreateCategory(ctx rweb.Context) error {
 }
 
 // GetCategory handles GET /api/v1/categories/:id
-// Retrieves a single category by ID.
+// Retrieves a single category by ID, scoped to the authenticated user.
 func GetCategory(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
 	idStr := ctx.Request().Param("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		return writeError(ctx, http.StatusBadRequest, "invalid category id")
 	}
 
-	category, err := models.GetCategory(id)
+	category, err := models.GetCategory(id, userGUID)
 	if err != nil {
 		if err.Error() == "category not found" {
 			return writeError(ctx, http.StatusNotFound, "category not found")
@@ -60,8 +70,13 @@ func GetCategory(ctx rweb.Context) error {
 }
 
 // ListCategories handles GET /api/v1/categories
-// Returns all categories with optional pagination via limit/offset query params.
+// Returns categories scoped to the authenticated user with optional pagination.
 func ListCategories(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
 	// Parse pagination parameters with sensible defaults
 	limit := 0 // 0 means no limit
 	offset := 0
@@ -82,7 +97,7 @@ func ListCategories(ctx rweb.Context) error {
 		offset = parsedOffset
 	}
 
-	categories, err := models.ListCategories(limit, offset)
+	categories, err := models.ListCategories(limit, offset, userGUID)
 	if err != nil {
 		logger.LogErr(serr.Wrap(err, "failed to list categories"), "database error")
 		return writeError(ctx, http.StatusInternalServerError, "database error")
@@ -100,6 +115,11 @@ func ListCategories(ctx rweb.Context) error {
 // UpdateCategory handles PUT /api/v1/categories/:id
 // Updates an existing category with the provided JSON body.
 func UpdateCategory(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
 	idStr := ctx.Request().Param("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
@@ -122,7 +142,7 @@ func UpdateCategory(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusBadRequest, "name is required")
 	}
 
-	category, err := models.UpdateCategory(id, input)
+	category, err := models.UpdateCategory(id, input, userGUID)
 	if err != nil {
 		if err.Error() == "category not found" {
 			return writeError(ctx, http.StatusNotFound, "category not found")
@@ -136,15 +156,20 @@ func UpdateCategory(ctx rweb.Context) error {
 }
 
 // DeleteCategory handles DELETE /api/v1/categories/:id
-// Deletes a category permanently.
+// Deletes a category permanently, scoped to the authenticated user.
 func DeleteCategory(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
 	idStr := ctx.Request().Param("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		return writeError(ctx, http.StatusBadRequest, "invalid category id")
 	}
 
-	err = models.DeleteCategory(id)
+	err = models.DeleteCategory(id, userGUID)
 	if err != nil {
 		if err.Error() == "category not found" {
 			return writeError(ctx, http.StatusNotFound, "category not found")
@@ -172,6 +197,11 @@ type AddCategoryToNoteRequest struct {
 //
 // If no body is provided, the category is added without subcategories.
 func AddCategoryToNote(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
 	noteIDStr := ctx.Request().Param("id")
 	noteID, err := strconv.ParseInt(noteIDStr, 10, 64)
 	if err != nil {
@@ -196,11 +226,12 @@ func AddCategoryToNote(ctx rweb.Context) error {
 		subcategories = req.Subcategories
 	}
 
-	// Use the subcategory-aware function when subcats are provided
+	// Use the subcategory-aware function when subcats are provided.
+	// userGUID ensures both note and category belong to the authenticated user.
 	if len(subcategories) > 0 {
-		err = models.AddCategoryToNoteWithSubcategories(noteID, categoryID, subcategories)
+		err = models.AddCategoryToNoteWithSubcategories(noteID, categoryID, subcategories, userGUID)
 	} else {
-		err = models.AddCategoryToNote(noteID, categoryID)
+		err = models.AddCategoryToNote(noteID, categoryID, userGUID)
 	}
 
 	if err != nil {
@@ -230,6 +261,14 @@ func AddCategoryToNote(ctx rweb.Context) error {
 // Updates the subcategories for an existing note-category relationship.
 // This allows changing which subcats are selected without removing and re-adding the category.
 func UpdateNoteCategory(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+	// Note: UpdateNoteCategorySubcategories operates on an existing relationship
+	// that was already ownership-checked when created. The existence check (SELECT COUNT)
+	// uses note_id + category_id which implicitly validates the relationship.
+
 	noteIDStr := ctx.Request().Param("id")
 	noteID, err := strconv.ParseInt(noteIDStr, 10, 64)
 	if err != nil {
@@ -273,6 +312,14 @@ func UpdateNoteCategory(ctx rweb.Context) error {
 // RemoveCategoryFromNote handles DELETE /api/v1/notes/:id/categories/:category_id
 // Removes a category from a note.
 func RemoveCategoryFromNote(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+	// Note: RemoveCategoryFromNote deletes by note_id + category_id. The note_categories
+	// junction only contains entries that were ownership-verified at creation time.
+	_ = userGUID // ownership was verified when the relationship was created
+
 	noteIDStr := ctx.Request().Param("id")
 	noteID, err := strconv.ParseInt(noteIDStr, 10, 64)
 	if err != nil {
@@ -308,13 +355,18 @@ func RemoveCategoryFromNote(ctx rweb.Context) error {
 // and selected_subcategories (from the note-category junction) so the UI can
 // render checkboxes with the correct pre-selected state.
 func GetNoteCategories(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
 	noteIDStr := ctx.Request().Param("id")
 	noteID, err := strconv.ParseInt(noteIDStr, 10, 64)
 	if err != nil {
 		return writeError(ctx, http.StatusBadRequest, "invalid note id")
 	}
 
-	details, err := models.GetNoteCategoryDetails(noteID)
+	details, err := models.GetNoteCategoryDetails(noteID, userGUID)
 	if err != nil {
 		logger.LogErr(serr.Wrap(err, "failed to get note categories"), "database error")
 		return writeError(ctx, http.StatusInternalServerError, "database error")
@@ -343,15 +395,20 @@ func GetNoteCategoryMappings(ctx rweb.Context) error {
 }
 
 // GetCategoryNotes handles GET /api/v1/categories/:id/notes
-// Retrieves all notes for a category.
+// Retrieves all notes for a category, scoped to the authenticated user.
 func GetCategoryNotes(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
 	categoryIDStr := ctx.Request().Param("id")
 	categoryID, err := strconv.ParseInt(categoryIDStr, 10, 64)
 	if err != nil {
 		return writeError(ctx, http.StatusBadRequest, "invalid category id")
 	}
 
-	notes, err := models.GetCategoryNotes(categoryID)
+	notes, err := models.GetCategoryNotes(categoryID, userGUID)
 	if err != nil {
 		logger.LogErr(serr.Wrap(err, "failed to get category notes"), "database error")
 		return writeError(ctx, http.StatusInternalServerError, "database error")

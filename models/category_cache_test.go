@@ -45,13 +45,13 @@ func TestCategoryCacheSync(t *testing.T) {
 			Subcategories: []string{"Subcat1", "Subcat2"},
 		}
 
-		category, err := models.CreateCategory(input)
+		category, err := models.CreateCategory(input, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create category: %v", err)
 		}
 
 		// Verify category is readable (from cache)
-		retrieved, err := models.GetCategory(category.ID)
+		retrieved, err := models.GetCategory(category.ID, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to get category by ID: %v", err)
 		}
@@ -83,14 +83,14 @@ func TestCategoryCacheSync(t *testing.T) {
 			input := models.CategoryInput{
 				Name: "Category " + string(rune('A'+i-1)),
 			}
-			_, err := models.CreateCategory(input)
+			_, err := models.CreateCategory(input, catTestUserGUID)
 			if err != nil {
 				t.Fatalf("failed to create category: %v", err)
 			}
 		}
 
 		// List all categories
-		categories, err := models.ListCategories(0, 0)
+		categories, err := models.ListCategories(0, 0, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to list categories: %v", err)
 		}
@@ -112,7 +112,7 @@ func TestCategoryUpdate(t *testing.T) {
 			Name: "Original Name",
 		}
 
-		category, err := models.CreateCategory(input)
+		category, err := models.CreateCategory(input, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create category: %v", err)
 		}
@@ -125,7 +125,7 @@ func TestCategoryUpdate(t *testing.T) {
 			Subcategories: []string{"New1", "New2", "New3"},
 		}
 
-		updated, err := models.UpdateCategory(category.ID, updateInput)
+		updated, err := models.UpdateCategory(category.ID, updateInput, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to update category: %v", err)
 		}
@@ -135,7 +135,7 @@ func TestCategoryUpdate(t *testing.T) {
 		}
 
 		// Verify update is in cache
-		retrieved, err := models.GetCategory(category.ID)
+		retrieved, err := models.GetCategory(category.ID, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to get updated category: %v", err)
 		}
@@ -162,19 +162,19 @@ func TestCategoryDelete(t *testing.T) {
 			Name: "Category to Delete",
 		}
 
-		category, err := models.CreateCategory(input)
+		category, err := models.CreateCategory(input, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create category: %v", err)
 		}
 
 		// Delete the category
-		err = models.DeleteCategory(category.ID)
+		err = models.DeleteCategory(category.ID, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to delete category: %v", err)
 		}
 
 		// Verify category is not in cache
-		retrieved, err := models.GetCategory(category.ID)
+		retrieved, err := models.GetCategory(category.ID, catTestUserGUID)
 		if err == nil {
 			t.Error("expected error when getting deleted category")
 		}
@@ -204,19 +204,19 @@ func TestNoteCategoryRelationshipSync(t *testing.T) {
 		catInput := models.CategoryInput{
 			Name: "Test Category",
 		}
-		category, err := models.CreateCategory(catInput)
+		category, err := models.CreateCategory(catInput, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create category: %v", err)
 		}
 
 		// Add category to note
-		err = models.AddCategoryToNote(note.ID, category.ID)
+		err = models.AddCategoryToNote(note.ID, category.ID, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to add category to note: %v", err)
 		}
 
 		// Verify relationship in cache
-		categories, err := models.GetNoteCategories(note.ID)
+		categories, err := models.GetNoteCategories(note.ID, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to get note categories: %v", err)
 		}
@@ -245,13 +245,13 @@ func TestNoteCategoryRelationshipSync(t *testing.T) {
 		catInput := models.CategoryInput{
 			Name: "Category to Remove",
 		}
-		category, err := models.CreateCategory(catInput)
+		category, err := models.CreateCategory(catInput, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create category: %v", err)
 		}
 
 		// Add category to note
-		err = models.AddCategoryToNote(note.ID, category.ID)
+		err = models.AddCategoryToNote(note.ID, category.ID, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to add category to note: %v", err)
 		}
@@ -263,7 +263,7 @@ func TestNoteCategoryRelationshipSync(t *testing.T) {
 		}
 
 		// Verify relationship is removed in cache
-		categories, err := models.GetNoteCategories(note.ID)
+		categories, err := models.GetNoteCategories(note.ID, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to get note categories: %v", err)
 		}
@@ -278,7 +278,7 @@ func TestNoteCategoryRelationshipSync(t *testing.T) {
 		catInput := models.CategoryInput{
 			Name: "Shared Category",
 		}
-		category, err := models.CreateCategory(catInput)
+		category, err := models.CreateCategory(catInput, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create category: %v", err)
 		}
@@ -294,14 +294,14 @@ func TestNoteCategoryRelationshipSync(t *testing.T) {
 				t.Fatalf("failed to create note: %v", err)
 			}
 
-			err = models.AddCategoryToNote(note.ID, category.ID)
+			err = models.AddCategoryToNote(note.ID, category.ID, catTestUserGUID)
 			if err != nil {
 				t.Fatalf("failed to add category to note: %v", err)
 			}
 		}
 
 		// Get all notes for category
-		notes, err := models.GetCategoryNotes(category.ID)
+		notes, err := models.GetCategoryNotes(category.ID, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to get category notes: %v", err)
 		}
@@ -326,19 +326,19 @@ func TestNoteCategoryRelationshipSync(t *testing.T) {
 		catInput := models.CategoryInput{
 			Name: "Duplicate Test Category",
 		}
-		category, err := models.CreateCategory(catInput)
+		category, err := models.CreateCategory(catInput, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create category: %v", err)
 		}
 
 		// Add category to note
-		err = models.AddCategoryToNote(note.ID, category.ID)
+		err = models.AddCategoryToNote(note.ID, category.ID, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to add category to note: %v", err)
 		}
 
 		// Try to add same category again
-		err = models.AddCategoryToNote(note.ID, category.ID)
+		err = models.AddCategoryToNote(note.ID, category.ID, catTestUserGUID)
 		if err == nil {
 			t.Error("expected error when adding duplicate category")
 		}
@@ -354,7 +354,7 @@ func TestCategoryEdgeCases(t *testing.T) {
 	defer cleanup()
 
 	t.Run("get non-existent category", func(t *testing.T) {
-		_, err := models.GetCategory(99999)
+		_, err := models.GetCategory(99999, catTestUserGUID)
 		if err == nil {
 			t.Error("expected error when getting non-existent category")
 		}
@@ -364,14 +364,14 @@ func TestCategoryEdgeCases(t *testing.T) {
 		input := models.CategoryInput{
 			Name: "Does Not Exist",
 		}
-		_, err := models.UpdateCategory(99999, input)
+		_, err := models.UpdateCategory(99999, input, catTestUserGUID)
 		if err == nil {
 			t.Error("expected error when updating non-existent category")
 		}
 	})
 
 	t.Run("delete non-existent category", func(t *testing.T) {
-		err := models.DeleteCategory(99999)
+		err := models.DeleteCategory(99999, catTestUserGUID)
 		if err == nil {
 			t.Error("expected error when deleting non-existent category")
 		}
@@ -382,12 +382,12 @@ func TestCategoryEdgeCases(t *testing.T) {
 		catInput := models.CategoryInput{
 			Name: "Test Category",
 		}
-		category, err := models.CreateCategory(catInput)
+		category, err := models.CreateCategory(catInput, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create category: %v", err)
 		}
 
-		err = models.AddCategoryToNote(99999, category.ID)
+		err = models.AddCategoryToNote(99999, category.ID, catTestUserGUID)
 		if err == nil {
 			t.Error("expected error when adding category to non-existent note")
 		}
@@ -404,7 +404,7 @@ func TestCategoryEdgeCases(t *testing.T) {
 			t.Fatalf("failed to create note: %v", err)
 		}
 
-		err = models.AddCategoryToNote(note.ID, 99999)
+		err = models.AddCategoryToNote(note.ID, 99999, catTestUserGUID)
 		if err == nil {
 			t.Error("expected error when adding non-existent category to note")
 		}
@@ -424,7 +424,7 @@ func TestCategoryEdgeCases(t *testing.T) {
 		catInput := models.CategoryInput{
 			Name: "Unlinked Category",
 		}
-		category, err := models.CreateCategory(catInput)
+		category, err := models.CreateCategory(catInput, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create category: %v", err)
 		}
@@ -439,7 +439,7 @@ func TestCategoryEdgeCases(t *testing.T) {
 		input := models.CategoryInput{
 			Name: "",
 		}
-		_, err := models.CreateCategory(input)
+		_, err := models.CreateCategory(input, catTestUserGUID)
 		if err == nil {
 			t.Error("expected error when creating category without name")
 		}
@@ -450,7 +450,7 @@ func TestCategoryEdgeCases(t *testing.T) {
 		input := models.CategoryInput{
 			Name: "Valid Category",
 		}
-		category, err := models.CreateCategory(input)
+		category, err := models.CreateCategory(input, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create category: %v", err)
 		}
@@ -459,7 +459,7 @@ func TestCategoryEdgeCases(t *testing.T) {
 		updateInput := models.CategoryInput{
 			Name: "",
 		}
-		_, err = models.UpdateCategory(category.ID, updateInput)
+		_, err = models.UpdateCategory(category.ID, updateInput, catTestUserGUID)
 		if err == nil {
 			t.Error("expected error when updating category with empty name")
 		}
@@ -471,14 +471,14 @@ func TestCategoryEdgeCases(t *testing.T) {
 			input := models.CategoryInput{
 				Name: "Pagination Test " + string(rune('0'+i)),
 			}
-			_, err := models.CreateCategory(input)
+			_, err := models.CreateCategory(input, catTestUserGUID)
 			if err != nil {
 				t.Fatalf("failed to create category: %v", err)
 			}
 		}
 
 		// Test limit
-		categories, err := models.ListCategories(2, 0)
+		categories, err := models.ListCategories(2, 0, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to list categories: %v", err)
 		}
@@ -487,7 +487,7 @@ func TestCategoryEdgeCases(t *testing.T) {
 		}
 
 		// Test offset
-		categories, err = models.ListCategories(2, 2)
+		categories, err = models.ListCategories(2, 2, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to list categories: %v", err)
 		}
@@ -513,7 +513,7 @@ func TestCategorySubcategoryQueries(t *testing.T) {
 			Subcategories: []string{"pod", "service", "deployment", "replicaset"},
 		}
 		var err error
-		k8sCategory, err = models.CreateCategory(k8sInput)
+		k8sCategory, err = models.CreateCategory(k8sInput, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create k8s category: %v", err)
 		}
@@ -522,7 +522,7 @@ func TestCategorySubcategoryQueries(t *testing.T) {
 			Name:          "aws",
 			Subcategories: []string{"ec2", "s3", "lambda"},
 		}
-		awsCategory, err = models.CreateCategory(awsInput)
+		awsCategory, err = models.CreateCategory(awsInput, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to create aws category: %v", err)
 		}
@@ -562,17 +562,17 @@ func TestCategorySubcategoryQueries(t *testing.T) {
 		}
 
 		// Add categories to notes with subcategories
-		err = models.AddCategoryToNoteWithSubcategories(note1.ID, k8sCategory.ID, []string{"pod"})
+		err = models.AddCategoryToNoteWithSubcategories(note1.ID, k8sCategory.ID, []string{"pod"}, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to add k8s/pod to note1: %v", err)
 		}
 
-		err = models.AddCategoryToNoteWithSubcategories(note2.ID, k8sCategory.ID, []string{"deployment", "replicaset"})
+		err = models.AddCategoryToNoteWithSubcategories(note2.ID, k8sCategory.ID, []string{"deployment", "replicaset"}, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to add k8s/deployment,replicaset to note2: %v", err)
 		}
 
-		err = models.AddCategoryToNoteWithSubcategories(note3.ID, awsCategory.ID, []string{"ec2"})
+		err = models.AddCategoryToNoteWithSubcategories(note3.ID, awsCategory.ID, []string{"ec2"}, catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to add aws/ec2 to note3: %v", err)
 		}
@@ -715,7 +715,7 @@ func TestCategorySubcategoryQueries(t *testing.T) {
 	})
 
 	t.Run("get category by name", func(t *testing.T) {
-		category, err := models.GetCategoryByName("k8s")
+		category, err := models.GetCategoryByName("k8s", catTestUserGUID)
 		if err != nil {
 			t.Fatalf("failed to get category by name: %v", err)
 		}
@@ -730,7 +730,7 @@ func TestCategorySubcategoryQueries(t *testing.T) {
 	})
 
 	t.Run("get non-existent category by name", func(t *testing.T) {
-		category, err := models.GetCategoryByName("nonexistent")
+		category, err := models.GetCategoryByName("nonexistent", catTestUserGUID)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

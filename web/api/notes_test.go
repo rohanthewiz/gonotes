@@ -36,8 +36,10 @@ func newTestServer(t *testing.T) *testServer {
 		t.Fatalf("failed to initialize test database: %v", err)
 	}
 
-	// Initialize JWT for auth tests
+	// Initialize JWT for auth tests; set registration secret so tests can
+	// register additional users beyond the first (which is allowed freely).
 	os.Setenv("GONOTES_JWT_SECRET", "test-secret-key-for-jwt-testing-32chars")
+	os.Setenv("GONOTES_REGISTRATION_SECRET", "test-reg-secret")
 	if err := models.InitJWT(); err != nil {
 		t.Fatalf("failed to initialize JWT: %v", err)
 	}

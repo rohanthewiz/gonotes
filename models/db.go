@@ -2,6 +2,8 @@ package models
 
 import (
 	"database/sql"
+	"os"
+	"path/filepath"
 
 	_ "github.com/marcboeker/go-duckdb" // DuckDB driver registration
 	"github.com/rohanthewiz/logger"
@@ -29,6 +31,13 @@ const DBPath = "./data/notes.ddb"
 // Also initializes the in-memory cache and synchronizes it with disk data.
 func InitDB() error {
 	var err error
+
+	// Ensure the parent directory exists before opening the database.
+	// DuckDB creates the file but not the parent directory, so on a fresh
+	// machine the open would fail without this.
+	if err = os.MkdirAll(filepath.Dir(DBPath), 0o755); err != nil {
+		return serr.Wrap(err, "failed to create database directory")
+	}
 
 	// Open connection to disk DuckDB. The driver will create the file if it
 	// doesn't exist, which is the expected behavior for first-run setup.
@@ -93,9 +102,31 @@ func createTables() error {
 		return serr.Wrap(err, "failed to create users table")
 	}
 
+	// Migration: add is_admin column for role-based access control.
+	// First registered user is automatically admin (set in CreateUser).
+	_, err = db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT false`)
+	if err != nil {
+		return serr.Wrap(err, "failed to add is_admin column to users")
+	}
+
 	_, err = db.Exec(CreateCategoriesTableSQL)
 	if err != nil {
 		return serr.Wrap(err, "failed to create categories table")
+	}
+
+	// Migration: add created_by column for multi-user data isolation on categories
+	_, err = db.Exec(`ALTER TABLE categories ADD COLUMN IF NOT EXISTS created_by VARCHAR`)
+	if err != nil {
+		return serr.Wrap(err, "failed to add created_by column to categories")
+	}
+
+	// Backfill created_by for existing categories — assign to the first user if any exist.
+	// Guarded by EXISTS to be a no-op on fresh databases with no users.
+	_, err = db.Exec(`UPDATE categories SET created_by = (
+		SELECT guid FROM users ORDER BY id LIMIT 1
+	) WHERE created_by IS NULL AND EXISTS (SELECT 1 FROM users)`)
+	if err != nil {
+		return serr.Wrap(err, "failed to backfill category created_by")
 	}
 
 	// Migration: add guid column to categories for cross-machine identity
@@ -223,6 +254,47 @@ func createTables() error {
 		return serr.Wrap(err, "failed to create category_change_sync_peers peer_id index")
 	}
 
+	// Create sync_conflicts table for conflict audit logging (Phase 3)
+	_, err = db.Exec(DDLCreateSyncConflictsSequence)
+	if err != nil {
+		return serr.Wrap(err, "failed to create sync_conflicts sequence")
+	}
+
+	_, err = db.Exec(DDLCreateSyncConflictsTable)
+	if err != nil {
+		return serr.Wrap(err, "failed to create sync_conflicts table")
+	}
+
+	_, err = db.Exec(DDLCreateSyncConflictsIndexEntityGUID)
+	if err != nil {
+		return serr.Wrap(err, "failed to create sync_conflicts entity_guid index")
+	}
+
+	// Create sync_state table for persisting sync client state (Phase 4).
+	// Stores peer identity, auth tokens, and timestamps per hub URL
+	// so sync can resume across restarts without re-authenticating.
+	_, err = db.Exec(DDLCreateSyncStateTable)
+	if err != nil {
+		return serr.Wrap(err, "failed to create sync_state table")
+	}
+
+	// Create invite_tokens table for admin-managed user onboarding.
+	// Each token is single-use and time-limited.
+	_, err = db.Exec(DDLCreateInviteTokensSequence)
+	if err != nil {
+		return serr.Wrap(err, "failed to create invite_tokens sequence")
+	}
+
+	_, err = db.Exec(DDLCreateInviteTokensTable)
+	if err != nil {
+		return serr.Wrap(err, "failed to create invite_tokens table")
+	}
+
+	_, err = db.Exec(DDLCreateInviteTokensIndex)
+	if err != nil {
+		return serr.Wrap(err, "failed to create invite_tokens index")
+	}
+
 	return nil
 }
 
@@ -299,6 +371,12 @@ func initCacheDB() error {
 	_, err = cacheDB.Exec(CreateCategoriesTableSQL)
 	if err != nil {
 		return serr.Wrap(err, "failed to create categories table in cache")
+	}
+
+	// Add created_by column to cache categories table (matches disk migration)
+	_, err = cacheDB.Exec(`ALTER TABLE categories ADD COLUMN IF NOT EXISTS created_by VARCHAR`)
+	if err != nil {
+		return serr.Wrap(err, "failed to add created_by column to cache categories")
 	}
 
 	_, err = cacheDB.Exec(CreateNoteCategoriesTableSQL)
@@ -409,7 +487,7 @@ func syncCacheFromDisk() error {
 // syncCategoriesFromDisk loads all categories from the disk database into the cache.
 func syncCategoriesFromDisk() (int, error) {
 	query := `
-		SELECT id, guid, name, description, subcategories, created_at, updated_at
+		SELECT id, guid, name, description, subcategories, created_by, created_at, updated_at
 		FROM categories
 	`
 
@@ -420,8 +498,8 @@ func syncCategoriesFromDisk() (int, error) {
 	defer rows.Close()
 
 	insertQuery := `
-		INSERT INTO categories (id, guid, name, description, subcategories, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO categories (id, guid, name, description, subcategories, created_by, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	count := 0
@@ -430,7 +508,7 @@ func syncCategoriesFromDisk() (int, error) {
 
 		err := rows.Scan(
 			&category.ID, &category.GUID, &category.Name, &category.Description,
-			&category.Subcategories, &category.CreatedAt, &category.UpdatedAt,
+			&category.Subcategories, &category.CreatedBy, &category.CreatedAt, &category.UpdatedAt,
 		)
 		if err != nil {
 			return 0, serr.Wrap(err, "failed to scan category from disk")
@@ -438,7 +516,7 @@ func syncCategoriesFromDisk() (int, error) {
 
 		_, err = cacheDB.Exec(insertQuery,
 			category.ID, category.GUID, category.Name, category.Description,
-			category.Subcategories, category.CreatedAt, category.UpdatedAt,
+			category.Subcategories, category.CreatedBy, category.CreatedAt, category.UpdatedAt,
 		)
 		if err != nil {
 			return 0, serr.Wrap(err, "failed to insert category into cache")

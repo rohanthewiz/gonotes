@@ -2,12 +2,13 @@ package web
 
 import (
 	"embed"
-	"github.com/rohanthewiz/logger"
-	"github.com/rohanthewiz/rweb"
 	"io"
 	"io/fs"
 	"net/http"
 	"strings"
+
+	"github.com/rohanthewiz/logger"
+	"github.com/rohanthewiz/rweb"
 )
 
 // Embed static directory files
@@ -23,6 +24,15 @@ func SetupStaticFiles(s *rweb.Server) {
 		logger.LogErr(err, "failed to get static subdirectory")
 		return
 	}
+
+	// Serve /favicon.ico as an inline SVG so no separate icon file is needed
+	const faviconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500"><rect width="500" height="500" rx="40" fill="#6b9f7b"/><rect x="40" y="180" width="80" height="25" rx="12.5" fill="white" fill-opacity=".8"/><rect x="20" y="235" width="110" height="25" rx="12.5" fill="white" fill-opacity=".9"/><rect x="50" y="290" width="70" height="25" rx="12.5" fill="white" fill-opacity=".7"/><text x="300" y="285" font-family="Arial,sans-serif" font-weight="900" font-size="180" fill="white" text-anchor="middle">GN</text></svg>`
+
+	s.Get("/favicon.ico", func(c rweb.Context) error {
+		c.Response().SetHeader("Content-Type", "image/svg+xml")
+		c.Response().SetHeader("Cache-Control", "public, max-age=86400")
+		return c.Bytes([]byte(faviconSVG))
+	})
 
 	// Serve static files at /static/ path
 	s.Get("/static/*", func(c rweb.Context) error {
@@ -43,6 +53,8 @@ func SetupStaticFiles(s *rweb.Server) {
 			c.SetStatus(http.StatusInternalServerError)
 			return nil
 		}
+
+		// fmt.Printf("**-> file stat %#v\n", stat)
 
 		if stat.IsDir() {
 			c.SetStatus(http.StatusNotFound)

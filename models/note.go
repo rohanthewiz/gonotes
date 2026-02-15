@@ -655,6 +655,48 @@ func HardDeleteNote(id int64) (bool, error) {
 	return true, nil
 }
 
+// SearchNotesByTitle searches for non-deleted notes owned by a user whose title
+// contains the given query string (case-insensitive). Returns up to `limit` results
+// with only the fields needed for autocomplete (id, guid, title).
+// Used by the note-linking popup to let users search for notes to link to.
+func SearchNotesByTitle(query string, userGUID string, limit int) ([]Note, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	sqlQuery := `
+		SELECT id, guid, title, description, body, tags, is_private, encryption_iv,
+		       created_by, updated_by, created_at, updated_at, synced_at, deleted_at
+		FROM notes
+		WHERE created_by = ? AND deleted_at IS NULL
+		  AND LOWER(title) LIKE '%' || LOWER(?) || '%'
+		ORDER BY updated_at DESC
+		LIMIT ?
+	`
+
+	rows, err := cacheDB.Query(sqlQuery, userGUID, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notes []Note
+	for rows.Next() {
+		var note Note
+		err := rows.Scan(
+			&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
+			&note.Tags, &note.IsPrivate, &note.EncryptionIV, &note.CreatedBy,
+			&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.SyncedAt, &note.DeletedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		notes = append(notes, note)
+	}
+
+	return notes, rows.Err()
+}
+
 // toNullString converts a *string to sql.NullString for database operations.
 // Returns a valid NullString if the pointer is non-nil, invalid otherwise.
 func toNullString(s *string) sql.NullString {

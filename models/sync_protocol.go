@@ -214,7 +214,7 @@ func categoryFragmentFromOutput(out *CategoryFragmentOutput) CategoryFragment {
 //  5. Categories with the same timestamp are sorted before notes so that
 //     category definitions exist before note-category mappings reference them
 //  6. Truncate to 'limit' and report has_more
-func GetUnifiedChangesForPeer(peerID string, limit int) (*SyncPullResponse, error) {
+func GetUnifiedChangesForPeer(peerID string, userGUID string, limit int) (*SyncPullResponse, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -222,12 +222,12 @@ func GetUnifiedChangesForPeer(peerID string, limit int) (*SyncPullResponse, erro
 	// Fetch limit+1 to detect whether more changes exist beyond this batch
 	fetchLimit := limit + 1
 
-	noteChanges, err := GetUnsentChangesForPeer(peerID, fetchLimit)
+	noteChanges, err := GetUnsentChangesForPeer(peerID, userGUID, fetchLimit)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to get unsent note changes for peer")
 	}
 
-	categoryChanges, err := GetUnsentCategoryChangesForPeer(peerID, fetchLimit)
+	categoryChanges, err := GetUnsentCategoryChangesForPeer(peerID, userGUID, fetchLimit)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to get unsent category changes for peer")
 	}
@@ -482,7 +482,8 @@ func applyIncomingCategoryChange(change SyncChange) error {
 			name = fragment.Name.String
 		}
 
-		_, err = ApplySyncCategoryCreate(change.EntityGUID, name, fragment)
+		// Pass the change author's GUID as created_by for multi-user isolation
+		_, err = ApplySyncCategoryCreate(change.EntityGUID, name, fragment, change.User)
 		if err != nil {
 			return serr.Wrap(err, "failed to apply sync category create")
 		}
@@ -582,12 +583,12 @@ func changeGUIDExists(guid string) bool {
 // GetEntitySnapshot returns the full current state of a note or category as a
 // SyncChange with operation=Create and a full-snapshot fragment. This is used
 // for initial sync or conflict resolution when a peer needs the complete entity.
-func GetEntitySnapshot(entityType, entityGUID string) (*SyncChange, error) {
+func GetEntitySnapshot(entityType, entityGUID, userGUID string) (*SyncChange, error) {
 	switch entityType {
 	case "note":
-		return getNoteSnapshot(entityGUID)
+		return getNoteSnapshot(entityGUID, userGUID)
 	case "category":
-		return getCategorySnapshot(entityGUID)
+		return getCategorySnapshot(entityGUID, userGUID)
 	default:
 		return nil, serr.New("unknown entity type for snapshot: " + entityType)
 	}
@@ -595,12 +596,17 @@ func GetEntitySnapshot(entityType, entityGUID string) (*SyncChange, error) {
 
 // getNoteSnapshot builds a full-body snapshot SyncChange for a note.
 // Reads from disk to get authored_at (not present in cache schema).
-func getNoteSnapshot(noteGUID string) (*SyncChange, error) {
+func getNoteSnapshot(noteGUID, userGUID string) (*SyncChange, error) {
 	note, err := getNoteByGUIDFromDisk(noteGUID)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to get note from disk for snapshot")
 	}
 	if note == nil {
+		return nil, serr.New("note not found for snapshot: " + noteGUID)
+	}
+
+	// Ownership verification: prevent User B from fetching User A's note snapshot
+	if userGUID != "" && note.CreatedBy.Valid && note.CreatedBy.String != userGUID {
 		return nil, serr.New("note not found for snapshot: " + noteGUID)
 	}
 
@@ -646,12 +652,17 @@ func getNoteSnapshot(noteGUID string) (*SyncChange, error) {
 }
 
 // getCategorySnapshot builds a full-snapshot SyncChange for a category.
-func getCategorySnapshot(categoryGUID string) (*SyncChange, error) {
+func getCategorySnapshot(categoryGUID, userGUID string) (*SyncChange, error) {
 	cat, err := GetCategoryByGUID(categoryGUID)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to get category for snapshot")
 	}
 	if cat == nil {
+		return nil, serr.New("category not found for snapshot: " + categoryGUID)
+	}
+
+	// Ownership verification: prevent User B from fetching User A's category snapshot
+	if userGUID != "" && cat.CreatedBy.Valid && cat.CreatedBy.String != userGUID {
 		return nil, serr.New("category not found for snapshot: " + categoryGUID)
 	}
 
@@ -688,23 +699,37 @@ func getCategorySnapshot(categoryGUID string) (*SyncChange, error) {
 // The checksum is SHA-256 of sorted note GUIDs concatenated with sorted
 // category GUIDs, separated by a pipe character. Identical data sets on
 // two machines will produce the same checksum.
-func GetSyncStatus() (*SyncStatusResponse, error) {
-	// Count notes (non-deleted)
+func GetSyncStatus(userGUID string) (*SyncStatusResponse, error) {
+	// Count notes (non-deleted), optionally filtered by user ownership
 	var noteCount int
-	err := db.QueryRow(`SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL`).Scan(&noteCount)
-	if err != nil {
-		return nil, serr.Wrap(err, "failed to count notes for sync status")
+	if userGUID != "" {
+		err := db.QueryRow(`SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL AND created_by = ?`, userGUID).Scan(&noteCount)
+		if err != nil {
+			return nil, serr.Wrap(err, "failed to count notes for sync status")
+		}
+	} else {
+		err := db.QueryRow(`SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL`).Scan(&noteCount)
+		if err != nil {
+			return nil, serr.Wrap(err, "failed to count notes for sync status")
+		}
 	}
 
-	// Count categories
+	// Count categories, optionally filtered by user ownership
 	var categoryCount int
-	err = db.QueryRow(`SELECT COUNT(*) FROM categories`).Scan(&categoryCount)
-	if err != nil {
-		return nil, serr.Wrap(err, "failed to count categories for sync status")
+	if userGUID != "" {
+		err := db.QueryRow(`SELECT COUNT(*) FROM categories WHERE created_by = ?`, userGUID).Scan(&categoryCount)
+		if err != nil {
+			return nil, serr.Wrap(err, "failed to count categories for sync status")
+		}
+	} else {
+		err := db.QueryRow(`SELECT COUNT(*) FROM categories`).Scan(&categoryCount)
+		if err != nil {
+			return nil, serr.Wrap(err, "failed to count categories for sync status")
+		}
 	}
 
 	// Build checksum from sorted GUIDs
-	checksum, err := computeSyncChecksum()
+	checksum, err := computeSyncChecksum(userGUID)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to compute sync checksum")
 	}
@@ -719,15 +744,26 @@ func GetSyncStatus() (*SyncStatusResponse, error) {
 // computeSyncChecksum produces a SHA-256 hash of sorted note GUIDs and sorted
 // category GUIDs. The hash changes whenever an entity is added, removed, or
 // has its GUID altered (which shouldn't happen, but would be caught).
-func computeSyncChecksum() (string, error) {
-	// Collect note GUIDs
-	noteGUIDs, err := collectGUIDs(`SELECT guid FROM notes WHERE deleted_at IS NULL ORDER BY guid`)
+func computeSyncChecksum(userGUID string) (string, error) {
+	// Collect note GUIDs, optionally filtered by user ownership
+	var noteGUIDs []string
+	var err error
+	if userGUID != "" {
+		noteGUIDs, err = collectGUIDsWithArgs(`SELECT guid FROM notes WHERE deleted_at IS NULL AND created_by = ? ORDER BY guid`, userGUID)
+	} else {
+		noteGUIDs, err = collectGUIDs(`SELECT guid FROM notes WHERE deleted_at IS NULL ORDER BY guid`)
+	}
 	if err != nil {
 		return "", serr.Wrap(err, "failed to collect note GUIDs for checksum")
 	}
 
-	// Collect category GUIDs
-	categoryGUIDs, err := collectGUIDs(`SELECT guid FROM categories ORDER BY guid`)
+	// Collect category GUIDs, optionally filtered by user ownership
+	var categoryGUIDs []string
+	if userGUID != "" {
+		categoryGUIDs, err = collectGUIDsWithArgs(`SELECT guid FROM categories WHERE created_by = ? ORDER BY guid`, userGUID)
+	} else {
+		categoryGUIDs, err = collectGUIDs(`SELECT guid FROM categories ORDER BY guid`)
+	}
 	if err != nil {
 		return "", serr.Wrap(err, "failed to collect category GUIDs for checksum")
 	}
@@ -754,6 +790,25 @@ func computeSyncChecksum() (string, error) {
 // collects all rows into a string slice.
 func collectGUIDs(query string) ([]string, error) {
 	rows, err := db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var guids []string
+	for rows.Next() {
+		var guid string
+		if err := rows.Scan(&guid); err != nil {
+			return nil, err
+		}
+		guids = append(guids, guid)
+	}
+	return guids, rows.Err()
+}
+
+// collectGUIDsWithArgs executes a parameterized query returning a single VARCHAR column.
+func collectGUIDsWithArgs(query string, args ...any) ([]string, error) {
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}

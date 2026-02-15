@@ -108,8 +108,8 @@ func PullChanges(ctx rweb.Context) error {
 		limit = parsedLimit
 	}
 
-	// Fetch unified changes for this peer
-	response, err := models.GetUnifiedChangesForPeer(peerID, limit)
+	// Fetch unified changes for this peer, scoped to the authenticated user
+	response, err := models.GetUnifiedChangesForPeer(peerID, userGUID, limit)
 	if err != nil {
 		logger.LogErr(serr.Wrap(err, "failed to get unified changes for peer"), "pull error")
 		return writeError(ctx, http.StatusInternalServerError, "failed to retrieve changes")
@@ -158,6 +158,10 @@ func PushChanges(ctx rweb.Context) error {
 	var rejected []models.SyncPushRejection
 
 	for _, change := range req.Changes {
+		// Override the User field with the authenticated user's GUID to prevent
+		// impersonation — a spoke cannot claim to be a different user
+		change.User = userGUID
+
 		err := models.ApplyIncomingSyncChange(change)
 		if err != nil {
 			logger.LogErr(err, "failed to apply incoming sync change",
@@ -219,7 +223,7 @@ func GetSnapshot(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusBadRequest, "entity_type must be 'note' or 'category'")
 	}
 
-	snapshot, err := models.GetEntitySnapshot(entityType, entityGUID)
+	snapshot, err := models.GetEntitySnapshot(entityType, entityGUID, userGUID)
 	if err != nil {
 		logger.LogErr(serr.Wrap(err, "failed to get entity snapshot"), "snapshot error")
 		return writeError(ctx, http.StatusNotFound, "entity not found")
@@ -238,7 +242,7 @@ func GetSyncStatus(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusUnauthorized, "authentication required")
 	}
 
-	status, err := models.GetSyncStatus()
+	status, err := models.GetSyncStatus(userGUID)
 	if err != nil {
 		logger.LogErr(serr.Wrap(err, "failed to get sync status"), "status error")
 		return writeError(ctx, http.StatusInternalServerError, "failed to retrieve sync status")

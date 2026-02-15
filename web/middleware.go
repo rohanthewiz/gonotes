@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"gonotes/models"
@@ -85,9 +86,10 @@ func JWTAuthMiddleware(c rweb.Context) error {
 		return c.Next()
 	}
 
-	// Valid token - set user context
+	// Valid token - set user context including admin status for authorization checks
 	c.Set("user_guid", claims.UserGUID)
 	c.Set("username", claims.Username)
+	c.Set("is_admin", claims.IsAdmin)
 	c.Set("authenticated", true)
 
 	return c.Next()
@@ -117,7 +119,7 @@ func SecurityHeadersMiddleware(c rweb.Context) error {
 	c.Response().SetHeader("Referrer-Policy", "strict-origin-when-cross-origin")
 
 	// Content Security Policy - adjust as needed
-	// Allow CDN domains for external libraries (marked, highlight.js, msgpack, monaco)
+	// Allow CDN domains for external libraries (marked, highlight.js, msgpack, monaco, mermaid)
 	csp := []string{
 		"default-src 'self'",
 		"script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com", // Monaco requires unsafe-eval; CDNs for libraries
@@ -139,6 +141,7 @@ func RateLimitMiddleware(requestsPerMinute int) rweb.Handler {
 		count    int
 	}
 
+	var mu sync.Mutex
 	visitors := make(map[string]*visitor)
 
 	return func(c rweb.Context) error {
@@ -150,6 +153,8 @@ func RateLimitMiddleware(requestsPerMinute int) rweb.Handler {
 			// Fallback to remote address from connection
 			ip = "unknown"
 		}
+
+		mu.Lock()
 
 		// Clean up old entries periodically
 		now := time.Now()
@@ -163,17 +168,21 @@ func RateLimitMiddleware(requestsPerMinute int) rweb.Handler {
 		v, exists := visitors[ip]
 		if !exists {
 			visitors[ip] = &visitor{lastSeen: now, count: 1}
+			mu.Unlock()
 		} else {
 			if now.Sub(v.lastSeen) < time.Minute {
 				v.count++
 				if v.count > requestsPerMinute {
+					mu.Unlock()
 					logger.Info("Rate limit exceeded", "ip", ip)
 					c.SetStatus(http.StatusTooManyRequests)
 					return nil
 				}
+				mu.Unlock()
 			} else {
 				v.lastSeen = now
 				v.count = 1
+				mu.Unlock()
 			}
 		}
 
