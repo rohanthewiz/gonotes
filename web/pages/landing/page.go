@@ -104,9 +104,6 @@ func (p Page) renderBody(b *element.Builder) any {
 		b.Script("src", "/static/js/app.js?v=6").R(),
 		b.Script("src", "/static/js/cats_subcats.js?v=2").R(),
 		b.Script("src", "/static/js/sync.js?v=1").R(),
-		// app.js must load first — it exposes _internal for dependent modules
-		b.Script("src", "/static/js/app.js?v=6").R(),
-		b.Script("src", "/static/js/cats_subcats.js?v=2").R(),
 		b.Script("src", "/static/js/note_links.js?v=1").R(),
 		b.Script("src", "/static/js/image_embed.js?v=1").R(),
 	)
