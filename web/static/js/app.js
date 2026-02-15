@@ -1016,21 +1016,40 @@
   // Sorting
   // ============================================
 
+  // setSort — selects a sort field from the dropdown, resets direction to desc
   window.app.setSort = function(field) {
-    if (state.sort.field === field) {
-      state.sort.order = state.sort.order === 'asc' ? 'desc' : 'asc';
-    } else {
-      state.sort.field = field;
-      state.sort.order = 'desc';
-    }
+    state.sort.field = field;
+    state.sort.order = 'desc';
 
-    // Update label
     const labels = { updated_at: 'Modified', created_at: 'Created', title: 'Title' };
     document.getElementById('sort-label').textContent = labels[field] || field;
 
+    updateSortDirIcon();
     window.app.toggleSortMenu();
     renderNoteList();
   };
+
+  // cycleSortDir — cycles through desc → asc → off (default updated_at desc)
+  // "off" resets to the default sort (Modified descending)
+  window.app.cycleSortDir = function() {
+    if (state.sort.order === 'desc') {
+      state.sort.order = 'asc';
+    } else if (state.sort.order === 'asc') {
+      // Reset to default sort
+      state.sort.field = 'updated_at';
+      state.sort.order = 'desc';
+      document.getElementById('sort-label').textContent = 'Modified';
+    }
+    updateSortDirIcon();
+    renderNoteList();
+  };
+
+  // updateSortDirIcon — syncs the arrow icon with current sort direction
+  function updateSortDirIcon() {
+    var icon = document.getElementById('sort-dir-icon');
+    if (!icon) return;
+    icon.textContent = state.sort.order === 'desc' ? '\u25BC' : '\u25B2';
+  }
 
   window.app.toggleSortMenu = function() {
     const menu = document.getElementById('sort-menu');

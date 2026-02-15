@@ -31,11 +31,13 @@ func (p Page) renderHead(b *element.Builder) any {
 	return b.Head().R(
 		b.Meta("charset", "UTF-8"),
 		b.Meta("name", "viewport", "content", "width=device-width, initial-scale=1.0"),
+		b.Link("rel", "icon", "type", "image/svg+xml", "href",
+			`data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 500 500'><rect width='500' height='500' rx='40' fill='%236b9f7b'/><rect x='40' y='180' width='80' height='25' rx='12.5' fill='white' fill-opacity='.8'/><rect x='20' y='235' width='110' height='25' rx='12.5' fill='white' fill-opacity='.9'/><rect x='50' y='290' width='70' height='25' rx='12.5' fill='white' fill-opacity='.7'/><text x='300' y='285' font-family='Arial,sans-serif' font-weight='900' font-size='180' fill='white' text-anchor='middle'>GN</text></svg>`),
 		b.Title().T(p.Title),
 		// Inline theme init — runs before CSS to prevent flash of wrong theme
 		b.Script().T(`(function(){var t=localStorage.getItem('gonotes-theme')||'dark-green';document.documentElement.setAttribute('data-theme',t);})()`),
 		// CSS
-		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=4"),
+		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=5"),
 		// Highlight.js CSS theme - chosen based on current theme (default to dark)
 		b.Link("rel", "stylesheet", "id", "hljs-theme", "href", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css"),
 		// Update hljs theme link based on saved preference
@@ -62,11 +64,8 @@ func (p Page) renderBody(b *element.Builder) any {
 	return b.Body().R(
 		// Main app container
 		b.Div("class", "app-container", "id", "app").R(
-			// Top toolbar
+			// Top toolbar — includes search, filters, sort, and user controls in one row
 			element.RenderComponents(b, Toolbar{}),
-
-			// Full-width search bar between toolbar and content
-			element.RenderComponents(b, SearchBar{}),
 
 			// Main content area with three panes
 			b.DivClass("app-main").R(

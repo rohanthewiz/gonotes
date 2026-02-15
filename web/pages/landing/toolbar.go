@@ -2,50 +2,86 @@ package landing
 
 import "github.com/rohanthewiz/element"
 
-// Toolbar represents the top navigation bar with actions
+// Toolbar is a single-row bar with three visual groups separated by a flex spacer:
+//
+//	Left:  [🔍 Search] [.* regex] [All Categories ▾] [Sort ▾] [subcats…] [Clear]
+//	       --- flexible space ---
+//	Right: [All Notes (n)] [+ New Note] [☀/☾ theme] [↻ sync] [user menu]
 type Toolbar struct{}
 
 // Render implements the element.Component interface
 func (t Toolbar) Render(b *element.Builder) any {
 	b.HeaderClass("toolbar").R(
-		// Left section
+		// Left group — logo, search, and filter controls pushed to the left edge
 		b.DivClass("toolbar-left").R(
+			// App logo — inline SVG so it doesn't require a separate file request
+			b.A("href", "/", "class", "toolbar-logo", "title", "GoNotes").R(
+				b.Text(`<svg width="34" height="34" viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg"><rect width="500" height="500" rx="40" fill="#6b9f7b"/><rect x="40" y="180" width="80" height="25" rx="12.5" fill="white" fill-opacity="0.8"/><rect x="20" y="235" width="110" height="25" rx="12.5" fill="white" fill-opacity="0.9"/><rect x="50" y="290" width="70" height="25" rx="12.5" fill="white" fill-opacity="0.7"/><text x="300" y="285" font-family="Arial,sans-serif" font-weight="900" font-size="180" fill="white" text-anchor="middle">GN</text></svg>`),
+			),
+			// Search input — reuses id="search-input" so "/" shortcut keeps working
+			b.DivClass("search-bar-input-wrapper").R(
+				b.SpanClass("search-bar-icon").T("🔍"),
+				b.Input("type", "text", "class", "search-bar-input", "id", "search-input",
+					"placeholder", "Search by text or ID...",
+					"oninput", "app.handleSearch(this.value)",
+					"autocomplete", "off"),
+			),
+			// Regex toggle — switches between substring and regular expression mode
+			b.Button("class", "btn btn-secondary search-bar-regex-toggle", "id", "regex-toggle",
+				"onclick", "app.toggleRegex()",
+				"title", "Toggle regular expression search").T(".*"),
+			// Category dropdown — populated from state.categories by JS on init
+			b.Select("class", "search-bar-select", "id", "search-category-select",
+				"onchange", "app.handleCategoryFilter(this.value)").R(
+				b.Option("value", "").T("All Categories"),
+			),
+			// Sort control — two-part: column name opens dropdown, arrow cycles direction
+			// Clicking column name: shows field picker (Modified / Created / Title)
+			// Clicking arrow: cycles desc (▼) → asc (▲) → off (—)
+			b.DivClass("sort-control").R(
+				b.DivClass("dropdown").R(
+					b.ButtonClass("sort-field-btn", "onclick", "app.toggleSortMenu()",
+						"title", "Choose sort field").R(
+						b.Span("id", "sort-label").T("Modified"),
+					),
+					b.Div("class", "dropdown-menu", "id", "sort-menu").R(
+						b.Div("class", "dropdown-item", "data-sort", "updated_at", "onclick", "app.setSort('updated_at')").T("Modified"),
+						b.Div("class", "dropdown-item", "data-sort", "created_at", "onclick", "app.setSort('created_at')").T("Created"),
+						b.Div("class", "dropdown-item", "data-sort", "title", "onclick", "app.setSort('title')").T("Title"),
+					),
+				),
+				b.Button("class", "sort-dir-btn", "id", "sort-dir-btn",
+					"onclick", "app.cycleSortDir()",
+					"title", "Toggle sort direction").R(
+					b.Span("id", "sort-dir-icon").T("▼"),
+				),
+			),
+			// Subcategory chips container — hidden until a category with subcats is chosen
+			b.Div("class", "search-bar-subcats", "id", "search-subcats-container").R(),
+			// Clear button — resets all search bar state (text, category, subcats)
+			b.ButtonClass("btn btn-secondary search-bar-clear", "onclick", "app.clearSearchBar()",
+				"title", "Clear search and filters").T("Clear"),
+		),
+
+		// Flexible spacer pushes the right group to the far right
+		b.DivClass("toolbar-spacer").R(),
+
+		// Right group — new-note, sync, theme, user
+		b.DivClass("toolbar-right").R(
 			// New Note button
 			b.Button("class", "btn btn-primary", "id", "btn-new-note", "onclick", "app.newNote()").R(
 				b.Span().T("+"),
 				b.Span().T(" New Note"),
 			),
-			// View indicator
-			b.DivClass("view-indicator").R(
-				b.Span("id", "view-title").T("All Notes"),
-				b.Span("class", "view-count", "id", "view-count").T(""),
-			),
-		),
-
-		// Right section
-		b.DivClass("toolbar-right").R(
-			// Theme toggle
-			b.Button("class", "theme-toggle", "id", "btn-theme-toggle", "onclick", "app.toggleTheme()", "title", "Toggle theme").T("\u2600"),
-			// Init toggle icon based on current theme
-			b.Script().T(`(function(){var t=localStorage.getItem('gonotes-theme')||'dark-green';var b=document.getElementById('btn-theme-toggle');if(b)b.textContent=t==='dark-green'?'\u2600':'\u263E';})()`),
-			// Sort dropdown
-			b.DivClass("dropdown").R(
-				b.ButtonClass("sort-dropdown", "onclick", "app.toggleSortMenu()").R(
-					b.Span().T("Sort: "),
-					b.Span("id", "sort-label").T("Modified"),
-					b.Span().T(" ▾"),
-				),
-				b.Div("class", "dropdown-menu", "id", "sort-menu").R(
-					b.Div("class", "dropdown-item", "data-sort", "updated_at", "onclick", "app.setSort('updated_at')").T("Modified"),
-					b.Div("class", "dropdown-item", "data-sort", "created_at", "onclick", "app.setSort('created_at')").T("Created"),
-					b.Div("class", "dropdown-item", "data-sort", "title", "onclick", "app.setSort('title')").T("Title"),
-				),
-			),
 			// Sync button
 			b.Button("class", "btn-icon", "id", "btn-sync", "onclick", "app.syncNotes()", "title", "Sync notes").R(
 				b.Span("id", "sync-icon").T("↻"),
 			),
-			// User menu
+			// Theme toggle — just left of user menu
+			b.Button("class", "theme-toggle", "id", "btn-theme-toggle", "onclick", "app.toggleTheme()", "title", "Toggle theme").T("\u2600"),
+			// Init toggle icon based on current theme
+			b.Script().T(`(function(){var t=localStorage.getItem('gonotes-theme')||'dark-green';var b=document.getElementById('btn-theme-toggle');if(b)b.textContent=t==='dark-green'?'\u2600':'\u263E';})()`),
+			// User menu — rightmost element
 			b.DivClass("dropdown").R(
 				b.ButtonClass("user-menu", "onclick", "app.toggleUserMenu()").R(
 					b.Div("class", "user-avatar", "id", "user-avatar").T("?"),
@@ -53,7 +89,6 @@ func (t Toolbar) Render(b *element.Builder) any {
 				),
 				b.Div("class", "dropdown-menu", "id", "user-menu").R(
 					b.Div("class", "dropdown-item", "onclick", "app.showSettings()").T("Settings"),
-					// Empty divider needs R() termination
 					b.DivClass("dropdown-divider").R(),
 					b.Div("class", "dropdown-item danger", "onclick", "app.logout()").T("Logout"),
 				),
