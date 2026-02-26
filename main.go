@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"gonotes/models"
+	"gonotes/tui"
 	"gonotes/web"
 	"os"
 
@@ -34,6 +35,16 @@ func main() {
 	if err := models.InitJWT(); err != nil {
 		logger.LogErr(err, "Failed to initialize JWT")
 		os.Exit(1)
+	}
+
+	// Branch: TUI mode bypasses the web server and sync client.
+	// The TUI calls the models package directly for all CRUD operations.
+	if len(os.Args) > 1 && os.Args[1] == "tui" {
+		if err := tui.Run(); err != nil {
+			logger.LogErr(err, "TUI exited with error")
+			os.Exit(1)
+		}
+		return
 	}
 
 	// Initialize sync client if configured via environment variables.
