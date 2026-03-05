@@ -37,7 +37,7 @@ func ApplySyncNoteCreate(noteGUID, title string, fragment NoteFragment, authored
 		INSERT INTO notes (guid, title, description, body, tags, is_private, created_by, updated_by,
 		                   authored_at, synced_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-		RETURNING id, guid, title, description, body, tags, is_private, encryption_iv,
+		RETURNING id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
 		          created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at
 	`
 
@@ -46,7 +46,7 @@ func ApplySyncNoteCreate(noteGUID, title string, fragment NoteFragment, authored
 		noteGUID, title, description, body, tags, isPrivate, createdBy, createdBy, authoredAt,
 	).Scan(
 		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-		&note.Tags, &note.IsPrivate, &note.EncryptionIV, &note.CreatedBy,
+		&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
 		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.AuthoredAt, &note.SyncedAt, &note.DeletedAt,
 	)
 	if err != nil {
@@ -72,13 +72,13 @@ func ApplySyncNoteCreate(noteGUID, title string, fragment NoteFragment, authored
 
 	// Insert into cache (no authored_at in cache schema)
 	cacheQuery := `
-		INSERT INTO notes (id, guid, title, description, body, tags, is_private, encryption_iv,
+		INSERT INTO notes (id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
 		                   created_by, updated_by, created_at, updated_at, synced_at, deleted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = cacheDB.Exec(cacheQuery,
 		note.ID, note.GUID, note.Title, note.Description, note.Body,
-		note.Tags, note.IsPrivate, note.EncryptionIV, note.CreatedBy,
+		note.Tags, note.IsPrivate, note.IsFlagged, note.EncryptionIV, note.CreatedBy,
 		note.UpdatedBy, note.CreatedAt, note.UpdatedAt, note.SyncedAt, note.DeletedAt,
 	)
 	if err != nil {
@@ -462,7 +462,7 @@ func joinStrings(parts []string, sep string) string {
 // Used by sync operations that need the canonical state after a disk write.
 func getNoteByGUIDFromDisk(guid string) (*Note, error) {
 	query := `
-		SELECT id, guid, title, description, body, tags, is_private, encryption_iv,
+		SELECT id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
 		       created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at
 		FROM notes
 		WHERE guid = ? AND deleted_at IS NULL
@@ -471,7 +471,7 @@ func getNoteByGUIDFromDisk(guid string) (*Note, error) {
 	note := &Note{}
 	err := db.QueryRow(query, guid).Scan(
 		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-		&note.Tags, &note.IsPrivate, &note.EncryptionIV, &note.CreatedBy,
+		&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
 		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.AuthoredAt, &note.SyncedAt, &note.DeletedAt,
 	)
 

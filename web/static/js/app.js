@@ -20,7 +20,8 @@
       subcategories: [],       // selected subcategory chips (AND logic)
       privacy: 'all',
       date: 'all',
-      unsynced: false
+      unsynced: false,
+      flagged: false
     },
     sort: {
       field: 'updated_at',
@@ -389,7 +390,8 @@
       title: formData.get('title'),
       description: formData.get('description') || null,
       tags: null,
-      is_private: document.getElementById('edit-private').checked
+      is_private: document.getElementById('edit-private').checked,
+      is_flagged: state.currentNote ? (state.currentNote.is_flagged || false) : false
     };
 
     // Add body field based on encoding mode
@@ -572,6 +574,9 @@
 
     // Render meta information (tags removed — categories shown separately)
     const metaHtml = [];
+    if (note.is_flagged) {
+      metaHtml.push('<span class="preview-meta-item preview-flag-indicator"><span class="flag-icon-red">&#9873;</span> Flagged</span>');
+    }
     if (note.is_private) {
       metaHtml.push('<span class="preview-meta-item"><span>🔒</span> Private</span>');
     }
@@ -697,6 +702,17 @@
     // Title row — compact: title, categories, timestamp, and actions all on one line
     const titleRow = document.createElement('div');
     titleRow.className = 'note-title-row';
+    // Flag icon — always present, toggles on click
+    const flagIcon = document.createElement('span');
+    flagIcon.className = 'note-flag-icon' + (note.is_flagged ? ' flagged' : '');
+    flagIcon.title = note.is_flagged ? 'Remove flag' : 'Flag for follow-up';
+    flagIcon.innerHTML = '&#9873;'; // Unicode flag character U+2691
+    flagIcon.onclick = (e) => {
+      e.stopPropagation();
+      window.app.toggleNoteFlag(note.id);
+    };
+    titleRow.appendChild(flagIcon);
+
     if (note.is_private) {
       const privacyIcon = document.createElement('span');
       privacyIcon.className = 'note-privacy-icon';
@@ -840,6 +856,11 @@
       }
     }
 
+    // Apply flagged filter
+    if (state.filters.flagged) {
+      notes = notes.filter(note => note.is_flagged);
+    }
+
     // Apply privacy filter
     if (state.filters.privacy !== 'all') {
       notes = notes.filter(note =>
@@ -980,6 +1001,34 @@
     updateActiveFilters();
   };
 
+  window.app.toggleFlaggedFilter = function(checked) {
+    state.filters.flagged = checked;
+    renderNoteList();
+    updateResultCount();
+    updateActiveFilters();
+  };
+
+  window.app.toggleNoteFlag = async function(noteId) {
+    try {
+      const response = await apiRequest(`/notes/${noteId}/flag`, { method: 'PUT' });
+      if (response && response.data) {
+        // Update in state.notes
+        const idx = state.notes.findIndex(n => n.id === noteId);
+        if (idx !== -1) {
+          state.notes[idx].is_flagged = response.data.is_flagged;
+        }
+        // Update currentNote if it's the same
+        if (state.currentNote && state.currentNote.id === noteId) {
+          state.currentNote.is_flagged = response.data.is_flagged;
+          renderPreview(state.currentNote);
+        }
+        renderNoteList();
+      }
+    } catch (error) {
+      showToast('Failed to toggle flag', 'error');
+    }
+  };
+
   window.app.clearAllFilters = function() {
     state.filters = {
       search: '',
@@ -989,7 +1038,8 @@
       subcategories: [],
       privacy: 'all',
       date: 'all',
-      unsynced: false
+      unsynced: false,
+      flagged: false
     };
 
     // Reset search bar UI
@@ -1005,6 +1055,8 @@
     document.querySelectorAll('input[name="date"]')[0].checked = true;
     const unsyncedEl = document.getElementById('filter-unsynced');
     if (unsyncedEl) unsyncedEl.checked = false;
+    const flaggedEl = document.getElementById('filter-flagged');
+    if (flaggedEl) flaggedEl.checked = false;
 
     renderNoteList();
     updateResultCount();

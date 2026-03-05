@@ -437,6 +437,32 @@ func SearchNotes(ctx rweb.Context) error {
 	return writeSuccess(ctx, http.StatusOK, results)
 }
 
+// ToggleNoteFlag handles PUT /api/v1/notes/:id/flag
+// Toggles the is_flagged field on a note.
+func ToggleNoteFlag(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
+	idStr := ctx.Request().Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		return writeError(ctx, http.StatusBadRequest, "invalid note id")
+	}
+
+	note, err := models.ToggleNoteFlag(id, userGUID)
+	if err != nil {
+		logger.LogErr(serr.Wrap(err, "failed to toggle note flag"), "database error")
+		return writeError(ctx, http.StatusInternalServerError, "failed to toggle flag")
+	}
+	if note == nil {
+		return writeError(ctx, http.StatusNotFound, "note not found")
+	}
+
+	return writeSuccess(ctx, http.StatusOK, note.ToOutput())
+}
+
 // DeleteNote handles DELETE /api/v1/notes/:id
 // Performs a soft delete on the note (sets deleted_at timestamp).
 // Only deletes notes owned by the authenticated user.

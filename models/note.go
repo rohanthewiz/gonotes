@@ -21,6 +21,7 @@ type Note struct {
 	Body         sql.NullString `json:"body"`          // Main content of the note
 	Tags         sql.NullString `json:"tags"`          // Comma-separated tags for categorization
 	IsPrivate    bool           `json:"is_private"`    // Visibility flag, defaults to false
+	IsFlagged    bool           `json:"is_flagged"`    // Flag for follow-up, defaults to false
 	EncryptionIV sql.NullString `json:"encryption_iv"` // Initialization vector if note is encrypted
 	CreatedBy    sql.NullString `json:"created_by"`    // User who created the note
 	UpdatedBy    sql.NullString `json:"updated_by"`    // User who last updated the note
@@ -49,6 +50,7 @@ CREATE TABLE IF NOT EXISTS notes (
     body          VARCHAR,
     tags          VARCHAR,
     is_private    BOOLEAN DEFAULT false,
+    is_flagged    BOOLEAN DEFAULT false,
     encryption_iv VARCHAR,
     created_by    VARCHAR,
     updated_by    VARCHAR,
@@ -74,6 +76,7 @@ CREATE TABLE IF NOT EXISTS notes (
     body          VARCHAR,
     tags          VARCHAR,
     is_private    BOOLEAN DEFAULT false,
+    is_flagged    BOOLEAN DEFAULT false,
     encryption_iv VARCHAR,
     created_by    VARCHAR,
     updated_by    VARCHAR,
@@ -101,6 +104,7 @@ type NoteInput struct {
 	Body         *string `json:"body,omitempty"`
 	Tags         *string `json:"tags,omitempty"`
 	IsPrivate    bool    `json:"is_private"`
+	IsFlagged    bool    `json:"is_flagged"`
 	EncryptionIV *string `json:"encryption_iv,omitempty"`
 	CreatedBy    *string `json:"created_by,omitempty"`
 	UpdatedBy    *string `json:"updated_by,omitempty"`
@@ -117,6 +121,7 @@ type NoteOutput struct {
 	Body         *string `json:"body,omitempty"`
 	Tags         *string `json:"tags,omitempty"`
 	IsPrivate    bool    `json:"is_private"`
+	IsFlagged    bool    `json:"is_flagged"`
 	EncryptionIV *string `json:"encryption_iv,omitempty"`
 	CreatedBy    *string `json:"created_by,omitempty"`
 	UpdatedBy    *string `json:"updated_by,omitempty"`
@@ -135,6 +140,7 @@ func (n *Note) ToOutput() NoteOutput {
 		GUID:      n.GUID,
 		Title:     n.Title,
 		IsPrivate: n.IsPrivate,
+		IsFlagged: n.IsFlagged,
 		CreatedAt: n.CreatedAt.Format(time.RFC3339),
 		UpdatedAt: n.UpdatedAt.Format(time.RFC3339),
 	}
@@ -210,9 +216,9 @@ func CreateNote(input NoteInput, userGUID string) (*Note, error) {
 
 	// authored_at uses DEFAULT CURRENT_TIMESTAMP, so no need to include in INSERT VALUES
 	query := `
-		INSERT INTO notes (guid, title, description, body, tags, is_private, encryption_iv, created_by, updated_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		RETURNING id, guid, title, description, body, tags, is_private, encryption_iv,
+		INSERT INTO notes (guid, title, description, body, tags, is_private, is_flagged, encryption_iv, created_by, updated_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		RETURNING id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
 		          created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at
 	`
 
@@ -225,12 +231,13 @@ func CreateNote(input NoteInput, userGUID string) (*Note, error) {
 		diskBody,
 		toNullString(input.Tags),
 		input.IsPrivate,
+		input.IsFlagged,
 		diskEncryptionIV,
 		createdBy,
 		updatedBy,
 	).Scan(
 		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-		&note.Tags, &note.IsPrivate, &note.EncryptionIV, &note.CreatedBy,
+		&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
 		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.AuthoredAt, &note.SyncedAt, &note.DeletedAt,
 	)
 
@@ -261,9 +268,9 @@ func CreateNote(input NoteInput, userGUID string) (*Note, error) {
 	// Note: Cache stores unencrypted body for performance; encryption_iv is still stored
 	// for reference but the body is plaintext in cache
 	cacheInsertQuery := `
-		INSERT INTO notes (id, guid, title, description, body, tags, is_private, encryption_iv,
+		INSERT INTO notes (id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
 		                   created_by, updated_by, created_at, updated_at, synced_at, deleted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	logger.Debug("CreateNote: inserting into cache",
@@ -276,7 +283,7 @@ func CreateNote(input NoteInput, userGUID string) (*Note, error) {
 
 	_, err = cacheDB.Exec(cacheInsertQuery,
 		note.ID, note.GUID, note.Title, note.Description, cacheBody,
-		note.Tags, note.IsPrivate, note.EncryptionIV, note.CreatedBy,
+		note.Tags, note.IsPrivate, note.IsFlagged, note.EncryptionIV, note.CreatedBy,
 		note.UpdatedBy, note.CreatedAt, note.UpdatedAt, note.SyncedAt, note.DeletedAt,
 	)
 	if err != nil {
@@ -301,7 +308,7 @@ func CreateNote(input NoteInput, userGUID string) (*Note, error) {
 // Returns nil, nil if the note doesn't exist or isn't owned by the user.
 func GetNoteByID(id int64, userGUID string) (*Note, error) {
 	query := `
-		SELECT id, guid, title, description, body, tags, is_private, encryption_iv,
+		SELECT id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
 		       created_by, updated_by, created_at, updated_at, synced_at, deleted_at
 		FROM notes
 		WHERE id = ? AND created_by = ? AND deleted_at IS NULL
@@ -311,7 +318,7 @@ func GetNoteByID(id int64, userGUID string) (*Note, error) {
 	// Read from cache for better performance
 	err := cacheDB.QueryRow(query, id, userGUID).Scan(
 		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-		&note.Tags, &note.IsPrivate, &note.EncryptionIV, &note.CreatedBy,
+		&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
 		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.SyncedAt, &note.DeletedAt,
 	)
 
@@ -329,7 +336,7 @@ func GetNoteByID(id int64, userGUID string) (*Note, error) {
 // the body will be encrypted in the returned note (unlike cache reads).
 func getNoteByIDFromDisk(id int64, userGUID string) (*Note, error) {
 	query := `
-		SELECT id, guid, title, description, body, tags, is_private, encryption_iv,
+		SELECT id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
 		       created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at
 		FROM notes
 		WHERE id = ? AND created_by = ? AND deleted_at IS NULL
@@ -338,7 +345,7 @@ func getNoteByIDFromDisk(id int64, userGUID string) (*Note, error) {
 	note := &Note{}
 	err := db.QueryRow(query, id, userGUID).Scan(
 		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-		&note.Tags, &note.IsPrivate, &note.EncryptionIV, &note.CreatedBy,
+		&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
 		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.AuthoredAt, &note.SyncedAt, &note.DeletedAt,
 	)
 
@@ -367,7 +374,7 @@ func getNoteByIDFromDisk(id int64, userGUID string) (*Note, error) {
 // Useful for external references and sync operations.
 func GetNoteByGUID(guid string) (*Note, error) {
 	query := `
-		SELECT id, guid, title, description, body, tags, is_private, encryption_iv,
+		SELECT id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
 		       created_by, updated_by, created_at, updated_at, synced_at, deleted_at
 		FROM notes
 		WHERE guid = ? AND deleted_at IS NULL
@@ -377,7 +384,7 @@ func GetNoteByGUID(guid string) (*Note, error) {
 	// Read from cache for better performance
 	err := cacheDB.QueryRow(query, guid).Scan(
 		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-		&note.Tags, &note.IsPrivate, &note.EncryptionIV, &note.CreatedBy,
+		&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
 		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.SyncedAt, &note.DeletedAt,
 	)
 
@@ -396,7 +403,7 @@ func GetNoteByGUID(guid string) (*Note, error) {
 // limit=0 returns all notes, offset skips the first N results.
 func ListNotes(userGUID string, limit, offset int) ([]Note, error) {
 	query := `
-		SELECT id, guid, title, description, body, tags, is_private, encryption_iv,
+		SELECT id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
 		       created_by, updated_by, created_at, updated_at, synced_at, deleted_at
 		FROM notes
 		WHERE created_by = ? AND deleted_at IS NULL
@@ -428,7 +435,7 @@ func ListNotes(userGUID string, limit, offset int) ([]Note, error) {
 		var note Note
 		err := rows.Scan(
 			&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-			&note.Tags, &note.IsPrivate, &note.EncryptionIV, &note.CreatedBy,
+			&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
 			&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.SyncedAt, &note.DeletedAt,
 		)
 		if err != nil {
@@ -485,7 +492,7 @@ func UpdateNote(id int64, input NoteInput, userGUID string) (*Note, error) {
 	// Also filter by created_by to enforce ownership
 	diskUpdateQuery := `
 		UPDATE notes
-		SET title = ?, description = ?, body = ?, tags = ?, is_private = ?,
+		SET title = ?, description = ?, body = ?, tags = ?, is_private = ?, is_flagged = ?,
 		    encryption_iv = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP,
 		    authored_at = CURRENT_TIMESTAMP
 		WHERE id = ? AND created_by = ? AND deleted_at IS NULL
@@ -497,6 +504,7 @@ func UpdateNote(id int64, input NoteInput, userGUID string) (*Note, error) {
 		diskBody,
 		toNullString(input.Tags),
 		input.IsPrivate,
+		input.IsFlagged,
 		diskEncryptionIV,
 		updatedBy,
 		id,
@@ -532,7 +540,7 @@ func UpdateNote(id int64, input NoteInput, userGUID string) (*Note, error) {
 	// Update cache with UNENCRYPTED body for fast reads
 	cacheUpdateQuery := `
 		UPDATE notes
-		SET title = ?, description = ?, body = ?, tags = ?, is_private = ?,
+		SET title = ?, description = ?, body = ?, tags = ?, is_private = ?, is_flagged = ?,
 		    encryption_iv = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ? AND deleted_at IS NULL
 	`
@@ -548,6 +556,7 @@ func UpdateNote(id int64, input NoteInput, userGUID string) (*Note, error) {
 		toNullString(input.Body), // Unencrypted for cache
 		toNullString(input.Tags),
 		input.IsPrivate,
+		input.IsFlagged,
 		diskEncryptionIV, // Store the IV in cache too for reference
 		toNullString(input.UpdatedBy),
 		id,
@@ -665,7 +674,7 @@ func SearchNotesByTitle(query string, userGUID string, limit int) ([]Note, error
 	}
 
 	sqlQuery := `
-		SELECT id, guid, title, description, body, tags, is_private, encryption_iv,
+		SELECT id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
 		       created_by, updated_by, created_at, updated_at, synced_at, deleted_at
 		FROM notes
 		WHERE created_by = ? AND deleted_at IS NULL
@@ -685,7 +694,7 @@ func SearchNotesByTitle(query string, userGUID string, limit int) ([]Note, error
 		var note Note
 		err := rows.Scan(
 			&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-			&note.Tags, &note.IsPrivate, &note.EncryptionIV, &note.CreatedBy,
+			&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
 			&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.SyncedAt, &note.DeletedAt,
 		)
 		if err != nil {
@@ -695,6 +704,38 @@ func SearchNotesByTitle(query string, userGUID string, limit int) ([]Note, error
 	}
 
 	return notes, rows.Err()
+}
+
+// ToggleNoteFlag toggles the is_flagged field on a note.
+// Returns the updated note or nil if not found.
+func ToggleNoteFlag(id int64, userGUID string) (*Note, error) {
+	// Toggle in disk DB (source of truth)
+	result, err := db.Exec(`
+		UPDATE notes SET is_flagged = NOT is_flagged
+		WHERE id = ? AND created_by = ? AND deleted_at IS NULL
+	`, id, userGUID)
+	if err != nil {
+		return nil, err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if rowsAffected == 0 {
+		return nil, nil
+	}
+
+	// Toggle in cache
+	_, err = cacheDB.Exec(`
+		UPDATE notes SET is_flagged = NOT is_flagged
+		WHERE id = ? AND deleted_at IS NULL
+	`, id)
+	if err != nil {
+		logger.LogErr(err, "ToggleNoteFlag: cache update failed", "note_id", id)
+	}
+
+	return GetNoteByID(id, userGUID)
 }
 
 // toNullString converts a *string to sql.NullString for database operations.

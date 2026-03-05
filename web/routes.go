@@ -68,6 +68,7 @@ func setupRoutes(s *rweb.Server) {
 	s.Get("/api/v1/notes/:id", api.GetNote)        // Get a single note by ID
 	s.Put("/api/v1/notes/:id", api.UpdateNote)     // Update a note by ID
 	s.Delete("/api/v1/notes/:id", api.DeleteNote)  // Soft delete a note by ID
+	s.Put("/api/v1/notes/:id/flag", api.ToggleNoteFlag) // Toggle flag on a note
 
 	// Categories CRUD endpoints following RESTful conventions
 	s.Post("/api/v1/categories", api.CreateCategory)       // Create a new category

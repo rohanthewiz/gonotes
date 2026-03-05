@@ -82,6 +82,12 @@ func createTables() error {
 		return serr.Wrap(err, "failed to create notes table")
 	}
 
+	// Migration: add is_flagged column for note flagging
+	_, err = db.Exec(`ALTER TABLE notes ADD COLUMN IF NOT EXISTS is_flagged BOOLEAN DEFAULT false`)
+	if err != nil {
+		return serr.Wrap(err, "failed to add is_flagged column")
+	}
+
 	// Migration: add authored_at column for existing databases
 	// This column tracks when a person last created/updated a note (for peer-to-peer sync)
 	_, err = db.Exec(`ALTER TABLE notes ADD COLUMN IF NOT EXISTS authored_at TIMESTAMP`)
@@ -373,6 +379,12 @@ func initCacheDB() error {
 		return serr.Wrap(err, "failed to create categories table in cache")
 	}
 
+	// Add is_flagged column to cache notes table (matches disk migration)
+	_, err = cacheDB.Exec(`ALTER TABLE notes ADD COLUMN IF NOT EXISTS is_flagged BOOLEAN DEFAULT false`)
+	if err != nil {
+		return serr.Wrap(err, "failed to add is_flagged column to cache notes")
+	}
+
 	// Add created_by column to cache categories table (matches disk migration)
 	_, err = cacheDB.Exec(`ALTER TABLE categories ADD COLUMN IF NOT EXISTS created_by VARCHAR`)
 	if err != nil {
@@ -400,7 +412,7 @@ func syncCacheFromDisk() error {
 	// Query all notes from disk (including soft-deleted ones for complete sync)
 	// Note: authored_at is read from disk but NOT inserted into cache (cache schema lacks it)
 	query := `
-		SELECT id, guid, title, description, body, tags, is_private, encryption_iv,
+		SELECT id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
 		       created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at
 		FROM notes
 	`
@@ -414,9 +426,9 @@ func syncCacheFromDisk() error {
 	// Insert each note into cache preserving the ID
 	// Note: cache schema does not include authored_at column
 	insertQuery := `
-		INSERT INTO notes (id, guid, title, description, body, tags, is_private, encryption_iv,
+		INSERT INTO notes (id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
 		                   created_by, updated_by, created_at, updated_at, synced_at, deleted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	count := 0
@@ -425,7 +437,7 @@ func syncCacheFromDisk() error {
 
 		err := rows.Scan(
 			&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-			&note.Tags, &note.IsPrivate, &note.EncryptionIV, &note.CreatedBy,
+			&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
 			&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.AuthoredAt, &note.SyncedAt, &note.DeletedAt,
 		)
 		if err != nil {
@@ -449,7 +461,7 @@ func syncCacheFromDisk() error {
 
 		_, err = cacheDB.Exec(insertQuery,
 			note.ID, note.GUID, note.Title, note.Description, cacheBody,
-			note.Tags, note.IsPrivate, note.EncryptionIV, note.CreatedBy,
+			note.Tags, note.IsPrivate, note.IsFlagged, note.EncryptionIV, note.CreatedBy,
 			note.UpdatedBy, note.CreatedAt, note.UpdatedAt, note.SyncedAt, note.DeletedAt,
 		)
 		if err != nil {

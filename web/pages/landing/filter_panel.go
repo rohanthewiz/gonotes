@@ -15,6 +15,9 @@ func (f FilterPanel) Render(b *element.Builder) any {
 			// Categories section — only the "Manage" link; filtering is in the search bar
 			f.renderCategoriesSection(b),
 
+			// Flagged section
+			f.renderFlaggedSection(b),
+
 			// Privacy section
 			f.renderPrivacySection(b),
 
@@ -43,6 +46,21 @@ func (f FilterPanel) renderCategoriesSection(b *element.Builder) any {
 				b.A("href", "#", "class", "filter-action-link",
 					"onclick", "event.stopPropagation(); app.showCategoryManager(); return false;",
 					"title", "Manage categories").T("Manage"),
+			),
+		),
+	)
+}
+
+func (f FilterPanel) renderFlaggedSection(b *element.Builder) any {
+	return b.Div("class", "filter-section", "id", "flagged-section").R(
+		b.Div("class", "filter-header").R(
+			b.SpanClass("filter-title").T("Flagged"),
+		),
+		b.DivClass("filter-content").R(
+			b.LabelClass("filter-item").R(
+				b.Input("type", "checkbox", "class", "filter-checkbox", "id", "filter-flagged",
+					"onchange", "app.toggleFlaggedFilter(this.checked)"),
+				b.SpanClass("filter-label").T("Flagged only"),
 			),
 		),
 	)

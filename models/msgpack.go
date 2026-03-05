@@ -23,6 +23,7 @@ type MsgPackBodyRequest struct {
 	BodyEncoded  string  `json:"body_encoded"` // Base64-encoded msgpack bytes
 	Tags         *string `json:"tags,omitempty"`
 	IsPrivate    bool    `json:"is_private"`
+	IsFlagged    bool    `json:"is_flagged"`
 	EncryptionIV *string `json:"encryption_iv,omitempty"`
 }
 
@@ -36,6 +37,7 @@ type MsgPackBodyResponse struct {
 	BodyEncoded  string  `json:"body_encoded"` // Base64-encoded msgpack bytes
 	Tags         *string `json:"tags,omitempty"`
 	IsPrivate    bool    `json:"is_private"`
+	IsFlagged    bool    `json:"is_flagged"`
 	EncryptionIV *string `json:"encryption_iv,omitempty"`
 	CreatedBy    *string `json:"created_by,omitempty"`
 	UpdatedBy    *string `json:"updated_by,omitempty"`
@@ -110,6 +112,7 @@ func (n *NoteOutput) ToMsgPackResponse() (*MsgPackBodyResponse, error) {
 		BodyEncoded:  encodedBody,
 		Tags:         n.Tags,
 		IsPrivate:    n.IsPrivate,
+		IsFlagged:    n.IsFlagged,
 		EncryptionIV: n.EncryptionIV,
 		CreatedBy:    n.CreatedBy,
 		UpdatedBy:    n.UpdatedBy,
@@ -136,6 +139,7 @@ func (r *MsgPackBodyRequest) ToNoteInput() (*NoteInput, error) {
 		Body:         body,
 		Tags:         r.Tags,
 		IsPrivate:    r.IsPrivate,
+		IsFlagged:    r.IsFlagged,
 		EncryptionIV: r.EncryptionIV,
 	}, nil
 }

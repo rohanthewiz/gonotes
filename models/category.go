@@ -696,7 +696,7 @@ func GetNoteCategoryDetails(noteID int64, userGUID string) ([]NoteCategoryDetail
 // When userGUID is non-empty, only returns notes owned by that user.
 func GetCategoryNotes(categoryID int64, userGUID string) ([]Note, error) {
 	query := `SELECT n.id, n.guid, n.title, n.description, n.body, n.tags,
-		n.is_private, n.encryption_iv, n.created_by, n.updated_by,
+		n.is_private, n.is_flagged, n.encryption_iv, n.created_by, n.updated_by,
 		n.created_at, n.updated_at, n.synced_at, n.deleted_at
 		FROM notes n
 		INNER JOIN note_categories nc ON n.id = nc.note_id
@@ -727,6 +727,7 @@ func GetCategoryNotes(categoryID int64, userGUID string) ([]Note, error) {
 			&note.Body,
 			&note.Tags,
 			&note.IsPrivate,
+			&note.IsFlagged,
 			&note.EncryptionIV,
 			&note.CreatedBy,
 			&note.UpdatedBy,
@@ -787,7 +788,7 @@ func GetCategoryByName(name string, userGUID string) (*Category, error) {
 // Returns empty slice if the category doesn't exist or has no notes.
 func GetNotesByCategoryName(categoryName string, userGUID string) ([]Note, error) {
 	query := `SELECT n.id, n.guid, n.title, n.description, n.body, n.tags,
-		n.is_private, n.encryption_iv, n.created_by, n.updated_by,
+		n.is_private, n.is_flagged, n.encryption_iv, n.created_by, n.updated_by,
 		n.created_at, n.updated_at, n.synced_at, n.deleted_at
 		FROM notes n
 		INNER JOIN note_categories nc ON n.id = nc.note_id
@@ -812,6 +813,7 @@ func GetNotesByCategoryName(categoryName string, userGUID string) ([]Note, error
 			&note.Body,
 			&note.Tags,
 			&note.IsPrivate,
+			&note.IsFlagged,
 			&note.EncryptionIV,
 			&note.CreatedBy,
 			&note.UpdatedBy,
@@ -901,7 +903,7 @@ func GetNotesByCategoryAndSubcategories(categoryName string, subcategories []str
 	// DuckDB supports list_contains for checking if an array contains a value.
 	// Since subcategories is stored as JSON string, we need to parse it first.
 	query := `SELECT n.id, n.guid, n.title, n.description, n.body, n.tags,
-		n.is_private, n.encryption_iv, n.created_by, n.updated_by,
+		n.is_private, n.is_flagged, n.encryption_iv, n.created_by, n.updated_by,
 		n.created_at, n.updated_at, n.synced_at, n.deleted_at
 		FROM notes n
 		INNER JOIN note_categories nc ON n.id = nc.note_id
@@ -941,6 +943,7 @@ func GetNotesByCategoryAndSubcategories(categoryName string, subcategories []str
 			&note.Body,
 			&note.Tags,
 			&note.IsPrivate,
+			&note.IsFlagged,
 			&note.EncryptionIV,
 			&note.CreatedBy,
 			&note.UpdatedBy,
