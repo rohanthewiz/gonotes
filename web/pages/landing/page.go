@@ -37,7 +37,7 @@ func (p Page) renderHead(b *element.Builder) any {
 		// Inline theme init — runs before CSS to prevent flash of wrong theme
 		b.Script().T(`(function(){var t=localStorage.getItem('gonotes-theme')||'dark-green';document.documentElement.setAttribute('data-theme',t);})()`),
 		// CSS
-		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=5"),
+		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=6"),
 		// Highlight.js CSS theme - chosen based on current theme (default to dark)
 		b.Link("rel", "stylesheet", "id", "hljs-theme", "href", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css"),
 		// Update hljs theme link based on saved preference
@@ -72,6 +72,10 @@ func (p Page) renderBody(b *element.Builder) any {
 				element.RenderComponents(b,
 					FilterPanel{},
 					NoteList{},
+				),
+				// Draggable splitter between notes list and preview panel
+				b.Div("class", "panel-splitter", "id", "panel-splitter").R(),
+				element.RenderComponents(b,
 					PreviewPanel{},
 				),
 			),
@@ -101,7 +105,7 @@ func (p Page) renderBody(b *element.Builder) any {
 
 		// Application JavaScript (cache-bust version for development)
 		// app.js must load first — it exposes _internal for cats_subcats.js
-		b.Script("src", "/static/js/app.js?v=6").R(),
+		b.Script("src", "/static/js/app.js?v=7").R(),
 		b.Script("src", "/static/js/cats_subcats.js?v=2").R(),
 		b.Script("src", "/static/js/sync.js?v=1").R(),
 		b.Script("src", "/static/js/note_links.js?v=1").R(),

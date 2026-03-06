@@ -943,12 +943,36 @@ input, textarea, select {
 /* ============================================
    Right Panel - Preview/Edit
    ============================================ */
+/* Panel Splitter - draggable divider between notes list and preview */
+.panel-splitter {
+  width: 5px;
+  cursor: col-resize;
+  background: var(--border-light);
+  flex-shrink: 0;
+  transition: background var(--transition-fast);
+  position: relative;
+}
+
+.panel-splitter::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  right: -3px;
+}
+
+.panel-splitter:hover,
+.panel-splitter.dragging {
+  background: var(--primary);
+}
+
 .right-panel {
   width: var(--right-panel-width);
   max-width: 600px;
-  min-width: 350px;
+  min-width: 250px;
   background: var(--bg-primary);
-  border-left: 1px solid var(--border-light);
+  border-left: none;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2168,6 +2192,10 @@ input, textarea, select {
 
 /* Tablet Portrait */
 @media (max-width: 1024px) {
+  .panel-splitter {
+    display: none;
+  }
+
   .left-panel {
     position: fixed;
     left: 0;

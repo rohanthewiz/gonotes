@@ -1542,6 +1542,58 @@
     formatRelativeTime
   };
 
+  // ============================================
+  // Panel Splitter — drag to resize notes list / preview
+  // ============================================
+  function initPanelSplitter() {
+    const splitter = document.getElementById('panel-splitter');
+    const rightPanel = document.getElementById('right-panel');
+    const appMain = document.querySelector('.app-main');
+    if (!splitter || !rightPanel || !appMain) return;
+
+    let startX, startWidth;
+
+    function onMouseDown(e) {
+      e.preventDefault();
+      startX = e.clientX;
+      startWidth = rightPanel.getBoundingClientRect().width;
+      splitter.classList.add('dragging');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    }
+
+    function onMouseMove(e) {
+      // Dragging left increases right panel width, dragging right decreases it
+      const delta = startX - e.clientX;
+      const containerWidth = appMain.getBoundingClientRect().width;
+      const newWidth = Math.min(
+        Math.max(250, startWidth + delta),
+        containerWidth * 0.6
+      );
+      rightPanel.style.width = newWidth + 'px';
+    }
+
+    function onMouseUp() {
+      splitter.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      // Persist preference
+      localStorage.setItem('gonotes-splitter-width', rightPanel.style.width);
+    }
+
+    splitter.addEventListener('mousedown', onMouseDown);
+
+    // Restore saved width
+    const saved = localStorage.getItem('gonotes-splitter-width');
+    if (saved) {
+      rightPanel.style.width = saved;
+    }
+  }
+
   async function init() {
     // Ensure markdown/highlight.js is configured (retry in case CDN scripts loaded late)
     initMarkdownIfReady();
@@ -1554,6 +1606,9 @@
         securityLevel: 'loose',
       });
     }
+
+    // Initialize draggable splitter between notes list and preview panel
+    initPanelSplitter();
 
     // Initialize category input handlers (defined in cats_subcats.js)
     window.app._initCategoryHandlers();
