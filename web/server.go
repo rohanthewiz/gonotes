@@ -5,11 +5,13 @@ import (
 	"github.com/rohanthewiz/rweb"
 )
 
+const webPort = "8444"
+
 // NewServer creates and configures the RWeb server
 func NewServer() *rweb.Server {
 	// Create server instance with options
 	s := rweb.NewServer(rweb.ServerOptions{
-		Address: ":8000",
+		Address: ":" + webPort,
 		Verbose: true,
 	})
 
@@ -31,7 +33,7 @@ func NewServer() *rweb.Server {
 
 // Run starts the server
 func Run(s *rweb.Server) error {
-	logger.Info("GoNotes Web Server starting on", "address", ":8000")
+	logger.Info("GoNotes Web Server starting on", "address", ":"+webPort)
 	return s.Run()
 }
 

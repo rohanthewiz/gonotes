@@ -5,6 +5,7 @@ import (
 	"gonotes/models"
 	"gonotes/web"
 	"os"
+	"path/filepath"
 
 	"github.com/rohanthewiz/logger"
 	"github.com/rohanthewiz/rutil/fileops"
@@ -14,6 +15,24 @@ import (
 func main() {
 	// Initialize logger
 	logger.SetLogLevel("info")
+
+	// Change to ~/.gonotes/ directory, creating it if needed.
+	// This ensures all relative paths (DB, config) resolve under the user's home.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		logger.LogErr(err, "Failed to get user home directory")
+		os.Exit(1)
+	}
+	gonotesDir := filepath.Join(home, ".gonotes")
+	if err := os.MkdirAll(gonotesDir, 0o755); err != nil {
+		logger.LogErr(err, "Failed to create .gonotes directory")
+		os.Exit(1)
+	}
+	if err := os.Chdir(gonotesDir); err != nil {
+		logger.LogErr(err, "Failed to change to .gonotes directory")
+		os.Exit(1)
+	}
+	logger.Info("Working directory set to", "path", gonotesDir)
 
 	// Pickup local configs
 	if issues, err := fileops.EnvFromFile("config/cfg_files/.env"); err != nil {
