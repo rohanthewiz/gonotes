@@ -45,7 +45,7 @@ func newTestServer(t *testing.T) *testServer {
 	}
 
 	// Create and start server on a test port
-	srv := web.NewServer()
+	srv := web.NewServer(web.WebPort)
 
 	// Start server in background goroutine
 	go func() {

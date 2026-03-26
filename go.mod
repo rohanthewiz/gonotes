@@ -10,13 +10,18 @@ require (
 	github.com/marcboeker/go-duckdb v1.8.3
 	github.com/rohanthewiz/element v0.5.5-0.20250730211845-a097f2feeb11
 	github.com/rohanthewiz/logger v1.2.20
+	github.com/rohanthewiz/rutil v0.1.9-0.20250728223252-483502c18c1d
 	github.com/rohanthewiz/rweb v0.1.21-0.20250827011452-5ff5413205fc
 	github.com/rohanthewiz/serr v1.2.16
+	github.com/sergi/go-diff v1.4.0
+	github.com/urfave/cli/v2 v2.27.7
+	github.com/vmihailenco/msgpack/v5 v5.4.1
 	golang.org/x/crypto v0.46.0
 )
 
 require (
 	github.com/apache/arrow-go/v18 v18.0.0 // indirect
+	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
 	github.com/google/flatbuffers v24.3.25+incompatible // indirect
 	github.com/johntdyer/slack-go v0.0.0-20230314151037-c5bf334f9b6e // indirect
@@ -25,11 +30,10 @@ require (
 	github.com/klauspost/cpuid/v2 v2.2.8 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
-	github.com/rohanthewiz/rutil v0.1.9-0.20250728223252-483502c18c1d // indirect
-	github.com/sergi/go-diff v1.4.0 // indirect
+	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
-	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
+	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
 	github.com/zeebo/xxh3 v1.0.2 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
 	golang.org/x/mod v0.21.0 // indirect
