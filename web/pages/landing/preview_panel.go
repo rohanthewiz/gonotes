@@ -13,8 +13,20 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 			// Preview header
 			b.DivClass("preview-header").R(
 				b.H1("class", "preview-title", "id", "preview-title").T("Select a note"),
-				b.Div("class", "preview-meta", "id", "preview-meta").R(
-					// Meta information will be populated by JavaScript
+				// Description: short subtitle shown beneath the title; hidden when empty
+				b.Div("class", "preview-description", "id", "preview-description", "style", "display:none").R(),
+				// Meta row: populated meta items on the left, focus-mode toggle pinned right
+				b.DivClass("preview-meta-row").R(
+					b.Div("class", "preview-meta", "id", "preview-meta").R(
+						// Meta information will be populated by JavaScript
+					),
+					// Focus-mode toggle — expands the preview panel to full width,
+					// collapsing the filter/list panels. A handle on the left edge restores layout.
+					b.Button("class", "btn-icon preview-focus-btn", "id", "btn-focus-mode",
+						"onclick", "app.toggleFocusMode()",
+						"title", "Toggle focus mode (expand preview)").R(
+						b.Text(`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="14" r="4.5"/><circle cx="18" cy="14" r="4.5"/><circle cx="6" cy="14" r="1.8" fill="currentColor" stroke="none"/><circle cx="18" cy="14" r="1.8" fill="currentColor" stroke="none"/><path d="M3 10 L5 4.5 L9 4.5 L10 10"/><path d="M14 10 L15 4.5 L19 4.5 L21 10"/><line x1="10" y1="7" x2="14" y2="7"/></svg>`),
+					),
 				),
 				// Category rows: each row shows a category (bold, colored) followed by
 				// its subcategories. Populated dynamically when a note is selected.

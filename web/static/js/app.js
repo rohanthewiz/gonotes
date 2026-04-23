@@ -576,6 +576,15 @@
     document.getElementById('preview-title').textContent = note.title;
     document.getElementById('preview-footer').style.display = 'flex';
 
+    const descEl = document.getElementById('preview-description');
+    if (note.description && note.description.trim()) {
+      descEl.textContent = note.description;
+      descEl.style.display = '';
+    } else {
+      descEl.textContent = '';
+      descEl.style.display = 'none';
+    }
+
     // Render meta information (tags removed — categories shown separately)
     const metaHtml = [];
     if (note.is_flagged) {
@@ -640,6 +649,9 @@
 
   function clearPreview() {
     document.getElementById('preview-title').textContent = 'Select a note';
+    const descEl = document.getElementById('preview-description');
+    descEl.textContent = '';
+    descEl.style.display = 'none';
     document.getElementById('preview-meta').innerHTML = '';
     document.getElementById('preview-categories').innerHTML = '';
     document.getElementById('preview-content').innerHTML = '<p class="text-muted">Select a note from the list to preview its content.</p>';

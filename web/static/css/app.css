@@ -1054,6 +1054,26 @@ input, textarea, select {
   word-wrap: break-word;
 }
 
+.preview-description {
+  font-size: var(--font-size-md);
+  font-style: italic;
+  color: var(--text-secondary);
+  margin-bottom: var(--spacing-md);
+  word-wrap: break-word;
+}
+
+.preview-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.preview-focus-btn {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
 .preview-meta {
   display: flex;
   flex-wrap: wrap;
