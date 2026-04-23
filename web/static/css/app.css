@@ -1207,7 +1207,17 @@ input, textarea, select {
   color: var(--primary);
 }
 
+.code-copy-btn:active {
+  background: rgba(74, 222, 128, 0.35);
+  border-color: #4ade80;
+  color: #4ade80;
+  transform: scale(0.92);
+  opacity: 1;
+}
+
 .code-copy-btn.copied {
+  background: rgba(74, 222, 128, 0.25);
+  border-color: #4ade80;
   color: #4ade80;
   opacity: 1;
 }

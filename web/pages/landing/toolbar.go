@@ -6,7 +6,7 @@ import "github.com/rohanthewiz/element"
 //
 //	Left:  [🔍 Search] [.* regex] [All Categories ▾] [Sort ▾] [subcats…] [Clear]
 //	       --- flexible space ---
-//	Right: [All Notes (n)] [+ New Note] [☀/☾ theme] [↻ sync] [user menu]
+//	Right: [↻ sync] [focus-mode] [✒ new-note] [☀/☾ theme] [user menu]
 type Toolbar struct{}
 
 // Render implements the element.Component interface
@@ -16,7 +16,7 @@ func (t Toolbar) Render(b *element.Builder) any {
 		b.DivClass("toolbar-left").R(
 			// App logo — inline SVG so it doesn't require a separate file request
 			b.A("href", "/", "class", "toolbar-logo", "title", "GoNotes").R(
-				b.Text(`<svg width="34" height="34" viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg"><rect width="500" height="500" rx="40" fill="#6b9f7b"/><rect x="40" y="180" width="80" height="25" rx="12.5" fill="white" fill-opacity="0.8"/><rect x="20" y="235" width="110" height="25" rx="12.5" fill="white" fill-opacity="0.9"/><rect x="50" y="290" width="70" height="25" rx="12.5" fill="white" fill-opacity="0.7"/><text x="300" y="285" font-family="Arial,sans-serif" font-weight="900" font-size="180" fill="white" text-anchor="middle">GN</text></svg>`),
+				b.Text(`<svg width="34" height="34" viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg"><rect width="500" height="500" rx="60" fill="#6b9f7b"/><text x="250" y="310" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif" font-weight="800" font-size="240" fill="white" text-anchor="middle" letter-spacing="-12">GN</text><rect x="175" y="370" width="150" height="26" rx="13" fill="white" fill-opacity="0.85"/></svg>`),
 			),
 			// Search input — reuses id="search-input" so "/" shortcut keeps working
 			b.DivClass("search-bar-input-wrapper").R(
@@ -66,13 +66,8 @@ func (t Toolbar) Render(b *element.Builder) any {
 		// Flexible spacer pushes the right group to the far right
 		b.DivClass("toolbar-spacer").R(),
 
-		// Right group — new-note, sync, theme, user
+		// Right group — sync, focus-mode, new-note, theme, user
 		b.DivClass("toolbar-right").R(
-			// New Note button
-			b.Button("class", "btn btn-primary", "id", "btn-new-note", "onclick", "app.newNote()").R(
-				b.Span().T("+"),
-				b.Span().T(" New Note"),
-			),
 			// Sync button
 			b.Button("class", "btn-icon", "id", "btn-sync", "onclick", "app.syncNotes()", "title", "Sync notes").R(
 				b.Span("id", "sync-icon").T("↻"),
@@ -80,7 +75,14 @@ func (t Toolbar) Render(b *element.Builder) any {
 			// Focus-mode toggle — expands the preview panel to full width,
 			// collapsing the filter/list panels. A handle on the left edge restores layout.
 			b.Button("class", "btn-icon", "id", "btn-focus-mode", "onclick", "app.toggleFocusMode()",
-				"title", "Toggle focus mode (expand preview)").T("⇔"),
+				"title", "Toggle focus mode (expand preview)").R(
+				b.Text(`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="14" r="4.5"/><circle cx="18" cy="14" r="4.5"/><circle cx="6" cy="14" r="1.8" fill="currentColor" stroke="none"/><circle cx="18" cy="14" r="1.8" fill="currentColor" stroke="none"/><path d="M3 10 L5 4.5 L9 4.5 L10 10"/><path d="M14 10 L15 4.5 L19 4.5 L21 10"/><line x1="10" y1="7" x2="14" y2="7"/></svg>`),
+			),
+			// New Note button — icon-only: fountain pen with ink-trail squiggle
+			b.Button("class", "btn btn-primary", "id", "btn-new-note", "onclick", "app.newNote()",
+				"title", "New Note", "aria-label", "New Note").R(
+				b.Text(`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12 L12 4 L14 6 L6 14 Z" fill="currentColor" fill-opacity="0.22"/><path d="M3 15 L4 12 L6 14 Z" fill="currentColor" fill-opacity="0.5"/><path d="M12 4 L15 1 L17 3 L14 6 Z" fill="currentColor" fill-opacity="0.4"/><line x1="3" y1="15" x2="5" y2="13"/><path d="M3 20 Q 6 17, 9 20 T 15 20 T 21 20" stroke-width="1.8"/></svg>`),
+			),
 			// Theme toggle — just left of user menu
 			b.Button("class", "theme-toggle", "id", "btn-theme-toggle", "onclick", "app.toggleTheme()", "title", "Toggle theme").T("\u2600"),
 			// Init toggle icon based on current theme

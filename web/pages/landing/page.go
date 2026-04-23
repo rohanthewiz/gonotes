@@ -32,7 +32,7 @@ func (p Page) renderHead(b *element.Builder) any {
 		b.Meta("charset", "UTF-8"),
 		b.Meta("name", "viewport", "content", "width=device-width, initial-scale=1.0"),
 		b.Link("rel", "icon", "type", "image/svg+xml", "href",
-			`data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 500 500'><rect width='500' height='500' rx='40' fill='%236b9f7b'/><rect x='40' y='180' width='80' height='25' rx='12.5' fill='white' fill-opacity='.8'/><rect x='20' y='235' width='110' height='25' rx='12.5' fill='white' fill-opacity='.9'/><rect x='50' y='290' width='70' height='25' rx='12.5' fill='white' fill-opacity='.7'/><text x='300' y='285' font-family='Arial,sans-serif' font-weight='900' font-size='180' fill='white' text-anchor='middle'>GN</text></svg>`),
+			`data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 500 500'><rect width='500' height='500' rx='60' fill='%236b9f7b'/><text x='250' y='310' font-family='-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif' font-weight='800' font-size='240' fill='white' text-anchor='middle' letter-spacing='-12'>GN</text><rect x='175' y='370' width='150' height='26' rx='13' fill='white' fill-opacity='.85'/></svg>`),
 		b.Title().T(p.Title),
 		// Inline theme init — runs before CSS to prevent flash of wrong theme
 		b.Script().T(`(function(){var t=localStorage.getItem('gonotes-theme')||'dark-green';document.documentElement.setAttribute('data-theme',t);})()`),
