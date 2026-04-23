@@ -303,6 +303,68 @@ func CreateNote(input NoteInput, userGUID string) (*Note, error) {
 	return note, nil
 }
 
+// CreateNoteWithTimestamps inserts a note while preserving caller-supplied
+// timestamps. For bulk-import paths where the source already has authoritative
+// created_at/updated_at/authored_at values that must not be overwritten by DB
+// defaults. Skips sync change-fragment recording (an import is a snapshot
+// replay, not a fresh authoring event) and skips body encryption (callers
+// pin IsPrivate=false for imports today; wire encryption in if a future
+// caller needs to import private notes).
+func CreateNoteWithTimestamps(input NoteInput, userGUID string,
+	createdAt, updatedAt, authoredAt time.Time) (*Note, error) {
+	createdBy := sql.NullString{String: userGUID, Valid: userGUID != ""}
+	updatedBy := sql.NullString{String: userGUID, Valid: userGUID != ""}
+
+	query := `
+		INSERT INTO notes (guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
+		                   created_by, updated_by, created_at, updated_at, authored_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		RETURNING id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
+		          created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at
+	`
+
+	note := &Note{}
+	err := db.QueryRow(query,
+		input.GUID,
+		input.Title,
+		toNullString(input.Description),
+		toNullString(input.Body),
+		toNullString(input.Tags),
+		input.IsPrivate,
+		input.IsFlagged,
+		toNullString(input.EncryptionIV),
+		createdBy,
+		updatedBy,
+		createdAt,
+		updatedAt,
+		authoredAt,
+	).Scan(
+		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
+		&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
+		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.AuthoredAt, &note.SyncedAt, &note.DeletedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	cacheInsertQuery := `
+		INSERT INTO notes (id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
+		                   created_by, updated_by, created_at, updated_at, synced_at, deleted_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+
+	_, err = cacheDB.Exec(cacheInsertQuery,
+		note.ID, note.GUID, note.Title, note.Description, note.Body,
+		note.Tags, note.IsPrivate, note.IsFlagged, note.EncryptionIV, note.CreatedBy,
+		note.UpdatedBy, note.CreatedAt, note.UpdatedAt, note.SyncedAt, note.DeletedAt,
+	)
+	if err != nil {
+		return note, serr.Wrap(err, "note inserted to disk but cache insert failed")
+	}
+
+	return note, nil
+}
+
 // GetNoteByID retrieves a single note by its primary key from the cache.
 // The userGUID parameter filters to notes owned by that user.
 // Returns nil, nil if the note doesn't exist or isn't owned by the user.

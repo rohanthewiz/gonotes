@@ -46,6 +46,29 @@ func main() {
 		Action: func(c *cli.Context) error {
 			return serve(c.String("dir"), c.String("port"))
 		},
+		Commands: []*cli.Command{
+			{
+				Name:  "import-gob",
+				Usage: "Import notes from a .gob file produced by the legacy go_notes project",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "file",
+						Aliases:  []string{"f"},
+						Usage:    "path to the .gob file to import",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:     "user",
+						Aliases:  []string{"u"},
+						Usage:    "username to import notes under (must already exist)",
+						Required: true,
+					},
+				},
+				Action: func(c *cli.Context) error {
+					return runImportGob(c.String("dir"), c.String("file"), c.String("user"))
+				},
+			},
+		},
 	}
 
 	if err := app.Run(os.Args); err != nil {
