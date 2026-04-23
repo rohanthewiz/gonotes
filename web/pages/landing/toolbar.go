@@ -6,7 +6,7 @@ import "github.com/rohanthewiz/element"
 //
 //	Left:  [🔍 Search] [.* regex] [All Categories ▾] [Sort ▾] [subcats…] [Clear]
 //	       --- flexible space ---
-//	Right: [↻ sync] [focus-mode] [✒ new-note] [☀/☾ theme] [user menu]
+//	Right: [focus-mode] [✒ new-note] [☀/☾ theme] [user menu]
 type Toolbar struct{}
 
 // Render implements the element.Component interface
@@ -66,12 +66,8 @@ func (t Toolbar) Render(b *element.Builder) any {
 		// Flexible spacer pushes the right group to the far right
 		b.DivClass("toolbar-spacer").R(),
 
-		// Right group — sync, focus-mode, new-note, theme, user
+		// Right group — focus-mode, new-note, theme, user
 		b.DivClass("toolbar-right").R(
-			// Sync button
-			b.Button("class", "btn-icon", "id", "btn-sync", "onclick", "app.syncNotes()", "title", "Sync notes").R(
-				b.Span("id", "sync-icon").T("↻"),
-			),
 			// Focus-mode toggle — expands the preview panel to full width,
 			// collapsing the filter/list panels. A handle on the left edge restores layout.
 			b.Button("class", "btn-icon", "id", "btn-focus-mode", "onclick", "app.toggleFocusMode()",
