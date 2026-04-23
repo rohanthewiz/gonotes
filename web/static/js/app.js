@@ -615,6 +615,9 @@
 
     // Render any mermaid diagrams found in the preview content
     renderMermaidDiagrams();
+
+    // If the in-note search bar is open, re-run the query against the new content.
+    if (window.app.refreshNoteSearch) window.app.refreshNoteSearch();
   }
 
   // ============================================
@@ -656,6 +659,7 @@
     document.getElementById('preview-categories').innerHTML = '';
     document.getElementById('preview-content').innerHTML = '<p class="text-muted">Select a note from the list to preview its content.</p>';
     document.getElementById('preview-footer').style.display = 'none';
+    if (window.app.closeNoteSearch) window.app.closeNoteSearch();
   }
 
   // ============================================

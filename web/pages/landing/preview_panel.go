@@ -15,22 +15,56 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 				b.H1("class", "preview-title", "id", "preview-title").T("Select a note"),
 				// Description: short subtitle shown beneath the title; hidden when empty
 				b.Div("class", "preview-description", "id", "preview-description", "style", "display:none").R(),
-				// Meta row: populated meta items on the left, focus-mode toggle pinned right
+				// Meta row: populated meta items on the left, action icons pinned right
 				b.DivClass("preview-meta-row").R(
 					b.Div("class", "preview-meta", "id", "preview-meta").R(
 						// Meta information will be populated by JavaScript
 					),
-					// Focus-mode toggle — expands the preview panel to full width,
-					// collapsing the filter/list panels. A handle on the left edge restores layout.
-					b.Button("class", "btn-icon preview-focus-btn", "id", "btn-focus-mode",
-						"onclick", "app.toggleFocusMode()",
-						"title", "Toggle focus mode (expand preview)").R(
-						b.Text(`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="14" r="4.5"/><circle cx="18" cy="14" r="4.5"/><circle cx="6" cy="14" r="1.8" fill="currentColor" stroke="none"/><circle cx="18" cy="14" r="1.8" fill="currentColor" stroke="none"/><path d="M3 10 L5 4.5 L9 4.5 L10 10"/><path d="M14 10 L15 4.5 L19 4.5 L21 10"/><line x1="10" y1="7" x2="14" y2="7"/></svg>`),
+					// Right-aligned icon group: search + focus
+					b.DivClass("preview-header-actions").R(
+						// In-note text search — toggles a search bar above the preview body.
+						b.Button("class", "btn-icon", "id", "btn-search-toggle",
+							"onclick", "app.toggleNoteSearch()",
+							"title", "Search within this note").R(
+							b.Text(`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>`),
+						),
+						// Focus-mode toggle — expands the preview panel to full width,
+						// collapsing the filter/list panels. A handle on the left edge restores layout.
+						b.Button("class", "btn-icon", "id", "btn-focus-mode",
+							"onclick", "app.toggleFocusMode()",
+							"title", "Toggle focus mode (expand preview)").R(
+							b.Text(`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="14" r="4.5"/><circle cx="18" cy="14" r="4.5"/><circle cx="6" cy="14" r="1.8" fill="currentColor" stroke="none"/><circle cx="18" cy="14" r="1.8" fill="currentColor" stroke="none"/><path d="M3 10 L5 4.5 L9 4.5 L10 10"/><path d="M14 10 L15 4.5 L19 4.5 L21 10"/><line x1="10" y1="7" x2="14" y2="7"/></svg>`),
+						),
 					),
 				),
 				// Category rows: each row shows a category (bold, colored) followed by
 				// its subcategories. Populated dynamically when a note is selected.
 				b.Div("class", "preview-categories", "id", "preview-categories").R(),
+			),
+			// In-note search bar (hidden by default). Toggled by the magnifying-glass
+			// button in the preview header; searches text within the rendered note.
+			b.Div("class", "note-search-bar", "id", "note-search-bar", "style", "display:none").R(
+				b.Input("type", "text", "class", "note-search-input", "id", "note-search-input",
+					"placeholder", "Find in note...", "autocomplete", "off"),
+				// Case-sensitive toggle
+				b.Button("type", "button", "class", "note-search-toggle", "id", "btn-search-case",
+					"onclick", "app.toggleNoteSearchCase()", "title", "Match case").T("Aa"),
+				// Whole-word toggle
+				b.Button("type", "button", "class", "note-search-toggle", "id", "btn-search-word",
+					"onclick", "app.toggleNoteSearchWord()", "title", "Whole word").T("W"),
+				b.Span("class", "note-search-count", "id", "note-search-count").T(""),
+				b.Button("type", "button", "class", "btn-icon", "id", "btn-search-prev",
+					"onclick", "app.noteSearchPrev()", "title", "Previous match (Shift+Enter)").R(
+					b.Text(`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>`),
+				),
+				b.Button("type", "button", "class", "btn-icon", "id", "btn-search-next",
+					"onclick", "app.noteSearchNext()", "title", "Next match (Enter)").R(
+					b.Text(`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`),
+				),
+				b.Button("type", "button", "class", "btn-icon", "id", "btn-search-close",
+					"onclick", "app.closeNoteSearch()", "title", "Close (Esc)").R(
+					b.Text(`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`),
+				),
 			),
 			// Preview body
 			b.DivClass("preview-body").R(
