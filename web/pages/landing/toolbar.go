@@ -77,6 +77,10 @@ func (t Toolbar) Render(b *element.Builder) any {
 			b.Button("class", "btn-icon", "id", "btn-sync", "onclick", "app.syncNotes()", "title", "Sync notes").R(
 				b.Span("id", "sync-icon").T("↻"),
 			),
+			// Focus-mode toggle — expands the preview panel to full width,
+			// collapsing the filter/list panels. A handle on the left edge restores layout.
+			b.Button("class", "btn-icon", "id", "btn-focus-mode", "onclick", "app.toggleFocusMode()",
+				"title", "Toggle focus mode (expand preview)").T("⇔"),
 			// Theme toggle — just left of user menu
 			b.Button("class", "theme-toggle", "id", "btn-theme-toggle", "onclick", "app.toggleTheme()", "title", "Toggle theme").T("\u2600"),
 			// Init toggle icon based on current theme

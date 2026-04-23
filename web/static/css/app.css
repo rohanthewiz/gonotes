@@ -969,7 +969,6 @@ input, textarea, select {
 
 .right-panel {
   width: var(--right-panel-width);
-  max-width: 600px;
   min-width: 250px;
   background: var(--bg-primary);
   border-left: none;
@@ -980,6 +979,66 @@ input, textarea, select {
 
 .right-panel.hidden {
   display: none;
+}
+
+/* ============================================
+   Focus Mode — expand preview to full width
+   ============================================
+   When .app-main has .focus-mode, the left filter panel and center note
+   list collapse away so the preview panel fills the viewport. A thin
+   vertical handle on the left edge restores the normal layout. */
+.app-main.focus-mode .left-panel,
+.app-main.focus-mode .center-panel,
+.app-main.focus-mode .panel-splitter {
+  display: none;
+}
+
+.app-main.focus-mode .right-panel {
+  flex: 1;
+  width: auto;
+  max-width: none;
+}
+
+/* Restore handle — a slim vertical strip pinned to the left edge of the
+   app-main area. Hidden by default; revealed in focus mode. Hovering
+   widens it and brightens the chevron to signal interactivity. */
+.focus-restore-handle {
+  display: none;
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 72px;
+  padding: 0;
+  border: none;
+  border-top-right-radius: var(--radius-md);
+  border-bottom-right-radius: var(--radius-md);
+  background: var(--primary);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 50;
+  opacity: 0.6;
+  transition: opacity var(--transition-fast), width var(--transition-fast), background var(--transition-fast);
+}
+
+.focus-restore-handle:hover {
+  opacity: 1;
+  width: 20px;
+  background: var(--primary-hover, var(--primary));
+}
+
+.app-main {
+  position: relative;
+}
+
+.app-main.focus-mode .focus-restore-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .preview-header {
@@ -1107,6 +1166,50 @@ input, textarea, select {
   background: none;
   padding: 0;
   color: inherit;
+}
+
+/* Code block copy button — absolute-positioned in the top-right corner of
+   each rendered fenced code block. Wrapper is relatively positioned so the
+   button overlays the <pre>. */
+.markdown-content .code-block-wrapper {
+  position: relative;
+}
+
+.markdown-content .code-block-wrapper pre {
+  /* Reserve space on the right so long single-line code doesn't slide
+     under the copy button. */
+  padding-right: calc(var(--spacing-lg) + 32px);
+}
+
+.code-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: var(--radius-sm);
+  color: var(--code-text, #e6e6e6);
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+  z-index: 1;
+}
+
+.code-copy-btn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.18);
+  color: var(--primary);
+}
+
+.code-copy-btn.copied {
+  color: #4ade80;
+  opacity: 1;
 }
 
 .markdown-content blockquote {

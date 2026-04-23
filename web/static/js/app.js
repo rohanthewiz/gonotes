@@ -86,8 +86,12 @@
         highlighted = escapeHtmlForCode(code);
       }
 
-      // Return pre/code block with hljs class for default styling
-      return `<pre><code class="hljs language-${resolvedLang || 'plaintext'}">${highlighted}</code></pre>`;
+      // Wrap in a container with a copy button overlay (top-right).
+      // Raw code is stashed in a data attribute so the copy handler can read
+      // the original (unescaped, un-highlighted) text.
+      const rawB64 = btoa(unescape(encodeURIComponent(code)));
+      const copyIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+      return `<div class="code-block-wrapper"><button type="button" class="code-copy-btn" data-code="${rawB64}" onclick="app.copyCodeBlock(this)" title="Copy code" aria-label="Copy code">${copyIcon}</button><pre><code class="hljs language-${resolvedLang || 'plaintext'}">${highlighted}</code></pre></div>`;
     };
 
     // Configure Marked options for GitHub Flavored Markdown
@@ -1284,6 +1288,22 @@
     }
   }
 
+  // copyCodeBlock — copies a rendered code block's original source to clipboard.
+  // Invoked from the copy button overlay injected by the marked code renderer.
+  window.app.copyCodeBlock = function(btn) {
+    try {
+      const code = decodeURIComponent(escape(atob(btn.dataset.code || '')));
+      navigator.clipboard.writeText(code).then(() => {
+        btn.classList.add('copied');
+        setTimeout(() => btn.classList.remove('copied'), 1200);
+      }).catch(() => {
+        showToast('Failed to copy code', 'error');
+      });
+    } catch (err) {
+      showToast('Failed to copy code', 'error');
+    }
+  };
+
   // copyQuery — copies the full query condition string to the clipboard
   window.app.copyQuery = function() {
     const fullQuery = buildQueryString();
@@ -1565,12 +1585,14 @@
     }
 
     function onMouseMove(e) {
-      // Dragging left increases right panel width, dragging right decreases it
+      // Dragging left increases right panel width, dragging right decreases it.
+      // Max is capped so the center list still has room to breathe, but is
+      // permissive enough to let the preview dominate the viewport.
       const delta = startX - e.clientX;
       const containerWidth = appMain.getBoundingClientRect().width;
       const newWidth = Math.min(
         Math.max(250, startWidth + delta),
-        containerWidth * 0.6
+        Math.max(250, containerWidth - 240)
       );
       rightPanel.style.width = newWidth + 'px';
     }
@@ -1594,6 +1616,33 @@
     }
   }
 
+  // ============================================
+  // Focus Mode — collapse filter/list, expand preview to full width
+  // ============================================
+  // Toggles `.focus-mode` on `.app-main`. State is persisted so the layout
+  // survives reloads. A left-edge handle (rendered in page.go) calls this
+  // same toggle to restore the normal three-pane layout.
+  window.app.toggleFocusMode = function() {
+    const appMain = document.getElementById('app-main');
+    if (!appMain) return;
+    const enabled = !appMain.classList.contains('focus-mode');
+    appMain.classList.toggle('focus-mode', enabled);
+    localStorage.setItem('gonotes-focus-mode', enabled ? '1' : '0');
+    const btn = document.getElementById('btn-focus-mode');
+    if (btn) {
+      btn.title = enabled ? 'Exit focus mode' : 'Toggle focus mode (expand preview)';
+    }
+  };
+
+  function initFocusMode() {
+    if (localStorage.getItem('gonotes-focus-mode') === '1') {
+      const appMain = document.getElementById('app-main');
+      if (appMain) appMain.classList.add('focus-mode');
+      const btn = document.getElementById('btn-focus-mode');
+      if (btn) btn.title = 'Exit focus mode';
+    }
+  }
+
   async function init() {
     // Ensure markdown/highlight.js is configured (retry in case CDN scripts loaded late)
     initMarkdownIfReady();
@@ -1609,6 +1658,9 @@
 
     // Initialize draggable splitter between notes list and preview panel
     initPanelSplitter();
+
+    // Restore focus-mode state from localStorage (must run after DOM ready)
+    initFocusMode();
 
     // Initialize category input handlers (defined in cats_subcats.js)
     window.app._initCategoryHandlers();
