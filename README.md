@@ -3,7 +3,7 @@
 A modern, web-based note-taking platform built with Go, featuring server-side rendering and embedded assets.
 
 ## Project Status
-This is **pre-alpha** not ready for use!
+This is **alpha** not ready for use!
 
 ---
 
@@ -108,4 +108,53 @@ The spoke exposes three endpoints for UI integration (all require authentication
 
 ---
 
-Built with Go, RWeb, and Element
+## Importing Notes from Legacy `go_notes`
+
+GoNotes can bulk-import notes from a `.gob` file produced by the legacy [`go_notes`](https://github.com/) project (single `[]note.Note` value encoded with `encoding/gob`).
+
+### Usage
+
+```bash
+./gonotes import-gob --file /path/to/notes.gob --user <username>
+```
+
+Flags:
+
+| Flag     | Aliases | Required | Description                                                                 |
+|----------|---------|----------|-----------------------------------------------------------------------------|
+| `--file` | `-f`    | Yes      | Path to the `.gob` file to import                                           |
+| `--user` | `-u`    | Yes      | Username to import notes under (must already exist)                         |
+| `--dir`  | `-d`    | No       | Working directory (inherited from the top-level flag, default `~/.gonotes`) |
+
+The command prints a one-line summary on completion:
+
+```
+import-gob: 42 imported, 0 skipped (duplicate GUID), 0 errored (of 42 total)
+```
+
+### Behavior
+
+- **Timestamps are preserved.** Each imported note keeps its original `CreatedAt` and `UpdatedAt`; `AuthoredAt` is set to the source `UpdatedAt`.
+- **Idempotent.** Notes are matched by source `Guid`; running the same import twice will skip everything on the second run.
+- **Ownership.** All imported notes get `created_by` / `updated_by` set to the GUID of the user passed via `--user`.
+- **Privacy.** All imported notes are stored as `IsPrivate=false` (no encryption). The legacy `Public` flag has different semantics (cross-user sharing, not encryption) and is intentionally discarded. Toggle individual notes to private after import if encryption is desired.
+- **Tags pass through.** The legacy singular `Tag` field maps to the destination `Tags` field as-is (comma-separated string).
+
+### Important: stop the server first
+
+DuckDB holds an exclusive lock on `./data/notes.ddb`, so the running server must be stopped before invoking `import-gob`. After the import completes, restart the server normally.
+
+### Field mapping
+
+| Source (`go_notes/note.Note`)                 | Destination                   | Notes                                                                     |
+|-----------------------------------------------|-------------------------------|---------------------------------------------------------------------------|
+| `Guid`                                        | `GUID`                        | Preserved verbatim — drives duplicate detection                           |
+| `Title`                                       | `Title`                       | Direct                                                                    |
+| `Description`, `Body`, `Tag`                  | `Description`, `Body`, `Tags` | Empty source strings → `NULL`                                             |
+| `CreatedAt`                                   | `CreatedAt`                   | Preserved                                                                 |
+| `UpdatedAt`                                   | `UpdatedAt`, `AuthoredAt`     | Both populated from source `UpdatedAt`                                    |
+| `Id`, `User`, `Creator`, `SharedBy`, `Public` | —                             | Discarded; destination assigns its own ID; ownership comes from `--user`  |
+
+---
+
+Built with Go, RWeb, Element, and Claude Opus
