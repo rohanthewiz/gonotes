@@ -40,6 +40,7 @@ func main() {
 				Name:    "port",
 				Aliases: []string{"p"},
 				Value:   web.WebPort,
+				EnvVars: []string{"GONOTES_PORT", "PORT"},
 				Usage:   "web server port",
 			},
 		},
