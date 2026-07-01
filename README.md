@@ -7,6 +7,56 @@ This is **alpha** not ready for use!
 
 ---
 
+## Install as a Native macOS App
+
+`mac-install.sh` builds GoNotes and installs it as a native macOS app
+(`~/Applications/GoNotes.app`) — a small Swift/WebKit window that runs the
+bundled server and shows the UI in its own window instead of a browser.
+
+### Quick install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rohanthewiz/gonotes/master/mac-install.sh | bash
+```
+
+Or from a checkout of this repo:
+
+```bash
+./mac-install.sh
+```
+
+Re-run any time to update to the latest `master`.
+
+### What it does
+
+- Ensures Go ≥ 1.24 is available (uses system Go, or auto-installs a private copy under `~/.local/go`).
+- Clones/updates the source into `~/.gonotes-src` and builds the `gonotes` binary (DuckDB is cgo, so the build needs a C compiler).
+- Generates an app icon and assembles `GoNotes.app`, wiring up Cmd+Q and the standard edit shortcuts.
+
+On first launch, register an account in the app window — the first user you register becomes **admin**. The app stores its data in `~/.gonotes/data` (the same location the `gonotes` CLI uses by default), so the app and command line share one database. Logs go to `~/Library/Logs/GoNotes/gonotes.log`.
+
+### Requirements
+
+- macOS 11+ (Apple Silicon or Intel)
+- Xcode Command Line Tools (`xcode-select --install`) — provides `git`, `swiftc`, and the C compiler
+
+### Configuration
+
+Override defaults with environment variables, e.g. `GN_PORT=9000 ./mac-install.sh`:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GN_BRANCH` | `master` | Branch to install |
+| `GN_DIR` | `~/.gonotes-src` | Source checkout directory |
+| `GN_GO_VERSION` | `1.24.4` | Go version to fetch if no suitable one is found |
+| `GN_APP_DIR` | `~/Applications` | Where `GoNotes.app` is installed |
+| `GN_APP_NAME` | `GoNotes` | App (and window) name |
+| `GN_PORT` | `8444` | Port the app's server listens on |
+
+> **Note:** DuckDB is single-writer. Don't run the app and a terminal `gonotes` at the same time — they share `~/.gonotes/data/notes.ddb`, and the second to start won't be able to open it.
+
+---
+
 ## Architecture: Hub-Spoke Sync
 
 GoNotes supports syncing notes and categories between machines using a **hub-spoke model**. The hub is multi-user (each user's data is fully isolated), while spokes are single-user instances that sync with the hub in the background.
