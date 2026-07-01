@@ -2,15 +2,16 @@
 #
 # mac-install.sh — Install (or update) GoNotes as a native macOS app.
 #
-# Pulls the latest master branch into ~/.gonotes, ensures Go >= 1.24 is available
+# Pulls the latest master branch into ~/.gonotes-src, ensures Go >= 1.24 is available
 # (auto-installing a private copy under ~/.local/go if needed), builds gonotes,
 # then creates ~/Applications/GoNotes.app with a small Swift/WebKit wrapper.
 #
 # The app starts the bundled gonotes server and displays it in its own macOS
 # window instead of opening the UI in a browser.
 #
-# WARNING: this script owns ~/.gonotes. Re-running it will `git reset --hard`
+# WARNING: this script owns ~/.gonotes-src. Re-running it will `git reset --hard`
 # that directory to origin/$GN_BRANCH — do not put local edits there.
+# (~/.gonotes-src holds the source checkout; app data lives elsewhere.)
 #
 # Usage:
 #   ./mac-install.sh
@@ -19,7 +20,7 @@
 # Env overrides:
 #   GN_REPO_URL    git remote   (default: https://github.com/rohanthewiz/gonotes.git)
 #   GN_BRANCH      branch       (default: master)
-#   GN_DIR         repo dir     (default: $HOME/.gonotes)
+#   GN_DIR         repo dir     (default: $HOME/.gonotes-src)
 #   GN_GO_VERSION  Go to fetch  (default: 1.24.4)
 #   GN_GO_DIR      Go install   (default: $HOME/.local/go)
 #   GN_APP_DIR     app dir      (default: $HOME/Applications)
@@ -30,7 +31,7 @@ set -euo pipefail
 
 GN_REPO_URL="${GN_REPO_URL:-https://github.com/rohanthewiz/gonotes.git}"
 GN_BRANCH="${GN_BRANCH:-master}"
-GN_DIR="${GN_DIR:-$HOME/.gonotes}"
+GN_DIR="${GN_DIR:-$HOME/.gonotes-src}"
 GN_GO_VERSION="${GN_GO_VERSION:-1.24.4}"
 GN_GO_DIR="${GN_GO_DIR:-$HOME/.local/go}"
 GN_APP_DIR="${GN_APP_DIR:-$HOME/Applications}"
