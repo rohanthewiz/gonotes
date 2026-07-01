@@ -523,13 +523,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         }
 
         // The gonotes server resolves its DuckDB file and config under its working
-        // directory (set via --dir), so point it at a writable per-user support
-        // directory rather than the read-only app bundle.
-        let supportDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library")
-            .appendingPathComponent("Application Support")
-            .appendingPathComponent("GoNotes")
-        try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
+        // directory (set via --dir). Use ~/.gonotes — the same default the CLI
+        // uses — so the app and command line share one database rather than the
+        // read-only app bundle.
+        let dataDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".gonotes")
+        try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
 
         let logDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library")
@@ -541,7 +540,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
 
         let process = Process()
         process.executableURL = binURL
-        process.arguments = ["--dir", supportDir.path, "--port", port]
+        process.arguments = ["--dir", dataDir.path, "--port", port]
 
         if let logHandle = try? FileHandle(forWritingTo: logURL) {
           _ = try? logHandle.seekToEnd()
@@ -619,7 +618,7 @@ main() {
   printf '%s✓ GoNotes %s app installed%s\n' "$C_GREEN" "$GN_BUILD_ID" "$C_RESET"
   printf '  repo: %s\n' "$GN_DIR"
   printf '  app:  %s\n' "$GN_APP_DIR/$GN_APP_NAME.app"
-  printf '  data: ~/Library/Application Support/GoNotes/data\n'
+  printf '  data: ~/.gonotes/data (shared with the gonotes CLI)\n'
   printf '  Go:   %s (%s)\n' "$GO_VERSION" "$GO_SOURCE"
   printf '\nOpen %s%s.app%s from Finder, Spotlight, or the Dock.\n' "$C_GREEN" "$GN_APP_NAME" "$C_RESET"
   printf 'Logs: ~/Library/Logs/GoNotes/gonotes.log\n'
