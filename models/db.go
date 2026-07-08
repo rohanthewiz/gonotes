@@ -596,6 +596,11 @@ func syncNoteCategoriesFromDisk() (int, error) {
 func InitTestDB(path string) error {
 	var err error
 
+	// Like InitDB: DuckDB creates the file but not the parent directory
+	if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return serr.Wrap(err, "failed to create test database directory")
+	}
+
 	db, err = sql.Open("duckdb", path)
 	if err != nil {
 		return serr.Wrap(err, "failed to open test DuckDB connection")

@@ -12,6 +12,8 @@ import (
 
 	"gonotes/models"
 	"gonotes/web"
+
+	"github.com/rohanthewiz/rweb"
 )
 
 // testServer manages a running server instance for integration testing.
@@ -44,19 +46,23 @@ func newTestServer(t *testing.T) *testServer {
 		t.Fatalf("failed to initialize JWT: %v", err)
 	}
 
-	// Create and start server on a test port
-	srv := web.NewServer(web.WebPort)
+	// Create and start server on a dynamic port, waiting until it's ready
+	readyChan := make(chan struct{}, 1)
+	srv := web.NewTestServer(rweb.ServerOptions{
+		Verbose:   true,
+		ReadyChan: readyChan,
+		Address:   "localhost:", // Dynamic port
+	})
 
 	// Start server in background goroutine
 	go func() {
-		srv.Run()
+		_ = srv.Run()
 	}()
 
-	// Wait for server to be ready
-	time.Sleep(100 * time.Millisecond)
+	<-readyChan
 
 	ts := &testServer{
-		baseURL: "http://localhost:8000",
+		baseURL: fmt.Sprintf("http://localhost:%s", srv.GetListenPort()),
 		client:  &http.Client{Timeout: 5 * time.Second},
 	}
 
