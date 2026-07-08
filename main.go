@@ -69,6 +69,52 @@ func main() {
 					return runImportGob(c.String("dir"), c.String("file"), c.String("user"))
 				},
 			},
+			{
+				Name:  "export-md",
+				Usage: "Export notes as Markdown files with YAML frontmatter (Obsidian-compatible)",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "out",
+						Aliases:  []string{"o"},
+						Usage:    "directory to write Markdown files into",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:     "user",
+						Aliases:  []string{"u"},
+						Usage:    "username whose notes to export",
+						Required: true,
+					},
+					&cli.BoolFlag{
+						Name:  "skip-private",
+						Usage: "exclude private notes from the export (by default they are exported decrypted)",
+					},
+				},
+				Action: func(c *cli.Context) error {
+					return runExportMd(c.String("dir"), c.String("out"), c.String("user"), c.Bool("skip-private"))
+				},
+			},
+			{
+				Name:  "import-md",
+				Usage: "Import Markdown files (with optional YAML frontmatter) as notes",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "in",
+						Aliases:  []string{"i"},
+						Usage:    "directory to import .md files from (searched recursively)",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:     "user",
+						Aliases:  []string{"u"},
+						Usage:    "username to import notes under (must already exist)",
+						Required: true,
+					},
+				},
+				Action: func(c *cli.Context) error {
+					return runImportMd(c.String("dir"), c.String("in"), c.String("user"))
+				},
+			},
 		},
 	}
 

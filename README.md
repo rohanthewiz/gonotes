@@ -158,6 +158,71 @@ The spoke exposes three endpoints for UI integration (all require authentication
 
 ---
 
+## Markdown Export / Import (Obsidian-compatible)
+
+GoNotes can export your notes to a folder of Markdown files with YAML frontmatter — openable directly as an Obsidian vault — and import Markdown files (edited exports or plain `.md` files) back in.
+
+### Export
+
+```bash
+./gonotes export-md --out ~/notes-vault --user <username>
+```
+
+| Flag | Aliases | Required | Description |
+|------|---------|----------|-------------|
+| `--out` | `-o` | Yes | Directory to write Markdown files into |
+| `--user` | `-u` | Yes | Username whose notes to export |
+| `--skip-private` | | No | Exclude private notes from the export |
+
+- One file per note: `<Category>/<Title>.md` (uncategorized notes go in the vault root). All categories/subcategories, tags, and timestamps are carried in the frontmatter.
+- **Private notes are exported decrypted by default** — exporting is the deliberate act that takes them out of encrypted storage. They keep `private: true` in frontmatter so a re-import restores privacy (and encryption). Use `--skip-private` to leave them out entirely.
+
+Exported file format:
+
+```markdown
+---
+guid: 0197f3c8-…            # stable identity — do not edit
+title: 'Groceries: weekly'
+tags:
+    - errand
+    - home
+categories:
+    - Household/weekly       # Name or Name/Subcategory
+created: "2026-07-08T13:11:33Z"
+updated: "2026-07-08T13:11:33Z"
+---
+
+Note body, with [[Wiki Links]] intact.
+```
+
+### Import
+
+```bash
+./gonotes import-md --in ~/notes-vault --user <username>
+```
+
+| Flag | Aliases | Required | Description |
+|------|---------|----------|-------------|
+| `--in` | `-i` | Yes | Directory to import from (`.md` files, searched recursively; hidden dirs like `.obsidian` are skipped) |
+| `--user` | `-u` | Yes | Username to import notes under (must already exist) |
+
+The `guid` frontmatter field anchors identity, so the whole flow is **idempotent** — export, edit in Obsidian, import, repeat:
+
+- **guid matches an existing note** → updated, but only if the content actually differs (unchanged files are skipped). Updates go through the normal write path, so private notes are re-encrypted and hub-spoke sync change tracking keeps working.
+- **guid present but unknown** → created, preserving the frontmatter `created`/`updated` timestamps.
+- **no frontmatter at all** (a plain Markdown file) → created; the title comes from the filename and the containing folder becomes its category. The generated guid is **written back into the file** so a second import won't duplicate it.
+
+Notes:
+
+- Frontmatter categories are authoritative; missing categories are created on the fly. Categories are only ever added — removing one from a file does not unlink it in GoNotes.
+- Filenames/folders are just presentation; renaming or moving a file changes nothing as long as the `guid` line is intact.
+
+### Important: stop the server first
+
+As with `import-gob`, DuckDB holds an exclusive lock on the database, so stop the running server before invoking `export-md` or `import-md`.
+
+---
+
 ## Importing Notes from Legacy `go_notes`
 
 GoNotes can bulk-import notes from a `.gob` file produced by the legacy [`go_notes`](https://github.com/) project (single `[]note.Note` value encoded with `encoding/gob`).
