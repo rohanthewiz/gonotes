@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"gonotes/models"
+	"gonotes/tui"
 	"gonotes/web"
 	"os"
 	"path/filepath"
@@ -48,6 +49,25 @@ func main() {
 			return serve(c.String("dir"), c.String("port"))
 		},
 		Commands: []*cli.Command{
+			{
+				Name:  "tui",
+				Usage: "Browse and edit notes in a terminal UI (no web server needed)",
+				// The command declares its own --dir so the natural invocation
+				// `gonotes tui -d <dir>` works; urfave/cli only accepts global
+				// flags BEFORE the subcommand (`gonotes -d <dir> tui`), which
+				// trips people up. Command-level flags win on lookup.
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "dir",
+						Aliases: []string{"d"},
+						Value:   defaultDir,
+						Usage:   "working directory for data and config",
+					},
+				},
+				Action: func(c *cli.Context) error {
+					return runTui(c.String("dir"))
+				},
+			},
 			{
 				Name:  "import-gob",
 				Usage: "Import notes from a .gob file produced by the legacy go_notes project",
@@ -122,6 +142,46 @@ func main() {
 		logger.LogErr(err)
 		os.Exit(1)
 	}
+}
+
+// runTui prepares the working directory and database, then hands the
+// terminal to the Bubble Tea interface. The web server, JWT signing, and the
+// sync client are all skipped — the TUI talks to the models layer directly,
+// so none of the HTTP machinery is needed.
+func runTui(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return serr.Wrap(err, "failed to create directory", "dir", dir)
+	}
+	if err := os.Chdir(dir); err != nil {
+		return serr.Wrap(err, "failed to change to directory", "dir", dir)
+	}
+
+	// Quiet the logger before anything else: the TUI owns the terminal, and
+	// stray Info lines from the models layer would be drawn over the UI.
+	// Real errors still come through (and are also surfaced in the status bar).
+	logger.SetLogLevel("error")
+
+	// Pickup local configs (may contain the encryption key)
+	if issues, err := fileops.EnvFromFile("config/cfg_files/.env"); err != nil {
+		for _, issue := range issues {
+			logger.Warn("Cfg file issue", serr.StringFromErr(issue))
+		}
+	}
+
+	if err := models.InitDB(); err != nil {
+		return serr.Wrap(err, "failed to initialize database")
+	}
+	defer models.CloseDB()
+
+	// Encryption is optional: without a key, private notes simply aren't
+	// encrypted at rest (matching the web server's behavior).
+	if os.Getenv(models.EncryptionKeyEnvVar) != "" {
+		if err := models.InitEncryption(); err != nil {
+			return serr.Wrap(err, "failed to initialize encryption")
+		}
+	}
+
+	return tui.Run()
 }
 
 func serve(dir, port string) error {

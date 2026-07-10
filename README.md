@@ -158,6 +158,45 @@ The spoke exposes three endpoints for UI integration (all require authentication
 
 ---
 
+## Terminal UI
+
+Browse and edit notes right in the terminal — no web server needed:
+
+```bash
+./gonotes tui                 # uses ~/.gonotes (same data as the web app)
+./gonotes tui -d /path/to/dir # or point at another working directory
+```
+
+On first run (empty database) the TUI walks you through creating an account; afterwards it signs you in with just your password (the username is prefilled when there's a single user).
+
+### Keys
+
+| Screen | Key | Action |
+|---|---|---|
+| Notes list | `/` | Fuzzy search across title, tags, description, and body |
+| | `enter` | View note (markdown rendered) |
+| | `n` / `e` | New / edit note |
+| | `f` | Toggle the follow-up flag |
+| | `d` | Delete (with confirmation) |
+| | `c` | Category picker — filter the list by category |
+| | `esc` | Clear search, then category filter |
+| | `q` | Quit |
+| Note view | `↑/↓` | Scroll |
+| | `e` / `f` / `d` | Edit / flag / delete |
+| Note form | `tab` | Next field |
+| | `ctrl+e` | Edit the body in `$VISUAL`/`$EDITOR` |
+| | `ctrl+s` | Save |
+| | `esc` | Cancel |
+| Categories | `enter` | Filter notes by the selected category |
+| | `n` / `d` | New / delete category |
+
+Notes:
+- Categories on the note form are comma-separated names; unknown names are created automatically on save.
+- The TUI shares the database with the web server. Avoid running both against the same directory at the same time (DuckDB allows a single writer process).
+- With `GONOTES_ENCRYPTION_KEY` set (env or `config/cfg_files/.env`), private notes are encrypted at rest, same as the web app.
+
+---
+
 ## Markdown Export / Import (Obsidian-compatible)
 
 GoNotes can export your notes to a folder of Markdown files with YAML frontmatter — openable directly as an Obsidian vault — and import Markdown files (edited exports or plain `.md` files) back in.
