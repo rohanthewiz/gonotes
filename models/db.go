@@ -1,628 +1,197 @@
 package models
 
 import (
-	"database/sql"
 	"os"
 	"path/filepath"
 
-	_ "github.com/marcboeker/go-duckdb" // DuckDB driver registration
 	"github.com/rohanthewiz/logger"
 	"github.com/rohanthewiz/serr"
 )
 
-// db holds the database connection pool for the disk-based database.
-// This is the source of truth. Using a package-level variable allows for
-// simple access across the models package while maintaining a single
-// connection pool for the application lifecycle.
-var db *sql.DB
+// db.go owns the lifecycle of the two bytdb databases. See store.go for
+// the engine shim and the divide-and-conquer read helpers, and schema.go
+// for the table definitions.
+//
+// There is no longer a separate in-memory read cache: bytdb already holds
+// every row in RAM (the on-disk WAL is only for durability), so reads run
+// at memory speed straight against the engines. The old DuckDB
+// disk-plus-cache dual-write pattern is gone.
 
-// cacheDB holds the in-memory database connection used as a read cache.
-// Read operations query this cache for better performance. Write operations
-// update both the disk DB and this cache to keep them synchronized.
-var cacheDB *sql.DB
+// pubDB is the public, unencrypted database: non-private notes and their
+// satellite data plus all shared/system tables. privDB is the private,
+// (optionally) encrypted database holding private notes and their
+// satellite data. Both are package-level singletons for the process
+// lifetime, mirroring the previous design.
+var (
+	pubDB  *dbEngine
+	privDB *dbEngine
+)
 
-// DBPath defines the location of the DuckDB database file.
-// Stored in ./data/ to keep data separate from application code.
-const DBPath = "./data/notes.ddb"
+// DataDir is where the two database files live, relative to the working
+// directory the CLI switches into at startup.
+const DataDir = "./data"
 
-// InitDB establishes a connection to the DuckDB database and creates
-// the required tables if they don't exist. This should be called once
-// at application startup before any database operations.
-// Also initializes the in-memory cache and synchronizes it with disk data.
+// PublicDBPath and PrivateDBPath are the on-disk locations of the two
+// databases.
+const (
+	PublicDBPath  = DataDir + "/notes_public.bytdb"
+	PrivateDBPath = DataDir + "/notes_private.bytdb"
+)
+
+// InitDB opens both databases (creating the files and schema on first
+// run) and must be called once at startup before any model operation.
+//
+// The private database is opened with the encryption key when
+// GONOTES_ENCRYPTION_KEY is set (32 bytes); without a key it is opened as
+// plaintext — encryption stays optional, exactly as before, but the
+// private/non-private split is always maintained.
 func InitDB() error {
+	if err := os.MkdirAll(DataDir, 0o755); err != nil {
+		return serr.Wrap(err, "failed to create data directory")
+	}
+	return openDatabases(PublicDBPath, PrivateDBPath)
+}
+
+// InitTestDB opens both databases under dir, for isolated tests. Callers
+// pass a temp directory; the two files are created inside it.
+func InitTestDB(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return serr.Wrap(err, "failed to create test data directory")
+	}
+	pub := filepath.Join(dir, "notes_public.bytdb")
+	priv := filepath.Join(dir, "notes_private.bytdb")
+	return openDatabases(pub, priv)
+}
+
+// openDatabases is the shared open+schema path for InitDB and InitTestDB.
+func openDatabases(pubPath, privPath string) error {
+	// Load the encryption key if the environment provides one, so the
+	// private database opens encrypted. Best-effort: a malformed key is a
+	// hard error (we must not silently store private notes in the clear
+	// under an operator who intended encryption).
+	if os.Getenv(EncryptionKeyEnvVar) != "" {
+		if err := InitEncryption(); err != nil {
+			return serr.Wrap(err, "failed to load encryption key")
+		}
+	}
+	key := encryptionKey // nil when unset; 32 bytes when loaded
+
 	var err error
-
-	// Ensure the parent directory exists before opening the database.
-	// DuckDB creates the file but not the parent directory, so on a fresh
-	// machine the open would fail without this.
-	if err = os.MkdirAll(filepath.Dir(DBPath), 0o755); err != nil {
-		return serr.Wrap(err, "failed to create database directory")
+	if pubDB, err = openEngine(pubPath, nil); err != nil {
+		return serr.Wrap(err, "failed to open public database")
+	}
+	if privDB, err = openEngine(privPath, key); err != nil {
+		return serr.Wrap(err, "failed to open private database")
 	}
 
-	// Open connection to disk DuckDB. The driver will create the file if it
-	// doesn't exist, which is the expected behavior for first-run setup.
-	db, err = sql.Open("duckdb", DBPath)
-	if err != nil {
-		return serr.Wrap(err, "failed to open DuckDB connection")
+	// Build the schema. Both databases get the note-side tables; only the
+	// public database gets the shared/system tables. The private database
+	// offsets its id sequences so note ids are globally unique.
+	if err = pubDB.createNoteSchema(0); err != nil {
+		return serr.Wrap(err, "failed to create public note schema")
+	}
+	if err = pubDB.createPublicOnlySchema(); err != nil {
+		return serr.Wrap(err, "failed to create public system schema")
+	}
+	if err = privDB.createNoteSchema(seqOffsetPrivate); err != nil {
+		return serr.Wrap(err, "failed to create private note schema")
 	}
 
-	// Verify connection is working before proceeding with schema setup
-	if err = db.Ping(); err != nil {
-		return serr.Wrap(err, "failed to ping DuckDB")
-	}
-
-	// Create tables - using IF NOT EXISTS makes this idempotent,
-	// safe to run on every startup without migration complexity
-	if err = createTables(); err != nil {
-		return serr.Wrap(err, "failed to create tables")
-	}
-
-	logger.Info("Disk database initialized successfully", "path", DBPath)
-
-	// Initialize in-memory cache database
-	if err = initCacheDB(); err != nil {
-		return serr.Wrap(err, "failed to initialize cache database")
-	}
-
-	// Synchronize cache with disk data
-	if err = syncCacheFromDisk(); err != nil {
-		return serr.Wrap(err, "failed to sync cache from disk")
-	}
-
-	logger.Info("In-memory cache initialized and synchronized")
+	logger.Info("Databases initialized",
+		"public", pubPath, "private", privPath, "private_encrypted", privDB.encrypted)
 	return nil
 }
 
-// createTables executes DDL statements to set up the database schema.
-// Each table creation is idempotent via IF NOT EXISTS clauses.
-// Also runs migrations for schema changes (e.g., adding new columns).
-func createTables() error {
-	_, err := db.Exec(CreateNotesTableSQL)
-	if err != nil {
-		return serr.Wrap(err, "failed to create notes table")
-	}
-
-	// Migration: add is_flagged column for note flagging
-	_, err = db.Exec(`ALTER TABLE notes ADD COLUMN IF NOT EXISTS is_flagged BOOLEAN DEFAULT false`)
-	if err != nil {
-		return serr.Wrap(err, "failed to add is_flagged column")
-	}
-
-	// Migration: add authored_at column for existing databases
-	// This column tracks when a person last created/updated a note (for peer-to-peer sync)
-	_, err = db.Exec(`ALTER TABLE notes ADD COLUMN IF NOT EXISTS authored_at TIMESTAMP`)
-	if err != nil {
-		return serr.Wrap(err, "failed to add authored_at column")
-	}
-
-	// Initialize authored_at for existing notes that don't have it
-	// Using updated_at as the best approximation of last human modification
-	_, err = db.Exec(`UPDATE notes SET authored_at = updated_at WHERE authored_at IS NULL`)
-	if err != nil {
-		return serr.Wrap(err, "failed to initialize authored_at for existing notes")
-	}
-
-	// Create users table for authentication
-	_, err = db.Exec(CreateUsersTableSQL)
-	if err != nil {
-		return serr.Wrap(err, "failed to create users table")
-	}
-
-	// Migration: add is_admin column for role-based access control.
-	// First registered user is automatically admin (set in CreateUser).
-	_, err = db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT false`)
-	if err != nil {
-		return serr.Wrap(err, "failed to add is_admin column to users")
-	}
-
-	_, err = db.Exec(CreateCategoriesTableSQL)
-	if err != nil {
-		return serr.Wrap(err, "failed to create categories table")
-	}
-
-	// Migration: add created_by column for multi-user data isolation on categories
-	_, err = db.Exec(`ALTER TABLE categories ADD COLUMN IF NOT EXISTS created_by VARCHAR`)
-	if err != nil {
-		return serr.Wrap(err, "failed to add created_by column to categories")
-	}
-
-	// Backfill created_by for existing categories — assign to the first user if any exist.
-	// Guarded by EXISTS to be a no-op on fresh databases with no users.
-	_, err = db.Exec(`UPDATE categories SET created_by = (
-		SELECT guid FROM users ORDER BY id LIMIT 1
-	) WHERE created_by IS NULL AND EXISTS (SELECT 1 FROM users)`)
-	if err != nil {
-		return serr.Wrap(err, "failed to backfill category created_by")
-	}
-
-	// Migration: add guid column to categories for cross-machine identity
-	_, err = db.Exec(`ALTER TABLE categories ADD COLUMN IF NOT EXISTS guid VARCHAR`)
-	if err != nil {
-		return serr.Wrap(err, "failed to add guid column to categories")
-	}
-
-	// Backfill GUIDs for existing categories that don't have one.
-	// Uses DuckDB's built-in uuid() function to generate UUIDs.
-	_, err = db.Exec(`UPDATE categories SET guid = uuid() WHERE guid IS NULL`)
-	if err != nil {
-		return serr.Wrap(err, "failed to backfill category GUIDs")
-	}
-
-	// Create unique index on category guid for sync lookups
-	_, err = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_guid ON categories(guid)`)
-	if err != nil {
-		return serr.Wrap(err, "failed to create categories guid index")
-	}
-
-	_, err = db.Exec(CreateNoteCategoriesTableSQL)
-	if err != nil {
-		return serr.Wrap(err, "failed to create note_categories table")
-	}
-
-	// Migration: add subcategories column for existing note_categories tables
-	// This column stores a JSON array of subcategory names for category/subcategory filtering
-	_, err = db.Exec(`ALTER TABLE note_categories ADD COLUMN IF NOT EXISTS subcategories VARCHAR`)
-	if err != nil {
-		return serr.Wrap(err, "failed to add subcategories column to note_categories")
-	}
-
-	// Create note change tracking tables for peer-to-peer sync
-	// Order matters: note_fragments first (referenced by note_changes)
-	_, err = db.Exec(DDLCreateNoteFragmentsSequence)
-	if err != nil {
-		return serr.Wrap(err, "failed to create note_fragments sequence")
-	}
-
-	_, err = db.Exec(DDLCreateNoteFragmentsTable)
-	if err != nil {
-		return serr.Wrap(err, "failed to create note_fragments table")
-	}
-
-	// Migration: add body_is_diff column for existing note_fragments tables.
-	// This flag indicates whether the body column contains a unified diff patch
-	// (true) or a full body snapshot (false). Existing rows default to false.
-	_, err = db.Exec(`ALTER TABLE note_fragments ADD COLUMN IF NOT EXISTS body_is_diff BOOLEAN DEFAULT false`)
-	if err != nil {
-		return serr.Wrap(err, "failed to add body_is_diff column to note_fragments")
-	}
-
-	// Create note_changes table (references note_fragments)
-	_, err = db.Exec(DDLCreateNoteChangesSequence)
-	if err != nil {
-		return serr.Wrap(err, "failed to create note_changes sequence")
-	}
-
-	_, err = db.Exec(DDLCreateNoteChangesTable)
-	if err != nil {
-		return serr.Wrap(err, "failed to create note_changes table")
-	}
-
-	_, err = db.Exec(DDLCreateNoteChangesIndexNoteGUID)
-	if err != nil {
-		return serr.Wrap(err, "failed to create note_changes note_guid index")
-	}
-
-	_, err = db.Exec(DDLCreateNoteChangesIndexCreatedAt)
-	if err != nil {
-		return serr.Wrap(err, "failed to create note_changes created_at index")
-	}
-
-	// Create note_change_sync_peers table (references note_changes)
-	_, err = db.Exec(DDLCreateNoteChangeSyncPeersTable)
-	if err != nil {
-		return serr.Wrap(err, "failed to create note_change_sync_peers table")
-	}
-
-	_, err = db.Exec(DDLCreateNoteChangeSyncPeersIndexPeerID)
-	if err != nil {
-		return serr.Wrap(err, "failed to create note_change_sync_peers peer_id index")
-	}
-
-	// Create category change tracking tables for peer-to-peer sync
-	// Parallel structure to note change tracking
-	_, err = db.Exec(DDLCreateCategoryFragmentsSequence)
-	if err != nil {
-		return serr.Wrap(err, "failed to create category_fragments sequence")
-	}
-
-	_, err = db.Exec(DDLCreateCategoryFragmentsTable)
-	if err != nil {
-		return serr.Wrap(err, "failed to create category_fragments table")
-	}
-
-	_, err = db.Exec(DDLCreateCategoryChangesSequence)
-	if err != nil {
-		return serr.Wrap(err, "failed to create category_changes sequence")
-	}
-
-	_, err = db.Exec(DDLCreateCategoryChangesTable)
-	if err != nil {
-		return serr.Wrap(err, "failed to create category_changes table")
-	}
-
-	_, err = db.Exec(DDLCreateCategoryChangesIndexCategoryGUID)
-	if err != nil {
-		return serr.Wrap(err, "failed to create category_changes category_guid index")
-	}
-
-	_, err = db.Exec(DDLCreateCategoryChangesIndexCreatedAt)
-	if err != nil {
-		return serr.Wrap(err, "failed to create category_changes created_at index")
-	}
-
-	_, err = db.Exec(DDLCreateCategoryChangeSyncPeersTable)
-	if err != nil {
-		return serr.Wrap(err, "failed to create category_change_sync_peers table")
-	}
-
-	_, err = db.Exec(DDLCreateCategoryChangeSyncPeersIndexPeerID)
-	if err != nil {
-		return serr.Wrap(err, "failed to create category_change_sync_peers peer_id index")
-	}
-
-	// Create sync_conflicts table for conflict audit logging (Phase 3)
-	_, err = db.Exec(DDLCreateSyncConflictsSequence)
-	if err != nil {
-		return serr.Wrap(err, "failed to create sync_conflicts sequence")
-	}
-
-	_, err = db.Exec(DDLCreateSyncConflictsTable)
-	if err != nil {
-		return serr.Wrap(err, "failed to create sync_conflicts table")
-	}
-
-	_, err = db.Exec(DDLCreateSyncConflictsIndexEntityGUID)
-	if err != nil {
-		return serr.Wrap(err, "failed to create sync_conflicts entity_guid index")
-	}
-
-	// Create sync_state table for persisting sync client state (Phase 4).
-	// Stores peer identity, auth tokens, and timestamps per hub URL
-	// so sync can resume across restarts without re-authenticating.
-	_, err = db.Exec(DDLCreateSyncStateTable)
-	if err != nil {
-		return serr.Wrap(err, "failed to create sync_state table")
-	}
-
-	// Create invite_tokens table for admin-managed user onboarding.
-	// Each token is single-use and time-limited.
-	_, err = db.Exec(DDLCreateInviteTokensSequence)
-	if err != nil {
-		return serr.Wrap(err, "failed to create invite_tokens sequence")
-	}
-
-	_, err = db.Exec(DDLCreateInviteTokensTable)
-	if err != nil {
-		return serr.Wrap(err, "failed to create invite_tokens table")
-	}
-
-	_, err = db.Exec(DDLCreateInviteTokensIndex)
-	if err != nil {
-		return serr.Wrap(err, "failed to create invite_tokens index")
-	}
-
-	return nil
-}
-
-// CloseDB gracefully closes the database connections. Should be called
-// during application shutdown, typically via defer after InitDB.
+// CloseDB closes both databases. Safe to call via defer after InitDB.
 func CloseDB() error {
-	var errs []error
-
-	if cacheDB != nil {
-		if err := cacheDB.Close(); err != nil {
-			errs = append(errs, serr.Wrap(err, "failed to close cache database"))
-		} else {
-			logger.Info("Cache database connection closed")
+	var firstErr error
+	if err := privDB.Close(); err != nil {
+		firstErr = serr.Wrap(err, "failed to close private database")
+		logger.LogErr(firstErr, "closing private database")
+	} else {
+		logger.Info("Private database closed")
+	}
+	if err := pubDB.Close(); err != nil {
+		if firstErr == nil {
+			firstErr = serr.Wrap(err, "failed to close public database")
 		}
+		logger.LogErr(err, "closing public database")
+	} else {
+		logger.Info("Public database closed")
 	}
-
-	if db != nil {
-		if err := db.Close(); err != nil {
-			errs = append(errs, serr.Wrap(err, "failed to close database"))
-		} else {
-			logger.Info("Disk database connection closed")
-		}
-	}
-
-	if len(errs) > 0 {
-		return errs[0] // Return first error
-	}
-	return nil
+	pubDB, privDB = nil, nil
+	return firstErr
 }
 
-// DB returns the disk database connection for use in write queries.
-// Panics if called before InitDB - this is intentional as it
-// indicates a programming error in application startup sequence.
-func DB() *sql.DB {
-	if db == nil {
+// PubDB returns the public engine. Panics if called before InitDB — a
+// programming error in the startup sequence.
+func PubDB() *dbEngine {
+	if pubDB == nil {
 		panic("database not initialized - call InitDB first")
 	}
-	return db
+	return pubDB
 }
 
-// CacheDB returns the in-memory cache database connection for use in read queries.
-// Panics if called before InitDB - this is intentional as it
-// indicates a programming error in application startup sequence.
-func CacheDB() *sql.DB {
-	if cacheDB == nil {
-		panic("cache database not initialized - call InitDB first")
+// PrivDB returns the private engine. Panics if called before InitDB.
+func PrivDB() *dbEngine {
+	if privDB == nil {
+		panic("database not initialized - call InitDB first")
 	}
-	return cacheDB
+	return privDB
 }
 
-// initCacheDB initializes the in-memory DuckDB database for caching.
-// Uses cache-specific schema that excludes authored_at (only needed on disk for sync).
-func initCacheDB() error {
-	var err error
-
-	// Open in-memory DuckDB connection
-	// Note: Empty string creates an in-memory database in go-duckdb
-	cacheDB, err = sql.Open("duckdb", "")
-	if err != nil {
-		return serr.Wrap(err, "failed to open in-memory DuckDB connection")
+// noteEngine picks the database a note belongs in by its privacy: private
+// notes live in the encrypted database, everything else in the public one.
+func noteEngine(isPrivate bool) *dbEngine {
+	if isPrivate {
+		return privDB
 	}
+	return pubDB
+}
 
-	// Verify connection is working
-	if err = cacheDB.Ping(); err != nil {
-		return serr.Wrap(err, "failed to ping in-memory DuckDB")
+// engineForNoteID finds which database holds a non-deleted note by id,
+// returning nil if neither does. Used when an operation keyed on a note id
+// (a category link, say) must run against the note's own database — the
+// note_categories rows live alongside the note.
+func engineForNoteID(noteID int64) *dbEngine {
+	for _, en := range []*dbEngine{pubDB, privDB} {
+		var one int
+		if err := en.QueryRow(`SELECT 1 FROM notes WHERE id = ? AND deleted_at IS NULL`, noteID).Scan(&one); err == nil {
+			return en
+		}
 	}
-
-	// Create tables in cache - uses cache schema without authored_at column
-	_, err = cacheDB.Exec(CreateNotesCacheTableSQL)
-	if err != nil {
-		return serr.Wrap(err, "failed to create notes table in cache")
-	}
-
-	_, err = cacheDB.Exec(CreateCategoriesTableSQL)
-	if err != nil {
-		return serr.Wrap(err, "failed to create categories table in cache")
-	}
-
-	// Add is_flagged column to cache notes table (matches disk migration)
-	_, err = cacheDB.Exec(`ALTER TABLE notes ADD COLUMN IF NOT EXISTS is_flagged BOOLEAN DEFAULT false`)
-	if err != nil {
-		return serr.Wrap(err, "failed to add is_flagged column to cache notes")
-	}
-
-	// Add created_by column to cache categories table (matches disk migration)
-	_, err = cacheDB.Exec(`ALTER TABLE categories ADD COLUMN IF NOT EXISTS created_by VARCHAR`)
-	if err != nil {
-		return serr.Wrap(err, "failed to add created_by column to cache categories")
-	}
-
-	_, err = cacheDB.Exec(CreateNoteCategoriesTableSQL)
-	if err != nil {
-		return serr.Wrap(err, "failed to create note_categories table in cache")
-	}
-
-	logger.Info("Cache database initialized")
 	return nil
 }
 
-// syncCacheFromDisk loads all data from the disk database into the cache.
-// This ensures the cache is up-to-date with the source of truth.
-// Critical: We must preserve the exact IDs from disk to maintain consistency.
+// engineForOwnedNote is engineForNoteID scoped to a note the user owns. An
+// empty userGUID means "no ownership filter".
+func engineForOwnedNote(noteID int64, userGUID string) *dbEngine {
+	for _, en := range []*dbEngine{pubDB, privDB} {
+		var one int
+		var err error
+		if userGUID != "" {
+			err = en.QueryRow(`SELECT 1 FROM notes WHERE id = ? AND created_by = ? AND deleted_at IS NULL`, noteID, userGUID).Scan(&one)
+		} else {
+			err = en.QueryRow(`SELECT 1 FROM notes WHERE id = ? AND deleted_at IS NULL`, noteID).Scan(&one)
+		}
+		if err == nil {
+			return en
+		}
+	}
+	return nil
+}
+
+// engineForID routes a note_changes / note_fragments id to its home
+// database. These ids are drawn from per-database offset sequences (the
+// private database starts above seqOffsetPrivate), so the id alone
+// identifies the engine — no side table needed.
 //
-// Encryption handling:
-// - Private notes are stored encrypted on disk (body + encryption_iv)
-// - When syncing to cache, we decrypt the body so cache has plaintext
-// - This enables fast reads from cache without decryption overhead
-func syncCacheFromDisk() error {
-	// Query all notes from disk (including soft-deleted ones for complete sync)
-	// Note: authored_at is read from disk but NOT inserted into cache (cache schema lacks it)
-	query := `
-		SELECT id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
-		       created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at
-		FROM notes
-	`
-
-	rows, err := db.Query(query)
-	if err != nil {
-		return serr.Wrap(err, "failed to query notes from disk")
+// This is for change/fragment ids ONLY, never notes.id: a note keeps its
+// id when a privacy flip moves it between databases, whereas change and
+// fragment rows are always created fresh in their engine and never move.
+func engineForID(id int64) *dbEngine {
+	if id >= seqOffsetPrivate {
+		return privDB
 	}
-	defer rows.Close()
-
-	// Insert each note into cache preserving the ID
-	// Note: cache schema does not include authored_at column
-	insertQuery := `
-		INSERT INTO notes (id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
-		                   created_by, updated_by, created_at, updated_at, synced_at, deleted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
-
-	count := 0
-	for rows.Next() {
-		var note Note
-
-		err := rows.Scan(
-			&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-			&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
-			&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.AuthoredAt, &note.SyncedAt, &note.DeletedAt,
-		)
-		if err != nil {
-			return serr.Wrap(err, "failed to scan note from disk")
-		}
-
-		// For private notes with encryption enabled, decrypt the body before caching
-		// This keeps the cache in plaintext for fast reads
-		cacheBody := note.Body
-		if note.IsPrivate && IsEncryptionEnabled() && note.Body.Valid && note.EncryptionIV.Valid {
-			decryptedBody, err := DecryptNoteBody(note.Body.String, note.EncryptionIV.String)
-			if err != nil {
-				// Log error but continue - corrupted notes shouldn't block entire sync
-				// The note will have encrypted body in cache (readable but garbled)
-				logger.LogErr(err, "failed to decrypt private note body during cache sync",
-					"note_id", note.ID, "guid", note.GUID)
-			} else {
-				cacheBody = sql.NullString{String: decryptedBody, Valid: true}
-			}
-		}
-
-		_, err = cacheDB.Exec(insertQuery,
-			note.ID, note.GUID, note.Title, note.Description, cacheBody,
-			note.Tags, note.IsPrivate, note.IsFlagged, note.EncryptionIV, note.CreatedBy,
-			note.UpdatedBy, note.CreatedAt, note.UpdatedAt, note.SyncedAt, note.DeletedAt,
-		)
-		if err != nil {
-			return serr.Wrap(err, "failed to insert note into cache")
-		}
-		count++
-	}
-
-	if err = rows.Err(); err != nil {
-		return serr.Wrap(err, "error iterating notes from disk")
-	}
-
-	// Note: Sequence syncing is not needed for the cache since all inserts
-	// use explicit IDs from the disk database (source of truth)
-
-	logger.Info("Cache synchronized from disk", "notes_count", count)
-
-	// Sync categories
-	categoriesCount, err := syncCategoriesFromDisk()
-	if err != nil {
-		return serr.Wrap(err, "failed to sync categories from disk")
-	}
-	logger.Info("Categories synchronized from disk", "categories_count", categoriesCount)
-
-	// Sync note_categories relationships
-	noteCategoriesCount, err := syncNoteCategoriesFromDisk()
-	if err != nil {
-		return serr.Wrap(err, "failed to sync note_categories from disk")
-	}
-	logger.Info("Note-category relationships synchronized from disk", "relationships_count", noteCategoriesCount)
-
-	return nil
-}
-
-// syncCategoriesFromDisk loads all categories from the disk database into the cache.
-func syncCategoriesFromDisk() (int, error) {
-	query := `
-		SELECT id, guid, name, description, subcategories, created_by, created_at, updated_at
-		FROM categories
-	`
-
-	rows, err := db.Query(query)
-	if err != nil {
-		return 0, serr.Wrap(err, "failed to query categories from disk")
-	}
-	defer rows.Close()
-
-	insertQuery := `
-		INSERT INTO categories (id, guid, name, description, subcategories, created_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`
-
-	count := 0
-	for rows.Next() {
-		var category Category
-
-		err := rows.Scan(
-			&category.ID, &category.GUID, &category.Name, &category.Description,
-			&category.Subcategories, &category.CreatedBy, &category.CreatedAt, &category.UpdatedAt,
-		)
-		if err != nil {
-			return 0, serr.Wrap(err, "failed to scan category from disk")
-		}
-
-		_, err = cacheDB.Exec(insertQuery,
-			category.ID, category.GUID, category.Name, category.Description,
-			category.Subcategories, category.CreatedBy, category.CreatedAt, category.UpdatedAt,
-		)
-		if err != nil {
-			return 0, serr.Wrap(err, "failed to insert category into cache")
-		}
-		count++
-	}
-
-	if err = rows.Err(); err != nil {
-		return 0, serr.Wrap(err, "error iterating categories from disk")
-	}
-
-	return count, nil
-}
-
-// syncNoteCategoriesFromDisk loads all note-category relationships from the disk database into the cache.
-// Includes the subcategories JSON array column for category/subcategory filtering.
-func syncNoteCategoriesFromDisk() (int, error) {
-	query := `
-		SELECT note_id, category_id, subcategories, created_at
-		FROM note_categories
-	`
-
-	rows, err := db.Query(query)
-	if err != nil {
-		return 0, serr.Wrap(err, "failed to query note_categories from disk")
-	}
-	defer rows.Close()
-
-	insertQuery := `
-		INSERT INTO note_categories (note_id, category_id, subcategories, created_at)
-		VALUES (?, ?, ?, ?)
-	`
-
-	count := 0
-	for rows.Next() {
-		var noteCategory NoteCategory
-
-		err := rows.Scan(
-			&noteCategory.NoteID, &noteCategory.CategoryID, &noteCategory.Subcategories, &noteCategory.CreatedAt,
-		)
-		if err != nil {
-			return 0, serr.Wrap(err, "failed to scan note_category from disk")
-		}
-
-		_, err = cacheDB.Exec(insertQuery,
-			noteCategory.NoteID, noteCategory.CategoryID, noteCategory.Subcategories, noteCategory.CreatedAt,
-		)
-		if err != nil {
-			return 0, serr.Wrap(err, "failed to insert note_category into cache")
-		}
-		count++
-	}
-
-	if err = rows.Err(); err != nil {
-		return 0, serr.Wrap(err, "error iterating note_categories from disk")
-	}
-
-	return count, nil
-}
-
-// InitTestDB initializes the database with a custom path for testing.
-// This allows tests to use an isolated database without affecting
-// production data. The path should include the full file path.
-// Also initializes the in-memory cache for testing.
-func InitTestDB(path string) error {
-	var err error
-
-	// Like InitDB: DuckDB creates the file but not the parent directory
-	if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return serr.Wrap(err, "failed to create test database directory")
-	}
-
-	db, err = sql.Open("duckdb", path)
-	if err != nil {
-		return serr.Wrap(err, "failed to open test DuckDB connection")
-	}
-
-	if err = db.Ping(); err != nil {
-		return serr.Wrap(err, "failed to ping test DuckDB")
-	}
-
-	if err = createTables(); err != nil {
-		return serr.Wrap(err, "failed to create test tables")
-	}
-
-	// Initialize cache for tests
-	if err = initCacheDB(); err != nil {
-		return serr.Wrap(err, "failed to initialize test cache database")
-	}
-
-	// Sync cache with disk (which should be empty for new tests)
-	if err = syncCacheFromDisk(); err != nil {
-		return serr.Wrap(err, "failed to sync test cache from disk")
-	}
-
-	return nil
+	return pubDB
 }

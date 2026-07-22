@@ -70,21 +70,9 @@ type SyncClientStatus struct {
 	PeerID     string     `json:"peer_id"`
 }
 
-// DDL for sync_state — persists peer identity and auth tokens across restarts.
-// Keyed by hub_url so a spoke could theoretically sync with multiple hubs
+// Schema for sync_state lives in schema.go (public database only). Keyed
+// by hub_url so a spoke could theoretically sync with multiple hubs
 // (though the current design assumes one).
-const DDLCreateSyncStateTable = `
-CREATE TABLE IF NOT EXISTS sync_state (
-    hub_url       VARCHAR PRIMARY KEY,
-    peer_id       VARCHAR NOT NULL,
-    last_push_at  TIMESTAMP,
-    last_pull_at  TIMESTAMP,
-    last_sync_at  TIMESTAMP,
-    auth_token    VARCHAR,
-    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-`
 
 // NewSyncClient creates and configures a sync client.
 // Loads or generates the peer ID from the sync_state table so it remains
@@ -543,11 +531,10 @@ func (sc *SyncClient) applyChangeWithConflictDetection(change SyncChange) error 
 				Operation:  localChange.Operation,
 				CreatedAt:  localChange.CreatedAt,
 			}
-			// Fetch authored_at from the note itself for LWW comparison
-			var authoredAt sql.NullTime
-			_ = db.QueryRow(`SELECT authored_at FROM notes WHERE guid = ?`, localChange.NoteGUID).Scan(&authoredAt)
-			if authoredAt.Valid {
-				localAsSyncChange.AuthoredAt = authoredAt.Time
+			// Fetch authored_at from the note itself for LWW comparison.
+			// getNoteAuthoredAt fans out across both databases.
+			if at, err := getNoteAuthoredAt(localChange.NoteGUID); err == nil {
+				localAsSyncChange.AuthoredAt = at
 			}
 		}
 
@@ -736,7 +723,7 @@ type SyncState struct {
 // uniquely identifies this spoke to the hub.
 func GetOrCreateSyncState(hubURL string) (*SyncState, error) {
 	state := &SyncState{}
-	err := db.QueryRow(
+	err := pubDB.QueryRow(
 		`SELECT hub_url, peer_id, last_push_at, last_pull_at, last_sync_at, auth_token, created_at, updated_at
 		 FROM sync_state WHERE hub_url = ?`, hubURL,
 	).Scan(&state.HubURL, &state.PeerID, &state.LastPushAt, &state.LastPullAt,
@@ -749,7 +736,7 @@ func GetOrCreateSyncState(hubURL string) (*SyncState, error) {
 		state.CreatedAt = time.Now()
 		state.UpdatedAt = time.Now()
 
-		_, err = db.Exec(
+		_, err = pubDB.Exec(
 			`INSERT INTO sync_state (hub_url, peer_id, created_at, updated_at) VALUES (?, ?, ?, ?)`,
 			state.HubURL, state.PeerID, state.CreatedAt, state.UpdatedAt,
 		)
@@ -771,7 +758,7 @@ func GetOrCreateSyncState(hubURL string) (*SyncState, error) {
 // UpdateSyncTimestamps records when the last successful sync cycle completed.
 func UpdateSyncTimestamps(hubURL string) error {
 	now := time.Now()
-	_, err := db.Exec(
+	_, err := pubDB.Exec(
 		`UPDATE sync_state SET last_sync_at = ?, last_pull_at = ?, last_push_at = ?, updated_at = ?
 		 WHERE hub_url = ?`,
 		now, now, now, now, hubURL,
@@ -784,7 +771,7 @@ func UpdateSyncTimestamps(hubURL string) error {
 
 // UpdateSyncAuthToken persists the JWT token for reuse across restarts.
 func UpdateSyncAuthToken(hubURL, token string) error {
-	_, err := db.Exec(
+	_, err := pubDB.Exec(
 		`UPDATE sync_state SET auth_token = ?, updated_at = ? WHERE hub_url = ?`,
 		token, time.Now(), hubURL,
 	)

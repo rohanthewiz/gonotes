@@ -2,101 +2,67 @@ package models
 
 import (
 	"database/sql"
+	"sort"
 	"time"
 
 	"github.com/rohanthewiz/logger"
 	"github.com/rohanthewiz/serr"
 )
 
-// Note represents a note in the system. The model is designed to support:
-// - Encryption via EncryptionIV for sensitive notes
-// - Soft deletes via DeletedAt for data recovery
-// - Sync tracking via SyncedAt for distributed scenarios
-// - Audit trail via CreatedBy/UpdatedBy fields
+// Note represents a note in the system. The model supports soft deletes
+// (DeletedAt), sync tracking (SyncedAt / AuthoredAt), and an audit trail
+// (CreatedBy / UpdatedBy).
+//
+// Storage split: a note lives in exactly one of the two databases,
+// selected by IsPrivate — private notes in the encrypted database,
+// non-private notes in the public one (see store.go / db.go). Note ids
+// are globally unique across the two databases (the private database
+// offsets its id sequence), so a note is addressable by id regardless of
+// which database holds it.
+//
+// EncryptionIV is retained on the struct for API/transport compatibility
+// but is no longer persisted: bytdb encrypts the whole private database at
+// rest, replacing the previous per-note AES field. It is always empty.
 type Note struct {
-	ID           int64          `json:"id"`            // Primary key, auto-incremented
+	ID           int64          `json:"id"`            // Primary key
 	GUID         string         `json:"guid"`          // Unique identifier for external references/sync
 	Title        string         `json:"title"`         // Note title, required
 	Description  sql.NullString `json:"description"`   // Optional short description
 	Body         sql.NullString `json:"body"`          // Main content of the note
 	Tags         sql.NullString `json:"tags"`          // Comma-separated tags for categorization
-	IsPrivate    bool           `json:"is_private"`    // Visibility flag, defaults to false
+	IsPrivate    bool           `json:"is_private"`    // Visibility flag; also selects which database holds the note
 	IsFlagged    bool           `json:"is_flagged"`    // Flag for follow-up, defaults to false
-	EncryptionIV sql.NullString `json:"encryption_iv"` // Initialization vector if note is encrypted
+	EncryptionIV sql.NullString `json:"encryption_iv"` // Deprecated: no longer persisted (whole-DB encryption)
 	CreatedBy    sql.NullString `json:"created_by"`    // User who created the note
 	UpdatedBy    sql.NullString `json:"updated_by"`    // User who last updated the note
 	CreatedAt    time.Time      `json:"created_at"`    // Timestamp of creation
 	UpdatedAt    time.Time      `json:"updated_at"`    // Timestamp of last update
-	AuthoredAt   sql.NullTime   `json:"authored_at"`   // Last human authoring timestamp (disk only, not in cache)
+	AuthoredAt   sql.NullTime   `json:"authored_at"`   // Last human authoring timestamp (for peer-to-peer sync)
 	SyncedAt     sql.NullTime   `json:"synced_at"`     // Last sync timestamp for distributed scenarios
 	DeletedAt    sql.NullTime   `json:"deleted_at"`    // Soft delete timestamp, null if not deleted
 }
 
-// CreateNotesTableSQL returns the DDL statement for creating the notes table (disk DB).
-// Design notes:
-// - id is a BIGINT with auto-increment via SEQUENCE for primary key
-// - guid has a UNIQUE constraint for external reference integrity
-// - is_private defaults to false (public visibility)
-// - timestamps use CURRENT_TIMESTAMP defaults where appropriate
-// - authored_at tracks when a person last created/updated the note (for peer-to-peer sync)
-const CreateNotesTableSQL = `
-CREATE SEQUENCE IF NOT EXISTS notes_id_seq START 1;
+// noteCols is the canonical notes column list (encryption_iv dropped),
+// shared by every notes SELECT so the projection and scanNoteRow stay in
+// lockstep.
+const noteCols = `id, guid, title, description, body, tags, is_private, is_flagged,
+	created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at`
 
-CREATE TABLE IF NOT EXISTS notes (
-    id            BIGINT PRIMARY KEY DEFAULT nextval('notes_id_seq'),
-    guid          VARCHAR NOT NULL UNIQUE,
-    title         VARCHAR NOT NULL,
-    description   VARCHAR,
-    body          VARCHAR,
-    tags          VARCHAR,
-    is_private    BOOLEAN DEFAULT false,
-    is_flagged    BOOLEAN DEFAULT false,
-    encryption_iv VARCHAR,
-    created_by    VARCHAR,
-    updated_by    VARCHAR,
-    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    authored_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    synced_at     TIMESTAMP,
-    deleted_at    TIMESTAMP
-);
-`
+// scanner is satisfied by both *shimRow and *shimRows.
+type scanner interface {
+	Scan(dest ...any) error
+}
 
-// CreateNotesCacheTableSQL returns the DDL for the in-memory cache notes table.
-// This schema intentionally excludes authored_at since the cache is for fast reads
-// and authored_at is only relevant for the disk database (peer-to-peer sync scenarios).
-const CreateNotesCacheTableSQL = `
-CREATE SEQUENCE IF NOT EXISTS notes_id_seq START 1;
-
-CREATE TABLE IF NOT EXISTS notes (
-    id            BIGINT PRIMARY KEY DEFAULT nextval('notes_id_seq'),
-    guid          VARCHAR NOT NULL UNIQUE,
-    title         VARCHAR NOT NULL,
-    description   VARCHAR,
-    body          VARCHAR,
-    tags          VARCHAR,
-    is_private    BOOLEAN DEFAULT false,
-    is_flagged    BOOLEAN DEFAULT false,
-    encryption_iv VARCHAR,
-    created_by    VARCHAR,
-    updated_by    VARCHAR,
-    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    synced_at     TIMESTAMP,
-    deleted_at    TIMESTAMP
-);
-`
-
-// DropNotesTableSQL is provided for testing and migration rollback scenarios.
-// Use with caution in production environments.
-const DropNotesTableSQL = `
-DROP TABLE IF EXISTS notes;
-DROP SEQUENCE IF EXISTS notes_id_seq;
-`
+// scanNoteRow reads one notes row (projected as noteCols) into n.
+func scanNoteRow(s scanner, n *Note) error {
+	return s.Scan(
+		&n.ID, &n.GUID, &n.Title, &n.Description, &n.Body, &n.Tags,
+		&n.IsPrivate, &n.IsFlagged, &n.CreatedBy, &n.UpdatedBy,
+		&n.CreatedAt, &n.UpdatedAt, &n.AuthoredAt, &n.SyncedAt, &n.DeletedAt,
+	)
+}
 
 // NoteInput represents the data required to create or update a note.
-// Using a separate struct from Note allows us to control which fields
-// are settable via API vs auto-generated (like ID, timestamps).
 type NoteInput struct {
 	GUID         string  `json:"guid"`
 	Title        string  `json:"title"`
@@ -105,14 +71,12 @@ type NoteInput struct {
 	Tags         *string `json:"tags,omitempty"`
 	IsPrivate    bool    `json:"is_private"`
 	IsFlagged    bool    `json:"is_flagged"`
-	EncryptionIV *string `json:"encryption_iv,omitempty"`
+	EncryptionIV *string `json:"encryption_iv,omitempty"` // Deprecated: ignored (whole-DB encryption)
 	CreatedBy    *string `json:"created_by,omitempty"`
 	UpdatedBy    *string `json:"updated_by,omitempty"`
 }
 
 // NoteOutput provides a JSON-friendly representation of a Note.
-// sql.Null* types don't serialize well to JSON, so we convert
-// them to pointer types which marshal as null or the value.
 type NoteOutput struct {
 	ID           int64   `json:"id"`
 	GUID         string  `json:"guid"`
@@ -127,13 +91,12 @@ type NoteOutput struct {
 	UpdatedBy    *string `json:"updated_by,omitempty"`
 	CreatedAt    string  `json:"created_at"`
 	UpdatedAt    string  `json:"updated_at"`
-	AuthoredAt   *string `json:"authored_at,omitempty"` // Last human authoring timestamp (disk only)
+	AuthoredAt   *string `json:"authored_at,omitempty"`
 	SyncedAt     *string `json:"synced_at,omitempty"`
 	DeletedAt    *string `json:"deleted_at,omitempty"`
 }
 
 // ToOutput converts a Note to NoteOutput for JSON serialization.
-// Handles the sql.Null* to pointer conversion for clean JSON output.
 func (n *Note) ToOutput() NoteOutput {
 	out := NoteOutput{
 		ID:        n.ID,
@@ -145,7 +108,6 @@ func (n *Note) ToOutput() NoteOutput {
 		UpdatedAt: n.UpdatedAt.Format(time.RFC3339),
 	}
 
-	// Convert sql.NullString fields to *string
 	if n.Description.Valid {
 		out.Description = &n.Description.String
 	}
@@ -164,8 +126,6 @@ func (n *Note) ToOutput() NoteOutput {
 	if n.UpdatedBy.Valid {
 		out.UpdatedBy = &n.UpdatedBy.String
 	}
-
-	// Convert sql.NullTime fields to *string
 	if n.AuthoredAt.Valid {
 		s := n.AuthoredAt.Time.Format(time.RFC3339)
 		out.AuthoredAt = &s
@@ -182,149 +142,28 @@ func (n *Note) ToOutput() NoteOutput {
 	return out
 }
 
-// CreateNote inserts a new note into both the disk database (source of truth)
-// and the in-memory cache. The ID and timestamps are auto-generated by the disk database.
-// Returns the created note with all fields populated.
-//
-// Encryption behavior for private notes:
-//   - If IsPrivate is true and encryption is enabled, the body is encrypted before
-//     being written to disk. The IV is stored in encryption_iv.
-//   - The cache stores the UNENCRYPTED body for fast reads.
-//   - This means disk contains encrypted data (secure at rest) while memory has
-//     plaintext for performance.
-//
-// CreateNote creates a new note in both disk and cache databases.
-// The userGUID parameter is required to set note ownership (created_by).
+// CreateNote inserts a new note into the database selected by its
+// privacy: private notes go to the encrypted database, others to the
+// public one. The id is drawn from that database's notes_id_seq (offset
+// in the private database so ids are globally unique). No app-level
+// encryption is applied — the private database is encrypted at rest as a
+// whole.
 func CreateNote(input NoteInput, userGUID string) (*Note, error) {
-	// Prepare body and IV for disk storage
-	// For private notes, we encrypt the body; for public notes, we store plainly
-	diskBody := toNullString(input.Body)
-	diskEncryptionIV := toNullString(input.EncryptionIV)
+	en := noteEngine(input.IsPrivate)
 
-	if input.IsPrivate && IsEncryptionEnabled() && input.Body != nil && *input.Body != "" {
-		encryptedBody, iv, err := EncryptNoteBody(input.Body)
-		if err != nil {
-			return nil, serr.Wrap(err, "failed to encrypt private note body")
-		}
-		diskBody = toNullString(&encryptedBody)
-		diskEncryptionIV = toNullString(&iv)
-	}
-
-	// Set ownership from the authenticated user
 	createdBy := sql.NullString{String: userGUID, Valid: userGUID != ""}
 	updatedBy := sql.NullString{String: userGUID, Valid: userGUID != ""}
 
-	// authored_at uses DEFAULT CURRENT_TIMESTAMP, so no need to include in INSERT VALUES
+	// id is drawn via nextval() in the INSERT — bytdb rejects DEFAULT
+	// nextval(...). authored_at/created_at/updated_at take their column
+	// defaults (CURRENT_TIMESTAMP).
 	query := `
-		INSERT INTO notes (guid, title, description, body, tags, is_private, is_flagged, encryption_iv, created_by, updated_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		RETURNING id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
-		          created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at
-	`
+		INSERT INTO notes (id, guid, title, description, body, tags, is_private, is_flagged, created_by, updated_by)
+		VALUES (nextval('notes_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		RETURNING ` + noteCols
 
 	note := &Note{}
-	// Insert into disk DB first (source of truth) - body is encrypted for private notes
-	err := db.QueryRow(query,
-		input.GUID,
-		input.Title,
-		toNullString(input.Description),
-		diskBody,
-		toNullString(input.Tags),
-		input.IsPrivate,
-		input.IsFlagged,
-		diskEncryptionIV,
-		createdBy,
-		updatedBy,
-	).Scan(
-		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-		&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
-		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.AuthoredAt, &note.SyncedAt, &note.DeletedAt,
-	)
-
-	if err != nil {
-		return nil, err
-	}
-
-	// Record change for sync (non-blocking)
-	// Track all fields as changed for create operations
-	fragment := createFragmentFromInput(input, FragmentTitle|FragmentDescription|FragmentBody|FragmentTags|FragmentIsPrivate)
-	if fragmentID, err := insertNoteFragment(fragment); err != nil {
-		logger.LogErr(err, "failed to record note fragment", "note_guid", input.GUID)
-	} else {
-		if err := insertNoteChange(GenerateChangeGUID(), input.GUID, OperationCreate, sql.NullInt64{Int64: fragmentID, Valid: true}, userGUID); err != nil {
-			logger.LogErr(err, "failed to record note change", "note_guid", input.GUID)
-		}
-	}
-
-	// For private notes, the note.Body from disk is encrypted.
-	// We need to store the UNENCRYPTED body in cache for fast reads.
-	cacheBody := note.Body
-	if input.IsPrivate && IsEncryptionEnabled() && input.Body != nil {
-		// Use the original unencrypted body for cache
-		cacheBody = toNullString(input.Body)
-	}
-
-	// Insert into cache with the same ID from disk to maintain consistency
-	// Note: Cache stores unencrypted body for performance; encryption_iv is still stored
-	// for reference but the body is plaintext in cache
-	cacheInsertQuery := `
-		INSERT INTO notes (id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
-		                   created_by, updated_by, created_at, updated_at, synced_at, deleted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
-
-	logger.Debug("CreateNote: inserting into cache",
-		"note_id", note.ID,
-		"guid", note.GUID,
-		"title", note.Title,
-		"created_at", note.CreatedAt,
-		"updated_at", note.UpdatedAt,
-	)
-
-	_, err = cacheDB.Exec(cacheInsertQuery,
-		note.ID, note.GUID, note.Title, note.Description, cacheBody,
-		note.Tags, note.IsPrivate, note.IsFlagged, note.EncryptionIV, note.CreatedBy,
-		note.UpdatedBy, note.CreatedAt, note.UpdatedAt, note.SyncedAt, note.DeletedAt,
-	)
-	if err != nil {
-		// Cache insert failed - log detailed error for debugging
-		logger.LogErr(err, "CreateNote: cache insert failed",
-			"note_id", note.ID,
-			"guid", note.GUID,
-			"error_detail", err.Error(),
-		)
-		return note, serr.Wrap(err, "note created in disk DB but failed to update cache")
-	}
-
-	logger.Debug("CreateNote: cache insert successful", "note_id", note.ID)
-
-	// Return note with unencrypted body for the caller
-	note.Body = cacheBody
-	return note, nil
-}
-
-// CreateNoteWithTimestamps inserts a note while preserving caller-supplied
-// timestamps. For bulk-import paths where the source already has authoritative
-// created_at/updated_at/authored_at values that must not be overwritten by DB
-// defaults. Skips sync change-fragment recording (an import is a snapshot
-// replay, not a fresh authoring event) and skips body encryption (callers
-// pin IsPrivate=false for imports today; wire encryption in if a future
-// caller needs to import private notes).
-func CreateNoteWithTimestamps(input NoteInput, userGUID string,
-	createdAt, updatedAt, authoredAt time.Time) (*Note, error) {
-	createdBy := sql.NullString{String: userGUID, Valid: userGUID != ""}
-	updatedBy := sql.NullString{String: userGUID, Valid: userGUID != ""}
-
-	query := `
-		INSERT INTO notes (guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
-		                   created_by, updated_by, created_at, updated_at, authored_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		RETURNING id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
-		          created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at
-	`
-
-	note := &Note{}
-	err := db.QueryRow(query,
+	err := scanNoteRow(en.QueryRow(query,
 		input.GUID,
 		input.Title,
 		toNullString(input.Description),
@@ -332,161 +171,135 @@ func CreateNoteWithTimestamps(input NoteInput, userGUID string,
 		toNullString(input.Tags),
 		input.IsPrivate,
 		input.IsFlagged,
-		toNullString(input.EncryptionIV),
 		createdBy,
 		updatedBy,
-		createdAt,
-		updatedAt,
-		authoredAt,
-	).Scan(
-		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-		&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
-		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.AuthoredAt, &note.SyncedAt, &note.DeletedAt,
-	)
+	), note)
 	if err != nil {
 		return nil, err
 	}
 
-	cacheInsertQuery := `
-		INSERT INTO notes (id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
-		                   created_by, updated_by, created_at, updated_at, synced_at, deleted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
-
-	_, err = cacheDB.Exec(cacheInsertQuery,
-		note.ID, note.GUID, note.Title, note.Description, note.Body,
-		note.Tags, note.IsPrivate, note.IsFlagged, note.EncryptionIV, note.CreatedBy,
-		note.UpdatedBy, note.CreatedAt, note.UpdatedAt, note.SyncedAt, note.DeletedAt,
-	)
-	if err != nil {
-		return note, serr.Wrap(err, "note inserted to disk but cache insert failed")
-	}
-
-	return note, nil
-}
-
-// GetNoteByID retrieves a single note by its primary key from the cache.
-// The userGUID parameter filters to notes owned by that user.
-// Returns nil, nil if the note doesn't exist or isn't owned by the user.
-func GetNoteByID(id int64, userGUID string) (*Note, error) {
-	query := `
-		SELECT id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
-		       created_by, updated_by, created_at, updated_at, synced_at, deleted_at
-		FROM notes
-		WHERE id = ? AND created_by = ? AND deleted_at IS NULL
-	`
-
-	note := &Note{}
-	// Read from cache for better performance
-	err := cacheDB.QueryRow(query, id, userGUID).Scan(
-		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-		&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
-		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.SyncedAt, &note.DeletedAt,
-	)
-
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return note, nil
-}
-
-// getNoteByIDFromDisk retrieves a single note by its primary key from the disk database.
-// Used as a fallback when cache operations fail. Note that for encrypted private notes,
-// the body will be encrypted in the returned note (unlike cache reads).
-func getNoteByIDFromDisk(id int64, userGUID string) (*Note, error) {
-	query := `
-		SELECT id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
-		       created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at
-		FROM notes
-		WHERE id = ? AND created_by = ? AND deleted_at IS NULL
-	`
-
-	note := &Note{}
-	err := db.QueryRow(query, id, userGUID).Scan(
-		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-		&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
-		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.AuthoredAt, &note.SyncedAt, &note.DeletedAt,
-	)
-
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	// For private encrypted notes, decrypt the body before returning
-	if note.IsPrivate && IsEncryptionEnabled() && note.Body.Valid && note.EncryptionIV.Valid {
-		decryptedBody, err := DecryptNoteBody(note.Body.String, note.EncryptionIV.String)
-		if err != nil {
-			// Log error but return note with encrypted body rather than failing
-			logger.LogErr(err, "failed to decrypt note body from disk", "note_id", id)
-		} else {
-			note.Body = sql.NullString{String: decryptedBody, Valid: true}
+	// Record change for sync (non-blocking). The change-tracking rows live
+	// in the same database as the note, so private-note history stays in
+	// the encrypted database.
+	fragment := createFragmentFromInput(input, FragmentTitle|FragmentDescription|FragmentBody|FragmentTags|FragmentIsPrivate)
+	if fragmentID, err := insertNoteFragment(en, fragment); err != nil {
+		logger.LogErr(err, "failed to record note fragment", "note_guid", input.GUID)
+	} else {
+		if err := insertNoteChange(en, GenerateChangeGUID(), input.GUID, OperationCreate, sql.NullInt64{Int64: fragmentID, Valid: true}, userGUID); err != nil {
+			logger.LogErr(err, "failed to record note change", "note_guid", input.GUID)
 		}
 	}
 
 	return note, nil
 }
 
-// GetNoteByGUID retrieves a single note by its GUID from the cache.
-// Useful for external references and sync operations.
-func GetNoteByGUID(guid string) (*Note, error) {
+// CreateNoteWithTimestamps inserts a note preserving caller-supplied
+// timestamps (bulk-import path). Skips sync change recording (an import is
+// a snapshot replay, not a fresh authoring event).
+func CreateNoteWithTimestamps(input NoteInput, userGUID string,
+	createdAt, updatedAt, authoredAt time.Time) (*Note, error) {
+	en := noteEngine(input.IsPrivate)
+
+	createdBy := sql.NullString{String: userGUID, Valid: userGUID != ""}
+	updatedBy := sql.NullString{String: userGUID, Valid: userGUID != ""}
+
 	query := `
-		SELECT id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
-		       created_by, updated_by, created_at, updated_at, synced_at, deleted_at
-		FROM notes
-		WHERE guid = ? AND deleted_at IS NULL
-	`
+		INSERT INTO notes (id, guid, title, description, body, tags, is_private, is_flagged,
+		                   created_by, updated_by, created_at, updated_at, authored_at)
+		VALUES (nextval('notes_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		RETURNING ` + noteCols
 
 	note := &Note{}
-	// Read from cache for better performance
-	err := cacheDB.QueryRow(query, guid).Scan(
-		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-		&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
-		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.SyncedAt, &note.DeletedAt,
-	)
-
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
+	err := scanNoteRow(en.QueryRow(query,
+		input.GUID,
+		input.Title,
+		toNullString(input.Description),
+		toNullString(input.Body),
+		toNullString(input.Tags),
+		input.IsPrivate,
+		input.IsFlagged,
+		createdBy,
+		updatedBy,
+		createdAt,
+		updatedAt,
+		authoredAt,
+	), note)
 	if err != nil {
 		return nil, err
 	}
 	return note, nil
 }
 
-// ListNotes retrieves all non-deleted notes owned by a user with pagination.
-// The userGUID parameter filters to notes owned by that user.
-// Ordered by created_at descending (newest first).
-// limit=0 returns all notes, offset skips the first N results.
-func ListNotes(userGUID string, limit, offset int) ([]Note, error) {
-	query := `
-		SELECT id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
-		       created_by, updated_by, created_at, updated_at, synced_at, deleted_at
+// GetNoteByID retrieves a single note by primary key, owned by userGUID.
+// The read fans out to both databases concurrently (divide and conquer);
+// since ids are globally unique, at most one database holds the row.
+// Returns nil, nil if the note doesn't exist or isn't owned by the user.
+func GetNoteByID(id int64, userGUID string) (*Note, error) {
+	query := `SELECT ` + noteCols + `
 		FROM notes
-		WHERE created_by = ? AND deleted_at IS NULL
-		ORDER BY created_at DESC
-	`
+		WHERE id = ? AND created_by = ? AND deleted_at IS NULL`
 
-	// Add pagination if limit is specified
-	if limit > 0 {
-		query += " LIMIT ? OFFSET ?"
+	note, err := firstFromBothNotes(func(en *dbEngine) (*Note, error) {
+		n := &Note{}
+		if e := scanNoteRow(en.QueryRow(query, id, userGUID), n); e != nil {
+			return nil, e // sql.ErrNoRows when this engine lacks the row
+		}
+		return n, nil
+	})
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return note, err
+}
+
+// GetNoteByGUID retrieves a single note by GUID from whichever database
+// holds it (fan-out). Used by external references and sync.
+func GetNoteByGUID(guid string) (*Note, error) {
+	query := `SELECT ` + noteCols + `
+		FROM notes
+		WHERE guid = ? AND deleted_at IS NULL`
+
+	note, err := firstFromBothNotes(func(en *dbEngine) (*Note, error) {
+		n := &Note{}
+		if e := scanNoteRow(en.QueryRow(query, guid), n); e != nil {
+			return nil, e
+		}
+		return n, nil
+	})
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return note, err
+}
+
+// ListNotes retrieves all non-deleted notes owned by a user, newest
+// first, with pagination. Because a user's notes are spread across both
+// databases, the two are queried concurrently, merged, globally sorted by
+// created_at descending, and only then sliced to the requested page —
+// pushing LIMIT to each engine independently could not produce a correct
+// global page. limit=0 returns everything.
+func ListNotes(userGUID string, limit, offset int) ([]Note, error) {
+	query := `SELECT ` + noteCols + `
+		FROM notes
+		WHERE created_by = ? AND deleted_at IS NULL`
+
+	notes, err := queryBothNotes(func(en *dbEngine) ([]Note, error) {
+		return queryNotes(en, query, userGUID)
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	var rows *sql.Rows
-	var err error
+	sort.SliceStable(notes, func(i, j int) bool {
+		return notes[i].CreatedAt.After(notes[j].CreatedAt)
+	})
 
-	// Read from cache for better performance
-	if limit > 0 {
-		rows, err = cacheDB.Query(query, userGUID, limit, offset)
-	} else {
-		rows, err = cacheDB.Query(query, userGUID)
-	}
+	return paginate(notes, limit, offset), nil
+}
 
+// queryNotes runs a notes SELECT on one engine and collects the rows.
+func queryNotes(en *dbEngine, query string, args ...any) ([]Note, error) {
+	rows, err := en.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -495,35 +308,34 @@ func ListNotes(userGUID string, limit, offset int) ([]Note, error) {
 	var notes []Note
 	for rows.Next() {
 		var note Note
-		err := rows.Scan(
-			&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-			&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
-			&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.SyncedAt, &note.DeletedAt,
-		)
-		if err != nil {
+		if err := scanNoteRow(rows, &note); err != nil {
 			return nil, err
 		}
 		notes = append(notes, note)
 	}
-
 	return notes, rows.Err()
 }
 
-// UpdateNote modifies an existing note identified by ID in both databases.
-// Only non-nil fields in the input are updated; updated_at is auto-set.
-// Returns the updated note or nil if not found.
-// Note: DuckDB's RETURNING clause on UPDATE has limitations, so we
-// perform the update and then fetch the updated record separately.
-//
-// Encryption behavior for private notes:
-//   - If IsPrivate is true and encryption is enabled, the body is encrypted
-//     before being written to disk. A new IV is generated for each update.
-//   - The cache stores the UNENCRYPTED body for fast reads.
-//   - If a note changes from private to public, the body is stored unencrypted.
-//
-// The userGUID parameter is used to verify ownership and set updated_by.
+// paginate applies an in-memory limit/offset to an already-sorted slice.
+func paginate(notes []Note, limit, offset int) []Note {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(notes) {
+		return nil
+	}
+	notes = notes[offset:]
+	if limit > 0 && limit < len(notes) {
+		notes = notes[:limit]
+	}
+	return notes
+}
+
+// UpdateNote modifies an existing note owned by userGUID. When the note's
+// privacy flips it must move between the two databases (the note keeps its
+// id); otherwise it is updated in place. Returns the updated note, or nil
+// if not found.
 func UpdateNote(id int64, input NoteInput, userGUID string) (*Note, error) {
-	// First verify the note exists, isn't deleted, and is owned by this user
 	existing, err := GetNoteByID(id, userGUID)
 	if err != nil {
 		return nil, err
@@ -532,276 +344,251 @@ func UpdateNote(id int64, input NoteInput, userGUID string) (*Note, error) {
 		return nil, nil // Not found or not owned by user
 	}
 
-	// Set updated_by from the authenticated user
+	srcEngine := noteEngine(existing.IsPrivate)
+	dstEngine := noteEngine(input.IsPrivate)
 	updatedBy := sql.NullString{String: userGUID, Valid: userGUID != ""}
 
-	// Prepare body and IV for disk storage
-	// For private notes, we encrypt the body; for public notes, we store plainly
-	diskBody := toNullString(input.Body)
-	diskEncryptionIV := toNullString(input.EncryptionIV)
-
-	if input.IsPrivate && IsEncryptionEnabled() && input.Body != nil && *input.Body != "" {
-		encryptedBody, iv, err := EncryptNoteBody(input.Body)
-		if err != nil {
-			return nil, serr.Wrap(err, "failed to encrypt private note body")
-		}
-		diskBody = toNullString(&encryptedBody)
-		diskEncryptionIV = toNullString(&iv)
-	}
-
-	// Perform the update on disk DB first (source of truth)
-	// authored_at is updated to track last human modification (for peer-to-peer sync)
-	// Also filter by created_by to enforce ownership
-	diskUpdateQuery := `
-		UPDATE notes
-		SET title = ?, description = ?, body = ?, tags = ?, is_private = ?, is_flagged = ?,
-		    encryption_iv = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP,
-		    authored_at = CURRENT_TIMESTAMP
-		WHERE id = ? AND created_by = ? AND deleted_at IS NULL
-	`
-
-	result, err := db.Exec(diskUpdateQuery,
-		input.Title,
-		toNullString(input.Description),
-		diskBody,
-		toNullString(input.Tags),
-		input.IsPrivate,
-		input.IsFlagged,
-		diskEncryptionIV,
-		updatedBy,
-		id,
-		userGUID,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return nil, err
-	}
-	if rowsAffected == 0 {
-		return nil, nil
-	}
-
-	// Record change for sync (non-blocking)
-	// Only track fields that actually changed. Pass existing note so that
-	// body diffs can be computed against the previous body content.
+	// Compute the sync change first (uses the pre-update state), then apply
+	// the write. The change-tracking rows land in the destination engine so
+	// history follows the note across a privacy move.
 	bitmask := computeChangeBitmask(existing, input)
+
+	if srcEngine == dstEngine {
+		updateQuery := `
+			UPDATE notes
+			SET title = ?, description = ?, body = ?, tags = ?, is_private = ?, is_flagged = ?,
+			    updated_by = ?, updated_at = CURRENT_TIMESTAMP, authored_at = CURRENT_TIMESTAMP
+			WHERE id = ? AND created_by = ? AND deleted_at IS NULL`
+
+		result, err := dstEngine.Exec(updateQuery,
+			input.Title,
+			toNullString(input.Description),
+			toNullString(input.Body),
+			toNullString(input.Tags),
+			input.IsPrivate,
+			input.IsFlagged,
+			updatedBy,
+			id,
+			userGUID,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := result.RowsAffected(); n == 0 {
+			return nil, nil
+		}
+	} else {
+		// Privacy flip: move the note (and its category links) to the other
+		// database, preserving id/guid/created_at, then delete the original.
+		if err := moveNoteBetweenEngines(srcEngine, dstEngine, existing, input, updatedBy); err != nil {
+			return nil, serr.Wrap(err, "failed to move note between databases on privacy change")
+		}
+	}
+
+	// Record the change (non-blocking) in the destination engine.
 	if bitmask != 0 {
 		fragment := createDeltaFragment(existing, input, bitmask)
-		if fragmentID, err := insertNoteFragment(fragment); err != nil {
+		if fragmentID, err := insertNoteFragment(dstEngine, fragment); err != nil {
 			logger.LogErr(err, "failed to record update fragment", "note_id", id)
 		} else {
-			if err := insertNoteChange(GenerateChangeGUID(), existing.GUID, OperationUpdate, sql.NullInt64{Int64: fragmentID, Valid: true}, userGUID); err != nil {
+			if err := insertNoteChange(dstEngine, GenerateChangeGUID(), existing.GUID, OperationUpdate, sql.NullInt64{Int64: fragmentID, Valid: true}, userGUID); err != nil {
 				logger.LogErr(err, "failed to record update change", "note_id", id)
 			}
 		}
 	}
 
-	// Update cache with UNENCRYPTED body for fast reads
-	cacheUpdateQuery := `
-		UPDATE notes
-		SET title = ?, description = ?, body = ?, tags = ?, is_private = ?, is_flagged = ?,
-		    encryption_iv = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ? AND deleted_at IS NULL
-	`
-
-	logger.Debug("UpdateNote: updating cache",
-		"note_id", id,
-		"title", input.Title,
-	)
-
-	_, err = cacheDB.Exec(cacheUpdateQuery,
-		input.Title,
-		toNullString(input.Description),
-		toNullString(input.Body), // Unencrypted for cache
-		toNullString(input.Tags),
-		input.IsPrivate,
-		input.IsFlagged,
-		diskEncryptionIV, // Store the IV in cache too for reference
-		toNullString(input.UpdatedBy),
-		id,
-	)
-	if err != nil {
-		// Cache update failed - log detailed error for debugging
-		logger.LogErr(err, "UpdateNote: cache update failed",
-			"note_id", id,
-			"error_detail", err.Error(),
-		)
-		// Fetch from disk and return note with error so handler can return success
-		diskNote, fetchErr := getNoteByIDFromDisk(id, userGUID)
-		if fetchErr != nil || diskNote == nil {
-			return nil, serr.Wrap(err, "note updated in disk DB but failed to update cache and fetch")
-		}
-		return diskNote, serr.Wrap(err, "note updated in disk DB but failed to update cache")
-	}
-
-	logger.Debug("UpdateNote: cache update successful", "note_id", id)
-
-	// Fetch the updated note from cache (will have unencrypted body)
 	return GetNoteByID(id, userGUID)
 }
 
-// DeleteNote performs a soft delete by setting deleted_at timestamp in both databases.
-// The note remains in the database but is excluded from normal queries.
-// The userGUID parameter verifies ownership before deletion.
-// Returns true if a note was deleted, false if not found or not owned by user.
+// moveNoteBetweenEngines relocates a note from src to dst when its privacy
+// changes. The id, guid, created_by, and created_at are preserved so
+// external references and ordering survive the move; updated_at/authored_at
+// advance to now, and is_private takes the new value. note_categories rows
+// follow the note.
+func moveNoteBetweenEngines(src, dst *dbEngine, existing *Note, input NoteInput, updatedBy sql.NullString) error {
+	now := time.Now().UTC()
+
+	insertQuery := `
+		INSERT INTO notes (id, guid, title, description, body, tags, is_private, is_flagged,
+		                   created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	_, err := dst.Exec(insertQuery,
+		existing.ID,
+		existing.GUID,
+		input.Title,
+		toNullString(input.Description),
+		toNullString(input.Body),
+		toNullString(input.Tags),
+		input.IsPrivate,
+		input.IsFlagged,
+		existing.CreatedBy,
+		updatedBy,
+		existing.CreatedAt,
+		now,
+		now,
+		existing.SyncedAt,
+		existing.DeletedAt,
+	)
+	if err != nil {
+		return serr.Wrap(err, "failed to insert note into destination database")
+	}
+
+	// Move category links: copy then delete. Best-effort logging on the
+	// copy so a link hiccup doesn't strand the note.
+	if err := moveNoteCategories(src, dst, existing.ID); err != nil {
+		logger.LogErr(err, "failed to move note category links", "note_id", existing.ID)
+	}
+
+	if _, err := src.Exec(`DELETE FROM notes WHERE id = ?`, existing.ID); err != nil {
+		return serr.Wrap(err, "failed to delete note from source database after move")
+	}
+	return nil
+}
+
+// moveNoteCategories copies a note's note_categories rows from src to dst
+// and removes them from src. Used by the privacy-flip move.
+func moveNoteCategories(src, dst *dbEngine, noteID int64) error {
+	rows, err := src.Query(`SELECT note_id, category_id, subcategories, created_at FROM note_categories WHERE note_id = ?`, noteID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type link struct {
+		noteID        int64
+		categoryID    int64
+		subcategories sql.NullString
+		createdAt     time.Time
+	}
+	var links []link
+	for rows.Next() {
+		var l link
+		if err := rows.Scan(&l.noteID, &l.categoryID, &l.subcategories, &l.createdAt); err != nil {
+			return err
+		}
+		links = append(links, l)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, l := range links {
+		if _, err := dst.Exec(
+			`INSERT INTO note_categories (note_id, category_id, subcategories, created_at) VALUES (?, ?, ?, ?)`,
+			l.noteID, l.categoryID, l.subcategories, l.createdAt,
+		); err != nil {
+			return err
+		}
+	}
+	if _, err := src.Exec(`DELETE FROM note_categories WHERE note_id = ?`, noteID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// DeleteNote soft-deletes a note (sets deleted_at) in whichever database
+// holds it, verifying ownership. Returns true if a note was deleted.
 func DeleteNote(id int64, userGUID string) (bool, error) {
-	// First get the note GUID for change tracking, also verify ownership
-	var noteGUID string
-	err := db.QueryRow(`SELECT guid FROM notes WHERE id = ? AND created_by = ? AND deleted_at IS NULL`, id, userGUID).Scan(&noteGUID)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, serr.Wrap(err, "failed to get note GUID for delete tracking")
-	}
-
-	query := `
-		UPDATE notes
-		SET deleted_at = CURRENT_TIMESTAMP
-		WHERE id = ? AND created_by = ? AND deleted_at IS NULL
-	`
-
-	// Delete from disk DB first (source of truth)
-	result, err := db.Exec(query, id, userGUID)
+	// Locate the note (and its engine) by ownership.
+	existing, err := GetNoteByID(id, userGUID)
 	if err != nil {
 		return false, err
 	}
+	if existing == nil {
+		return false, nil
+	}
+	en := noteEngine(existing.IsPrivate)
 
-	rowsAffected, err := result.RowsAffected()
+	result, err := en.Exec(`
+		UPDATE notes SET deleted_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND created_by = ? AND deleted_at IS NULL`, id, userGUID)
 	if err != nil {
 		return false, err
 	}
-
-	if rowsAffected == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		return false, nil
 	}
 
-	// Record change for sync (non-blocking)
-	// Delete operations don't have a fragment (null fragment ID)
-	if err := insertNoteChange(GenerateChangeGUID(), noteGUID, OperationDelete, sql.NullInt64{}, userGUID); err != nil {
+	// Record change for sync (non-blocking). Delete has no fragment.
+	if err := insertNoteChange(en, GenerateChangeGUID(), existing.GUID, OperationDelete, sql.NullInt64{}, userGUID); err != nil {
 		logger.LogErr(err, "failed to record delete change", "note_id", id)
 	}
 
-	// Also delete from cache
-	_, err = cacheDB.Exec(`UPDATE notes SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL`, id)
-	if err != nil {
-		// Cache delete failed - disk is updated but cache is out of sync
-		return true, serr.Wrap(err, "note deleted in disk DB but failed to update cache")
-	}
-
 	return true, nil
 }
 
-// HardDeleteNote permanently removes a note from both databases.
-// Use with caution - this cannot be undone. Primarily for testing
-// and administrative cleanup of soft-deleted records.
+// HardDeleteNote permanently removes a note. Since a note lives in only
+// one database, the DELETE is issued to both — the database without the
+// row simply affects zero rows. Primarily for tests and admin cleanup.
 func HardDeleteNote(id int64) (bool, error) {
-	query := `DELETE FROM notes WHERE id = ?`
-
-	// Delete from disk DB first (source of truth)
-	result, err := db.Exec(query, id)
-	if err != nil {
-		return false, err
+	var affected int64
+	for _, en := range []*dbEngine{pubDB, privDB} {
+		result, err := en.Exec(`DELETE FROM notes WHERE id = ?`, id)
+		if err != nil {
+			return affected > 0, err
+		}
+		if n, _ := result.RowsAffected(); n > 0 {
+			affected += n
+		}
 	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-
-	if rowsAffected == 0 {
-		return false, nil
-	}
-
-	// Also delete from cache
-	_, err = cacheDB.Exec(query, id)
-	if err != nil {
-		// Cache delete failed - disk is updated but cache is out of sync
-		return true, serr.Wrap(err, "note hard deleted in disk DB but failed to update cache")
-	}
-
-	return true, nil
+	return affected > 0, nil
 }
 
-// SearchNotesByTitle searches for non-deleted notes owned by a user whose title
-// contains the given query string (case-insensitive). Returns up to `limit` results
-// with only the fields needed for autocomplete (id, guid, title).
-// Used by the note-linking popup to let users search for notes to link to.
+// SearchNotesByTitle finds non-deleted notes owned by a user whose title
+// contains query (case-insensitive), across both databases, most recently
+// updated first, capped at limit. Used by the note-linking autocomplete.
 func SearchNotesByTitle(query string, userGUID string, limit int) ([]Note, error) {
 	if limit <= 0 {
 		limit = 20
 	}
 
-	sqlQuery := `
-		SELECT id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
-		       created_by, updated_by, created_at, updated_at, synced_at, deleted_at
+	sqlQuery := `SELECT ` + noteCols + `
 		FROM notes
 		WHERE created_by = ? AND deleted_at IS NULL
 		  AND LOWER(title) LIKE '%' || LOWER(?) || '%'
-		ORDER BY updated_at DESC
-		LIMIT ?
-	`
+		ORDER BY updated_at DESC`
 
-	rows, err := cacheDB.Query(sqlQuery, userGUID, query, limit)
+	notes, err := queryBothNotes(func(en *dbEngine) ([]Note, error) {
+		return queryNotes(en, sqlQuery, userGUID, query)
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	var notes []Note
-	for rows.Next() {
-		var note Note
-		err := rows.Scan(
-			&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-			&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
-			&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.SyncedAt, &note.DeletedAt,
-		)
-		if err != nil {
-			return nil, err
-		}
-		notes = append(notes, note)
-	}
-
-	return notes, rows.Err()
+	sort.SliceStable(notes, func(i, j int) bool {
+		return notes[i].UpdatedAt.After(notes[j].UpdatedAt)
+	})
+	return paginate(notes, limit, 0), nil
 }
 
-// ToggleNoteFlag toggles the is_flagged field on a note.
-// Returns the updated note or nil if not found.
+// ToggleNoteFlag flips is_flagged on a note in whichever database holds
+// it. Returns the updated note or nil if not found.
 func ToggleNoteFlag(id int64, userGUID string) (*Note, error) {
-	// Toggle in disk DB (source of truth)
-	result, err := db.Exec(`
-		UPDATE notes SET is_flagged = NOT is_flagged
-		WHERE id = ? AND created_by = ? AND deleted_at IS NULL
-	`, id, userGUID)
+	existing, err := GetNoteByID(id, userGUID)
 	if err != nil {
 		return nil, err
 	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return nil, err
-	}
-	if rowsAffected == 0 {
+	if existing == nil {
 		return nil, nil
 	}
+	en := noteEngine(existing.IsPrivate)
 
-	// Toggle in cache
-	_, err = cacheDB.Exec(`
+	result, err := en.Exec(`
 		UPDATE notes SET is_flagged = NOT is_flagged
-		WHERE id = ? AND deleted_at IS NULL
-	`, id)
+		WHERE id = ? AND created_by = ? AND deleted_at IS NULL`, id, userGUID)
 	if err != nil {
-		logger.LogErr(err, "ToggleNoteFlag: cache update failed", "note_id", id)
+		return nil, err
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		return nil, nil
 	}
 
 	return GetNoteByID(id, userGUID)
 }
 
-// toNullString converts a *string to sql.NullString for database operations.
-// Returns a valid NullString if the pointer is non-nil, invalid otherwise.
+// toNullString converts a *string to sql.NullString for database
+// operations. A nil pointer becomes an invalid (NULL) value.
 func toNullString(s *string) sql.NullString {
 	if s == nil {
 		return sql.NullString{Valid: false}

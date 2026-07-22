@@ -1,7 +1,6 @@
 package models_test
 
 import (
-	"os"
 	"testing"
 	"time"
 
@@ -15,17 +14,12 @@ const spTestUserGUID = "sp-test-user-guid-001"
 func setupSyncProtocolTestDB(t *testing.T) func() {
 	t.Helper()
 
-	os.Remove("./test_sync_protocol.ddb")
-	os.Remove("./test_sync_protocol.ddb.wal")
-
-	if err := models.InitTestDB("./test_sync_protocol.ddb"); err != nil {
+	if err := models.InitTestDB(t.TempDir()); err != nil {
 		t.Fatalf("failed to initialize test database: %v", err)
 	}
 
 	return func() {
 		models.CloseDB()
-		os.Remove("./test_sync_protocol.ddb")
-		os.Remove("./test_sync_protocol.ddb.wal")
 	}
 }
 

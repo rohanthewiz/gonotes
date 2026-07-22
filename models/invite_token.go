@@ -26,22 +26,7 @@ import (
 // without leaving tokens dangling indefinitely.
 const defaultInviteExpiry = 72 * time.Hour
 
-// DDL for invite_tokens table — stores invite tokens with usage tracking
-const DDLCreateInviteTokensSequence = `CREATE SEQUENCE IF NOT EXISTS invite_tokens_id_seq START 1;`
-
-const DDLCreateInviteTokensTable = `
-CREATE TABLE IF NOT EXISTS invite_tokens (
-    id         BIGINT PRIMARY KEY DEFAULT nextval('invite_tokens_id_seq'),
-    token      VARCHAR NOT NULL UNIQUE,
-    created_by VARCHAR NOT NULL,
-    used_by    VARCHAR,
-    expires_at TIMESTAMP NOT NULL,
-    used_at    TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-`
-
-const DDLCreateInviteTokensIndex = `CREATE INDEX IF NOT EXISTS idx_invite_tokens_token ON invite_tokens(token);`
+// Schema for invite_tokens lives in schema.go (public database only).
 
 // InviteToken represents a row in the invite_tokens table.
 type InviteToken struct {
@@ -105,13 +90,13 @@ func CreateInviteToken(createdByGUID string, expiresIn time.Duration) (*InviteTo
 	expiresAt := time.Now().Add(expiresIn)
 
 	query := `
-		INSERT INTO invite_tokens (token, created_by, expires_at)
-		VALUES (?, ?, ?)
+		INSERT INTO invite_tokens (id, token, created_by, expires_at)
+		VALUES (nextval('invite_tokens_id_seq'), ?, ?, ?)
 		RETURNING id, token, created_by, used_by, expires_at, used_at, created_at
 	`
 
 	token := &InviteToken{}
-	err := db.QueryRow(query, tokenStr, createdByGUID, expiresAt).Scan(
+	err := pubDB.QueryRow(query, tokenStr, createdByGUID, expiresAt).Scan(
 		&token.ID, &token.Token, &token.CreatedBy, &token.UsedBy,
 		&token.ExpiresAt, &token.UsedAt, &token.CreatedAt,
 	)
@@ -132,7 +117,7 @@ func ValidateInviteToken(tokenStr string) (*InviteToken, error) {
 	`
 
 	token := &InviteToken{}
-	err := db.QueryRow(query, tokenStr).Scan(
+	err := pubDB.QueryRow(query, tokenStr).Scan(
 		&token.ID, &token.Token, &token.CreatedBy, &token.UsedBy,
 		&token.ExpiresAt, &token.UsedAt, &token.CreatedAt,
 	)
@@ -162,7 +147,7 @@ func RedeemInviteToken(tokenStr, usedByGUID string) error {
 		WHERE token = ? AND used_by IS NULL
 	`
 
-	result, err := db.Exec(query, usedByGUID, tokenStr)
+	result, err := pubDB.Exec(query, usedByGUID, tokenStr)
 	if err != nil {
 		return serr.Wrap(err, "failed to redeem invite token")
 	}
@@ -185,7 +170,7 @@ func ListInviteTokens(createdByGUID string) ([]InviteTokenOutput, error) {
 		ORDER BY created_at DESC
 	`
 
-	rows, err := db.Query(query, createdByGUID)
+	rows, err := pubDB.Query(query, createdByGUID)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to list invite tokens")
 	}

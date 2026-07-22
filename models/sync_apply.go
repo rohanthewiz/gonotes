@@ -9,13 +9,16 @@ import (
 	"github.com/rohanthewiz/serr"
 )
 
-// ApplySyncNoteCreate inserts a note from sync data with an explicit authored_at.
-// Unlike CreateNote (which auto-generates authored_at via DEFAULT CURRENT_TIMESTAMP),
-// this preserves the original authoring timestamp from the source machine so that
-// the synced note reflects when it was truly authored, not when it was received.
-// Records a change with OperationSync so downstream peers don't re-propagate it.
+// sync_apply.go applies changes received from a peer. Notes are routed to
+// the database matching their privacy (a synced privacy flip moves the note
+// between databases, mirroring UpdateNote); categories, being a public-only
+// table, always land in the public database. There is no cache and no
+// per-note encryption — the private database is encrypted as a whole.
+
+// ApplySyncNoteCreate inserts a note from sync data with an explicit
+// authored_at (preserving the source authoring time). Records an
+// OperationSync change so peers don't re-propagate it.
 func ApplySyncNoteCreate(noteGUID, title string, fragment NoteFragment, authoredAt time.Time, userGUID string) (*Note, error) {
-	// Extract field values from fragment, falling back to defaults for unset fields
 	description := fragment.Description
 	body := fragment.Body
 	tags := fragment.Tags
@@ -24,36 +27,29 @@ func ApplySyncNoteCreate(noteGUID, title string, fragment NoteFragment, authored
 		isPrivate = fragment.IsPrivate.Bool
 	}
 
-	// If the fragment body is a diff, this is an error for creates — creates need full body.
-	// A create should never have a diff (no base to apply it against).
+	// A create should never carry a diff — there is no base to apply it to.
 	if fragment.BodyIsDiff {
 		return nil, serr.New("cannot apply body diff for note creation — need full body snapshot")
 	}
 
+	en := noteEngine(isPrivate)
 	createdBy := sql.NullString{String: userGUID, Valid: userGUID != ""}
 
-	// Insert into disk DB with explicit authored_at (NOT DEFAULT CURRENT_TIMESTAMP)
 	query := `
-		INSERT INTO notes (guid, title, description, body, tags, is_private, created_by, updated_by,
+		INSERT INTO notes (id, guid, title, description, body, tags, is_private, created_by, updated_by,
 		                   authored_at, synced_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-		RETURNING id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
-		          created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at
-	`
+		VALUES (nextval('notes_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		RETURNING ` + noteCols
 
 	note := &Note{}
-	err := db.QueryRow(query,
+	err := scanNoteRow(en.QueryRow(query,
 		noteGUID, title, description, body, tags, isPrivate, createdBy, createdBy, authoredAt,
-	).Scan(
-		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-		&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
-		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.AuthoredAt, &note.SyncedAt, &note.DeletedAt,
-	)
+	), note)
 	if err != nil {
-		return nil, serr.Wrap(err, "failed to insert synced note into disk")
+		return nil, serr.Wrap(err, "failed to insert synced note")
 	}
 
-	// Record change with OperationSync so it won't be pushed back to the originator
+	// Record OperationSync so it won't be pushed back to the originator.
 	syncFragment := createFragmentFromInput(NoteInput{
 		Title:       title,
 		Description: nullStringToPtr(description),
@@ -61,38 +57,23 @@ func ApplySyncNoteCreate(noteGUID, title string, fragment NoteFragment, authored
 		Tags:        nullStringToPtr(tags),
 		IsPrivate:   isPrivate,
 	}, FragmentTitle|FragmentDescription|FragmentBody|FragmentTags|FragmentIsPrivate)
-	if fragmentID, err := insertNoteFragment(syncFragment); err != nil {
+	if fragmentID, err := insertNoteFragment(en, syncFragment); err != nil {
 		logger.LogErr(err, "failed to record sync note create fragment", "note_guid", noteGUID)
 	} else {
-		if err := insertNoteChange(GenerateChangeGUID(), noteGUID, OperationSync,
+		if err := insertNoteChange(en, GenerateChangeGUID(), noteGUID, OperationSync,
 			sql.NullInt64{Int64: fragmentID, Valid: true}, userGUID); err != nil {
 			logger.LogErr(err, "failed to record sync note create change", "note_guid", noteGUID)
 		}
 	}
 
-	// Insert into cache (no authored_at in cache schema)
-	cacheQuery := `
-		INSERT INTO notes (id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
-		                   created_by, updated_by, created_at, updated_at, synced_at, deleted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
-	_, err = cacheDB.Exec(cacheQuery,
-		note.ID, note.GUID, note.Title, note.Description, note.Body,
-		note.Tags, note.IsPrivate, note.IsFlagged, note.EncryptionIV, note.CreatedBy,
-		note.UpdatedBy, note.CreatedAt, note.UpdatedAt, note.SyncedAt, note.DeletedAt,
-	)
-	if err != nil {
-		return note, serr.Wrap(err, "synced note created on disk but cache insert failed")
-	}
-
 	return note, nil
 }
 
-// ApplySyncNoteUpdate updates a note from sync data, preserving the source authored_at.
-// Builds a dynamic SET clause from the fragment bitmask so only changed fields are
-// updated. If the fragment body is a diff, it applies the diff against the current body.
+// ApplySyncNoteUpdate updates a note from sync data, preserving the source
+// authored_at. It resolves the incoming fragment (applying a body diff when
+// present) against the current note, and — if the privacy bit flips — moves
+// the note between the two databases.
 func ApplySyncNoteUpdate(noteGUID string, fragment NoteFragment, authoredAt time.Time) error {
-	// Get the current note to apply diffs against
 	existing, err := GetNoteByGUID(noteGUID)
 	if err != nil {
 		return serr.Wrap(err, "failed to get existing note for sync update")
@@ -101,163 +82,141 @@ func ApplySyncNoteUpdate(noteGUID string, fragment NoteFragment, authoredAt time
 		return serr.New("note not found for sync update: " + noteGUID)
 	}
 
-	// Build the fields to update dynamically based on the bitmask
-	setClauses := []string{}
-	args := []interface{}{}
+	// If no mutable field bits are set, there is nothing to update.
+	const mutableBits = FragmentTitle | FragmentDescription | FragmentBody | FragmentTags | FragmentIsPrivate
+	if fragment.Bitmask&mutableBits == 0 {
+		return nil
+	}
 
+	// Resolve the target field values from existing + fragment.
+	resolved := *existing
 	if fragment.Bitmask&FragmentTitle != 0 && fragment.Title.Valid {
-		setClauses = append(setClauses, "title = ?")
-		args = append(args, fragment.Title.String)
+		resolved.Title = fragment.Title.String
 	}
 	if fragment.Bitmask&FragmentDescription != 0 {
-		setClauses = append(setClauses, "description = ?")
-		args = append(args, fragment.Description)
+		resolved.Description = fragment.Description
 	}
 	if fragment.Bitmask&FragmentBody != 0 {
-		// Resolve body: apply diff if needed, otherwise use full snapshot
-		var resolvedBody sql.NullString
 		if fragment.BodyIsDiff && fragment.Body.Valid {
 			currentBody := ""
 			if existing.Body.Valid {
 				currentBody = existing.Body.String
 			}
-			newBody, err := applyBodyDiff(currentBody, fragment.Body.String)
-			if err != nil {
-				return serr.Wrap(err, "failed to apply body diff during sync update")
+			newBody, derr := applyBodyDiff(currentBody, fragment.Body.String)
+			if derr != nil {
+				return serr.Wrap(derr, "failed to apply body diff during sync update")
 			}
-			resolvedBody = sql.NullString{String: newBody, Valid: true}
+			resolved.Body = sql.NullString{String: newBody, Valid: true}
 		} else {
-			resolvedBody = fragment.Body
+			resolved.Body = fragment.Body
 		}
-		setClauses = append(setClauses, "body = ?")
-		args = append(args, resolvedBody)
 	}
 	if fragment.Bitmask&FragmentTags != 0 {
-		setClauses = append(setClauses, "tags = ?")
-		args = append(args, fragment.Tags)
+		resolved.Tags = fragment.Tags
 	}
 	if fragment.Bitmask&FragmentIsPrivate != 0 && fragment.IsPrivate.Valid {
-		setClauses = append(setClauses, "is_private = ?")
-		args = append(args, fragment.IsPrivate.Bool)
+		resolved.IsPrivate = fragment.IsPrivate.Bool
 	}
 
-	if len(setClauses) == 0 {
-		return nil // Nothing to update
+	src := noteEngine(existing.IsPrivate)
+	dst := noteEngine(resolved.IsPrivate)
+	now := time.Now().UTC()
+
+	if src == dst {
+		_, err = src.Exec(`
+			UPDATE notes SET title = ?, description = ?, body = ?, tags = ?, is_private = ?,
+			    authored_at = ?, synced_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+			WHERE guid = ? AND deleted_at IS NULL`,
+			resolved.Title, resolved.Description, resolved.Body, resolved.Tags, resolved.IsPrivate,
+			authoredAt, noteGUID,
+		)
+		if err != nil {
+			return serr.Wrap(err, "failed to update note from sync")
+		}
+	} else {
+		// Privacy flip: move the note (and its links) to the other database,
+		// preserving id/guid/created_at.
+		insertQuery := `
+			INSERT INTO notes (id, guid, title, description, body, tags, is_private, is_flagged,
+			                   created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`
+		if _, err = dst.Exec(insertQuery,
+			existing.ID, existing.GUID, resolved.Title, resolved.Description, resolved.Body, resolved.Tags,
+			resolved.IsPrivate, existing.IsFlagged, existing.CreatedBy, existing.UpdatedBy,
+			existing.CreatedAt, now, authoredAt, existing.DeletedAt,
+		); err != nil {
+			return serr.Wrap(err, "failed to insert moved note during sync privacy flip")
+		}
+		if err := moveNoteCategories(src, dst, existing.ID); err != nil {
+			logger.LogErr(err, "failed to move note category links during sync privacy flip", "note_id", existing.ID)
+		}
+		if _, err = src.Exec(`DELETE FROM notes WHERE id = ?`, existing.ID); err != nil {
+			return serr.Wrap(err, "failed to delete note from source database during sync privacy flip")
+		}
 	}
 
-	// Always update authored_at (from source) and synced_at (current time)
-	setClauses = append(setClauses, "authored_at = ?", "synced_at = CURRENT_TIMESTAMP", "updated_at = CURRENT_TIMESTAMP")
-	args = append(args, authoredAt)
-
-	// Build and execute the disk update query
-	query := "UPDATE notes SET " + joinStrings(setClauses, ", ") + " WHERE guid = ? AND deleted_at IS NULL"
-	args = append(args, noteGUID)
-
-	result, err := db.Exec(query, args...)
-	if err != nil {
-		return serr.Wrap(err, "failed to update note from sync")
-	}
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		return serr.New("no rows updated for sync note update: " + noteGUID)
-	}
-
-	// Record change with OperationSync
-	if fragmentID, err := insertNoteFragment(fragment); err != nil {
+	// Record OperationSync in the destination engine.
+	if fragmentID, err := insertNoteFragment(dst, fragment); err != nil {
 		logger.LogErr(err, "failed to record sync update fragment", "note_guid", noteGUID)
 	} else {
-		if err := insertNoteChange(GenerateChangeGUID(), noteGUID, OperationSync,
+		if err := insertNoteChange(dst, GenerateChangeGUID(), noteGUID, OperationSync,
 			sql.NullInt64{Int64: fragmentID, Valid: true}, ""); err != nil {
 			logger.LogErr(err, "failed to record sync update change", "note_guid", noteGUID)
 		}
 	}
 
-	// Update cache (mirror the same SET clause, minus authored_at/synced_at)
-	// Re-read the note from disk to get the fully resolved state
-	diskNote, err := getNoteByGUIDFromDisk(noteGUID)
-	if err != nil || diskNote == nil {
-		return serr.Wrap(err, "failed to read updated note from disk for cache sync")
-	}
-
-	cacheQuery := `
-		UPDATE notes SET title = ?, description = ?, body = ?, tags = ?, is_private = ?,
-		    updated_at = ?, synced_at = ?
-		WHERE guid = ? AND deleted_at IS NULL
-	`
-	_, err = cacheDB.Exec(cacheQuery,
-		diskNote.Title, diskNote.Description, diskNote.Body, diskNote.Tags,
-		diskNote.IsPrivate, diskNote.UpdatedAt, diskNote.SyncedAt, noteGUID,
-	)
-	if err != nil {
-		return serr.Wrap(err, "sync note updated on disk but cache update failed")
-	}
-
 	return nil
 }
 
-// ApplySyncNoteDelete soft-deletes a note received via sync.
-// Sets deleted_at on both disk and cache databases.
+// ApplySyncNoteDelete soft-deletes a note received via sync (idempotent).
 func ApplySyncNoteDelete(noteGUID string) error {
-	// Delete from disk
-	result, err := db.Exec(
+	existing, err := GetNoteByGUID(noteGUID)
+	if err != nil {
+		return serr.Wrap(err, "failed to resolve note for sync delete")
+	}
+	if existing == nil {
+		return nil // Already deleted or unknown — idempotent.
+	}
+	en := noteEngine(existing.IsPrivate)
+
+	result, err := en.Exec(
 		`UPDATE notes SET deleted_at = CURRENT_TIMESTAMP, synced_at = CURRENT_TIMESTAMP WHERE guid = ? AND deleted_at IS NULL`,
 		noteGUID,
 	)
 	if err != nil {
-		return serr.Wrap(err, "failed to soft-delete synced note from disk")
+		return serr.Wrap(err, "failed to soft-delete synced note")
 	}
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		// Note already deleted or doesn't exist — idempotent, not an error
+	if n, _ := result.RowsAffected(); n == 0 {
 		return nil
 	}
 
-	// Record change with OperationSync
-	if err := insertNoteChange(GenerateChangeGUID(), noteGUID, OperationDelete,
+	if err := insertNoteChange(en, GenerateChangeGUID(), noteGUID, OperationDelete,
 		sql.NullInt64{}, ""); err != nil {
 		logger.LogErr(err, "failed to record sync delete change", "note_guid", noteGUID)
 	}
-
-	// Delete from cache
-	_, err = cacheDB.Exec(
-		`UPDATE notes SET deleted_at = CURRENT_TIMESTAMP WHERE guid = ? AND deleted_at IS NULL`,
-		noteGUID,
-	)
-	if err != nil {
-		return serr.Wrap(err, "synced note deleted from disk but cache delete failed")
-	}
-
 	return nil
 }
 
-// ApplySyncCategoryCreate creates a category from sync data.
-// The userGUID parameter sets created_by for multi-user data isolation on the hub.
+// ApplySyncCategoryCreate creates a category from sync data (public database).
 func ApplySyncCategoryCreate(categoryGUID, name string, fragment CategoryFragment, userGUID string) (*Category, error) {
-	// Extract field values from fragment
 	description := fragment.Description
 	subcategories := fragment.Subcategories
 
-	// Convert userGUID to NullString
 	createdBy := sql.NullString{}
 	if userGUID != "" {
 		createdBy = sql.NullString{String: userGUID, Valid: true}
 	}
 
-	// Insert into disk database
-	query := `INSERT INTO categories (guid, name, description, subcategories, created_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-		RETURNING id, guid, name, description, subcategories, created_by, created_at, updated_at`
+	query := `INSERT INTO categories (id, guid, name, description, subcategories, created_by)
+		VALUES (nextval('categories_id_seq'), ?, ?, ?, ?, ?)
+		RETURNING ` + categoryCols
 
 	var category Category
-	err := db.QueryRow(query, categoryGUID, name, description, subcategories, createdBy).Scan(
-		&category.ID, &category.GUID, &category.Name, &category.Description,
-		&category.Subcategories, &category.CreatedBy, &category.CreatedAt, &category.UpdatedAt,
-	)
+	err := scanCategory(pubDB.QueryRow(query, categoryGUID, name, description, subcategories, createdBy), &category)
 	if err != nil {
-		return nil, serr.Wrap(err, "failed to insert synced category into disk")
+		return nil, serr.Wrap(err, "failed to insert synced category")
 	}
 
-	// Record change with OperationSync
 	if fragmentID, err := insertCategoryFragment(fragment); err != nil {
 		logger.LogErr(err, "failed to record sync category create fragment", "category_guid", categoryGUID)
 	} else {
@@ -267,25 +226,13 @@ func ApplySyncCategoryCreate(categoryGUID, name string, fragment CategoryFragmen
 		}
 	}
 
-	// Insert into cache
-	cacheQuery := `INSERT INTO categories (id, guid, name, description, subcategories, created_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err = cacheDB.Exec(cacheQuery,
-		category.ID, category.GUID, category.Name, category.Description,
-		category.Subcategories, category.CreatedBy, category.CreatedAt, category.UpdatedAt,
-	)
-	if err != nil {
-		return &category, serr.Wrap(err, "synced category created on disk but cache insert failed")
-	}
-
 	return &category, nil
 }
 
-// ApplySyncCategoryUpdate updates a category from sync data.
+// ApplySyncCategoryUpdate updates a category from sync data (public database).
 func ApplySyncCategoryUpdate(categoryGUID string, fragment CategoryFragment) error {
-	// Build dynamic SET clause from bitmask
 	setClauses := []string{}
-	args := []interface{}{}
+	args := []any{}
 
 	if fragment.Bitmask&CatFragmentName != 0 && fragment.Name.Valid {
 		setClauses = append(setClauses, "name = ?")
@@ -299,22 +246,18 @@ func ApplySyncCategoryUpdate(categoryGUID string, fragment CategoryFragment) err
 		setClauses = append(setClauses, "subcategories = ?")
 		args = append(args, fragment.Subcategories)
 	}
-
 	if len(setClauses) == 0 {
 		return nil
 	}
-
 	setClauses = append(setClauses, "updated_at = CURRENT_TIMESTAMP")
 
 	query := "UPDATE categories SET " + joinStrings(setClauses, ", ") + " WHERE guid = ?"
 	args = append(args, categoryGUID)
 
-	_, err := db.Exec(query, args...)
-	if err != nil {
+	if _, err := pubDB.Exec(query, args...); err != nil {
 		return serr.Wrap(err, "failed to update category from sync")
 	}
 
-	// Record change with OperationSync
 	if fragmentID, err := insertCategoryFragment(fragment); err != nil {
 		logger.LogErr(err, "failed to record sync category update fragment", "category_guid", categoryGUID)
 	} else {
@@ -323,57 +266,26 @@ func ApplySyncCategoryUpdate(categoryGUID string, fragment CategoryFragment) err
 			logger.LogErr(err, "failed to record sync category update change", "category_guid", categoryGUID)
 		}
 	}
-
-	// Update cache — re-read from disk for the resolved state
-	selectQuery := `SELECT id, guid, name, description, subcategories, created_at, updated_at
-		FROM categories WHERE guid = ?`
-	var cat Category
-	err = db.QueryRow(selectQuery, categoryGUID).Scan(
-		&cat.ID, &cat.GUID, &cat.Name, &cat.Description,
-		&cat.Subcategories, &cat.CreatedAt, &cat.UpdatedAt,
-	)
-	if err != nil {
-		return serr.Wrap(err, "failed to read updated category from disk for cache sync")
-	}
-
-	cacheQuery := `UPDATE categories SET name = ?, description = ?, subcategories = ?, updated_at = ?
-		WHERE guid = ?`
-	_, err = cacheDB.Exec(cacheQuery, cat.Name, cat.Description, cat.Subcategories, cat.UpdatedAt, categoryGUID)
-	if err != nil {
-		return serr.Wrap(err, "synced category updated on disk but cache update failed")
-	}
-
 	return nil
 }
 
-// ApplySyncCategoryDelete deletes a category from sync.
+// ApplySyncCategoryDelete deletes a category from sync (public database).
 func ApplySyncCategoryDelete(categoryGUID string) error {
-	// Delete from disk
-	_, err := db.Exec(`DELETE FROM categories WHERE guid = ?`, categoryGUID)
-	if err != nil {
-		return serr.Wrap(err, "failed to delete synced category from disk")
+	if _, err := pubDB.Exec(`DELETE FROM categories WHERE guid = ?`, categoryGUID); err != nil {
+		return serr.Wrap(err, "failed to delete synced category")
 	}
 
-	// Record change with OperationSync
 	if err := insertCategoryChange(GenerateChangeGUID(), categoryGUID, OperationDelete,
 		sql.NullInt64{}, ""); err != nil {
 		logger.LogErr(err, "failed to record sync category delete change", "category_guid", categoryGUID)
 	}
-
-	// Delete from cache
-	_, err = cacheDB.Exec(`DELETE FROM categories WHERE guid = ?`, categoryGUID)
-	if err != nil {
-		return serr.Wrap(err, "synced category deleted from disk but cache delete failed")
-	}
-
 	return nil
 }
 
-// ApplySyncNoteCategoryMapping replaces a note's entire category set from a sync snapshot.
-// The snapshot is a JSON array of NoteCategoryMappingSnapshot objects that use category GUIDs.
-// This atomically replaces all mappings, resolving GUIDs to local category IDs.
+// ApplySyncNoteCategoryMapping replaces a note's entire category set from a
+// sync snapshot (category GUIDs resolved to local ids). The link rows live
+// in the note's database.
 func ApplySyncNoteCategoryMapping(noteGUID string, mappingsJSON string) error {
-	// Resolve note GUID to local ID
 	note, err := GetNoteByGUID(noteGUID)
 	if err != nil {
 		return serr.Wrap(err, "failed to resolve note GUID for category mapping sync")
@@ -381,37 +293,30 @@ func ApplySyncNoteCategoryMapping(noteGUID string, mappingsJSON string) error {
 	if note == nil {
 		return serr.New("note not found for category mapping sync: " + noteGUID)
 	}
+	en := noteEngine(note.IsPrivate)
 
-	// Parse the mapping snapshot
 	var mappings []NoteCategoryMappingSnapshot
 	if err := json.Unmarshal([]byte(mappingsJSON), &mappings); err != nil {
 		return serr.Wrap(err, "failed to parse category mapping snapshot")
 	}
 
-	// Delete all existing mappings for this note (both databases)
-	_, err = db.Exec(`DELETE FROM note_categories WHERE note_id = ?`, note.ID)
-	if err != nil {
-		return serr.Wrap(err, "failed to clear existing note-category mappings on disk")
-	}
-	_, err = cacheDB.Exec(`DELETE FROM note_categories WHERE note_id = ?`, note.ID)
-	if err != nil {
-		return serr.Wrap(err, "failed to clear existing note-category mappings in cache")
+	// Replace all existing links for this note in its database.
+	if _, err = en.Exec(`DELETE FROM note_categories WHERE note_id = ?`, note.ID); err != nil {
+		return serr.Wrap(err, "failed to clear existing note-category mappings")
 	}
 
-	// Insert new mappings, resolving category GUIDs to local IDs
 	insertQuery := `INSERT INTO note_categories (note_id, category_id, subcategories, created_at)
 		VALUES (?, ?, ?, CURRENT_TIMESTAMP)`
 
 	for _, mapping := range mappings {
 		cat, err := GetCategoryByGUID(mapping.CategoryGUID)
 		if err != nil || cat == nil {
-			// Category doesn't exist locally yet — skip (will be resolved in a later sync pass)
+			// Category not present locally yet — a later sync pass resolves it.
 			logger.LogErr(serr.New("category not found locally during mapping sync"),
 				"skipping mapping", "category_guid", mapping.CategoryGUID)
 			continue
 		}
 
-		// Convert subcategories to JSON
 		var subcatsJSON sql.NullString
 		if len(mapping.SelectedSubcategories) > 0 {
 			jsonBytes, err := json.Marshal(mapping.SelectedSubcategories)
@@ -420,14 +325,8 @@ func ApplySyncNoteCategoryMapping(noteGUID string, mappingsJSON string) error {
 			}
 		}
 
-		// Insert into both databases
-		if _, err := db.Exec(insertQuery, note.ID, cat.ID, subcatsJSON); err != nil {
-			logger.LogErr(err, "failed to insert synced note-category mapping on disk",
-				"note_id", note.ID, "category_guid", mapping.CategoryGUID)
-			continue
-		}
-		if _, err := cacheDB.Exec(insertQuery, note.ID, cat.ID, subcatsJSON); err != nil {
-			logger.LogErr(err, "failed to insert synced note-category mapping in cache",
+		if _, err := en.Exec(insertQuery, note.ID, cat.ID, subcatsJSON); err != nil {
+			logger.LogErr(err, "failed to insert synced note-category mapping",
 				"note_id", note.ID, "category_guid", mapping.CategoryGUID)
 		}
 	}
@@ -435,9 +334,9 @@ func ApplySyncNoteCategoryMapping(noteGUID string, mappingsJSON string) error {
 	return nil
 }
 
-// Helper functions
+// --- Helper functions ---
 
-// nullStringToPtr converts a sql.NullString to a *string pointer
+// nullStringToPtr converts a sql.NullString to a *string.
 func nullStringToPtr(ns sql.NullString) *string {
 	if !ns.Valid {
 		return nil
@@ -446,7 +345,6 @@ func nullStringToPtr(ns sql.NullString) *string {
 }
 
 // joinStrings joins a slice of strings with a separator.
-// Avoids importing strings package for a simple utility.
 func joinStrings(parts []string, sep string) string {
 	if len(parts) == 0 {
 		return ""
@@ -458,29 +356,10 @@ func joinStrings(parts []string, sep string) string {
 	return result
 }
 
-// getNoteByGUIDFromDisk retrieves a note by GUID directly from the disk database.
-// Used by sync operations that need the canonical state after a disk write.
+// getNoteByGUIDFromDisk returns the canonical note by GUID from whichever
+// database holds it. Retained under its historical name for sync callers;
+// with whole-database encryption there is no decrypt step, so it is simply
+// a fan-out read.
 func getNoteByGUIDFromDisk(guid string) (*Note, error) {
-	query := `
-		SELECT id, guid, title, description, body, tags, is_private, is_flagged, encryption_iv,
-		       created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at
-		FROM notes
-		WHERE guid = ? AND deleted_at IS NULL
-	`
-
-	note := &Note{}
-	err := db.QueryRow(query, guid).Scan(
-		&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body,
-		&note.Tags, &note.IsPrivate, &note.IsFlagged, &note.EncryptionIV, &note.CreatedBy,
-		&note.UpdatedBy, &note.CreatedAt, &note.UpdatedAt, &note.AuthoredAt, &note.SyncedAt, &note.DeletedAt,
-	)
-
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, serr.Wrap(err, "failed to get note by GUID from disk")
-	}
-
-	return note, nil
+	return GetNoteByGUID(guid)
 }

@@ -10,12 +10,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// User represents an authenticated user in the system.
-// Design choices:
-// - GUID allows external references and sync across machines
-// - PasswordHash uses bcrypt and is never exposed in JSON
-// - IsActive enables soft account disabling without deletion
-// - LastLoginAt tracks login activity for security auditing
+// User represents an authenticated user. Users are a shared/system table
+// and live only in the public database (see schema.go).
 type User struct {
 	ID           int64          `json:"id"`
 	GUID         string         `json:"guid"`
@@ -30,39 +26,19 @@ type User struct {
 	LastLoginAt  sql.NullTime   `json:"last_login_at"`
 }
 
-// CreateUsersTableSQL returns the DDL for creating the users table.
-// Design notes:
-// - username and email both have UNIQUE constraints for login flexibility
-// - is_active defaults to true for new accounts
-// - Indexes on username and email for fast login lookups
-const CreateUsersTableSQL = `
-CREATE SEQUENCE IF NOT EXISTS users_id_seq START 1;
+// userCols is the canonical users projection, shared by every user
+// SELECT so it stays in lockstep with scanUser.
+const userCols = `id, guid, username, email, password_hash, display_name, is_active, is_admin,
+	created_at, updated_at, last_login_at`
 
-CREATE TABLE IF NOT EXISTS users (
-    id            BIGINT PRIMARY KEY DEFAULT nextval('users_id_seq'),
-    guid          VARCHAR NOT NULL UNIQUE,
-    username      VARCHAR NOT NULL UNIQUE,
-    email         VARCHAR UNIQUE,
-    password_hash VARCHAR NOT NULL,
-    display_name  VARCHAR,
-    is_active     BOOLEAN DEFAULT true,
-    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_login_at TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-`
-
-// DropUsersTableSQL for testing and migration rollback
-const DropUsersTableSQL = `
-DROP TABLE IF EXISTS users;
-DROP SEQUENCE IF EXISTS users_id_seq;
-`
+func scanUser(s scanner, u *User) error {
+	return s.Scan(
+		&u.ID, &u.GUID, &u.Username, &u.Email, &u.PasswordHash,
+		&u.DisplayName, &u.IsActive, &u.IsAdmin, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt,
+	)
+}
 
 // UserRegisterInput contains the data required for user registration.
-// Password is plaintext here; it will be hashed before storage.
 type UserRegisterInput struct {
 	Username    string  `json:"username"`
 	Password    string  `json:"password"`
@@ -70,14 +46,13 @@ type UserRegisterInput struct {
 	DisplayName *string `json:"display_name,omitempty"`
 }
 
-// UserLoginInput contains credentials for authentication
+// UserLoginInput contains credentials for authentication.
 type UserLoginInput struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
 // UserOutput provides a JSON-friendly representation of a User.
-// Excludes PasswordHash for security and converts NullString to pointers.
 type UserOutput struct {
 	ID          int64     `json:"id"`
 	GUID        string    `json:"guid"`
@@ -90,7 +65,7 @@ type UserOutput struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// ToOutput converts a User to UserOutput for API responses
+// ToOutput converts a User to UserOutput for API responses.
 func (u *User) ToOutput() UserOutput {
 	output := UserOutput{
 		ID:        u.ID,
@@ -101,23 +76,19 @@ func (u *User) ToOutput() UserOutput {
 		CreatedAt: u.CreatedAt,
 		UpdatedAt: u.UpdatedAt,
 	}
-
 	if u.Email.Valid {
 		output.Email = &u.Email.String
 	}
 	if u.DisplayName.Valid {
 		output.DisplayName = &u.DisplayName.String
 	}
-
 	return output
 }
 
-// Password hashing configuration
-// Cost of 12 provides good security while keeping login times reasonable (~250ms)
+// bcryptCost of 12 balances security against login latency (~250ms).
 const bcryptCost = 12
 
 // HashPassword creates a bcrypt hash of the plaintext password.
-// Returns the hash string or an error if hashing fails.
 func HashPassword(password string) (string, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
 	if err != nil {
@@ -127,15 +98,12 @@ func HashPassword(password string) (string, error) {
 }
 
 // CheckPassword verifies a plaintext password against its hash.
-// Returns true if the password matches, false otherwise.
 func CheckPassword(password, hash string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	return err == nil
 }
 
-// ValidatePassword checks if a password meets security requirements.
-// Currently requires minimum 8 characters.
-// Returns an error describing the issue, nil if valid.
+// ValidatePassword checks that a password meets security requirements.
 func ValidatePassword(password string) error {
 	if len(password) < 8 {
 		return serr.New("password must be at least 8 characters")
@@ -143,8 +111,8 @@ func ValidatePassword(password string) error {
 	return nil
 }
 
-// ValidateUsername checks if a username is valid.
-// Requires 3-50 characters, alphanumeric and underscores only.
+// ValidateUsername checks that a username is valid (3-50 chars,
+// alphanumeric and underscores only).
 func ValidateUsername(username string) error {
 	if len(username) < 3 {
 		return serr.New("username must be at least 3 characters")
@@ -152,7 +120,6 @@ func ValidateUsername(username string) error {
 	if len(username) > 50 {
 		return serr.New("username must be at most 50 characters")
 	}
-	// Allow alphanumeric and underscores
 	for _, c := range username {
 		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
 			return serr.New("username can only contain letters, numbers, and underscores")
@@ -161,11 +128,9 @@ func ValidateUsername(username string) error {
 	return nil
 }
 
-// CreateUser creates a new user in the database.
-// Handles password hashing and GUID generation.
-// Returns the created user or an error (including duplicate username/email).
+// CreateUser creates a new user (password hashed, GUID generated) in the
+// public database. The first user automatically becomes admin.
 func CreateUser(input UserRegisterInput) (*User, error) {
-	// Validate inputs
 	if err := ValidateUsername(input.Username); err != nil {
 		return nil, err
 	}
@@ -173,50 +138,38 @@ func CreateUser(input UserRegisterInput) (*User, error) {
 		return nil, err
 	}
 
-	// Hash password before storage
 	passwordHash, err := HashPassword(input.Password)
 	if err != nil {
 		return nil, err
 	}
 
-	// Generate unique GUID
 	userGUID := uuid.New().String()
 
-	// Convert optional fields to NullString
 	var email sql.NullString
 	if input.Email != nil && *input.Email != "" {
 		email = sql.NullString{String: *input.Email, Valid: true}
 	}
-
 	var displayName sql.NullString
 	if input.DisplayName != nil && *input.DisplayName != "" {
 		displayName = sql.NullString{String: *input.DisplayName, Valid: true}
 	}
 
-	// First user automatically becomes admin — there's no other way to bootstrap
-	// admin access, and subsequent users can be promoted via invite tokens or DB.
+	// First user automatically becomes admin — the only way to bootstrap
+	// admin access; subsequent users are promoted via invite tokens or DB.
 	isFirst, firstErr := IsFirstUser()
 	if firstErr != nil {
 		return nil, serr.Wrap(firstErr, "failed to check if first user")
 	}
 	isAdmin := isFirst
 
-	// Insert into database
 	query := `
-		INSERT INTO users (guid, username, email, password_hash, display_name, is_admin)
-		VALUES (?, ?, ?, ?, ?, ?)
-		RETURNING id, guid, username, email, password_hash, display_name, is_active, is_admin,
-		          created_at, updated_at, last_login_at
-	`
+		INSERT INTO users (id, guid, username, email, password_hash, display_name, is_admin)
+		VALUES (nextval('users_id_seq'), ?, ?, ?, ?, ?, ?)
+		RETURNING ` + userCols
 
 	user := &User{}
-	err = db.QueryRow(query, userGUID, input.Username, email, passwordHash, displayName, isAdmin).Scan(
-		&user.ID, &user.GUID, &user.Username, &user.Email, &user.PasswordHash,
-		&user.DisplayName, &user.IsActive, &user.IsAdmin, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
-	)
-
+	err = scanUser(pubDB.QueryRow(query, userGUID, input.Username, email, passwordHash, displayName, isAdmin), user)
 	if err != nil {
-		// Check for unique constraint violations
 		errStr := err.Error()
 		if strings.Contains(errStr, "UNIQUE") || strings.Contains(errStr, "unique") || strings.Contains(errStr, "duplicate") {
 			if strings.Contains(errStr, "username") {
@@ -233,99 +186,58 @@ func CreateUser(input UserRegisterInput) (*User, error) {
 	return user, nil
 }
 
-
-// GetUserByUsername retrieves a user by their username.
-// Returns nil, nil if user not found.
+// GetUserByUsername retrieves a user by username. Returns nil, nil if not
+// found.
 func GetUserByUsername(username string) (*User, error) {
-	query := `
-		SELECT id, guid, username, email, password_hash, display_name, is_active, is_admin,
-		       created_at, updated_at, last_login_at
-		FROM users
-		WHERE username = ?
-	`
-
 	user := &User{}
-	err := db.QueryRow(query, username).Scan(
-		&user.ID, &user.GUID, &user.Username, &user.Email, &user.PasswordHash,
-		&user.DisplayName, &user.IsActive, &user.IsAdmin, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
-	)
-
+	err := scanUser(pubDB.QueryRow(`SELECT `+userCols+` FROM users WHERE username = ?`, username), user)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to get user by username")
 	}
-
 	return user, nil
 }
 
-// GetUserByGUID retrieves a user by their GUID.
-// Returns nil, nil if user not found.
+// GetUserByGUID retrieves a user by GUID. Returns nil, nil if not found.
 func GetUserByGUID(guid string) (*User, error) {
-	query := `
-		SELECT id, guid, username, email, password_hash, display_name, is_active, is_admin,
-		       created_at, updated_at, last_login_at
-		FROM users
-		WHERE guid = ?
-	`
-
 	user := &User{}
-	err := db.QueryRow(query, guid).Scan(
-		&user.ID, &user.GUID, &user.Username, &user.Email, &user.PasswordHash,
-		&user.DisplayName, &user.IsActive, &user.IsAdmin, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
-	)
-
+	err := scanUser(pubDB.QueryRow(`SELECT `+userCols+` FROM users WHERE guid = ?`, guid), user)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to get user by GUID")
 	}
-
 	return user, nil
 }
 
-// GetUserByID retrieves a user by their ID.
-// Returns nil, nil if user not found.
+// GetUserByID retrieves a user by id. Returns nil, nil if not found.
 func GetUserByID(id int64) (*User, error) {
-	query := `
-		SELECT id, guid, username, email, password_hash, display_name, is_active, is_admin,
-		       created_at, updated_at, last_login_at
-		FROM users
-		WHERE id = ?
-	`
-
 	user := &User{}
-	err := db.QueryRow(query, id).Scan(
-		&user.ID, &user.GUID, &user.Username, &user.Email, &user.PasswordHash,
-		&user.DisplayName, &user.IsActive, &user.IsAdmin, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
-	)
-
+	err := scanUser(pubDB.QueryRow(`SELECT `+userCols+` FROM users WHERE id = ?`, id), user)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to get user by ID")
 	}
-
 	return user, nil
 }
 
 // UpdateLastLogin updates the last_login_at timestamp for a user.
-// Called after successful authentication.
 func UpdateLastLogin(userID int64) error {
-	query := `UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?`
-	_, err := db.Exec(query, userID)
+	_, err := pubDB.Exec(`UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?`, userID)
 	if err != nil {
 		return serr.Wrap(err, "failed to update last login")
 	}
 	return nil
 }
 
-// AuthenticateUser validates credentials and returns the user if valid.
-// Updates last_login_at on successful authentication.
-// Returns nil if credentials are invalid or account is disabled.
+// AuthenticateUser validates credentials and returns the user if valid,
+// updating last_login_at. Returns nil for invalid credentials or a
+// disabled account.
 func AuthenticateUser(input UserLoginInput) (*User, error) {
 	user, err := GetUserByUsername(input.Username)
 	if err != nil {
@@ -334,80 +246,55 @@ func AuthenticateUser(input UserLoginInput) (*User, error) {
 	if user == nil {
 		return nil, nil // User not found
 	}
-
-	// Check if account is active
 	if !user.IsActive {
 		return nil, serr.New("account is disabled")
 	}
-
-	// Verify password
 	if !CheckPassword(input.Password, user.PasswordHash) {
 		return nil, nil // Invalid password
 	}
-
-	// Update last login timestamp
 	if err := UpdateLastLogin(user.ID); err != nil {
-		// Log but don't fail authentication
-		// logger.LogErr(err, "failed to update last login")
+		// Log but don't fail authentication.
+		_ = err
 	}
-
 	return user, nil
 }
 
-// IsFirstUser checks if there are any users in the database.
-// Used to determine if we should migrate orphaned notes.
+// IsFirstUser reports whether there are no users yet. Used to decide
+// whether to migrate orphaned notes/categories to the first registrant.
 func IsFirstUser() (bool, error) {
 	var count int
-	err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count)
+	err := pubDB.QueryRow("SELECT COUNT(*) FROM users").Scan(&count)
 	if err != nil {
 		return false, serr.Wrap(err, "failed to count users")
 	}
 	return count == 0, nil
 }
 
-// MigrateOrphanedCategories assigns all categories with NULL created_by to the specified user.
-// Should be called after the first user registers, alongside MigrateOrphanedNotes.
-// Returns the count of migrated categories.
+// MigrateOrphanedCategories assigns categories with NULL created_by to the
+// given user (categories live only in the public database).
 func MigrateOrphanedCategories(userGUID string) (int, error) {
-	query := `UPDATE categories SET created_by = ? WHERE created_by IS NULL`
-
-	result, err := db.Exec(query, userGUID)
+	result, err := pubDB.Exec(`UPDATE categories SET created_by = ? WHERE created_by IS NULL`, userGUID)
 	if err != nil {
 		return 0, serr.Wrap(err, "failed to migrate orphaned categories")
 	}
-
-	// Also update cache
-	_, cacheErr := cacheDB.Exec(query, userGUID)
-	if cacheErr != nil {
-		// Log but don't fail - disk is source of truth
-	}
-
 	count, _ := result.RowsAffected()
 	return int(count), nil
 }
 
-// MigrateOrphanedNotes assigns all notes with NULL created_by to the specified user.
-// Should be called after the first user registers.
-// Returns the count of migrated notes.
+// MigrateOrphanedNotes assigns notes with NULL created_by to the given
+// user. Notes are spread across both databases, so the update runs on
+// each and the counts are summed.
 func MigrateOrphanedNotes(userGUID string) (int, error) {
-	query := `
-		UPDATE notes
-		SET created_by = ?, updated_by = ?
-		WHERE created_by IS NULL
-	`
-
-	result, err := db.Exec(query, userGUID, userGUID)
-	if err != nil {
-		return 0, serr.Wrap(err, "failed to migrate orphaned notes")
+	var total int64
+	for _, en := range []*dbEngine{pubDB, privDB} {
+		result, err := en.Exec(`
+			UPDATE notes SET created_by = ?, updated_by = ?
+			WHERE created_by IS NULL`, userGUID, userGUID)
+		if err != nil {
+			return int(total), serr.Wrap(err, "failed to migrate orphaned notes")
+		}
+		n, _ := result.RowsAffected()
+		total += n
 	}
-
-	// Also update cache
-	_, cacheErr := cacheDB.Exec(query, userGUID, userGUID)
-	if cacheErr != nil {
-		// Log but don't fail - disk is source of truth
-		// logger.LogErr(cacheErr, "cache update failed for orphaned notes migration")
-	}
-
-	count, _ := result.RowsAffected()
-	return int(count), nil
+	return int(total), nil
 }

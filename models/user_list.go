@@ -9,7 +9,7 @@ import "github.com/rohanthewiz/serr"
 // or switch to registration mode when the database is fresh. Only usernames
 // are exposed — no hashes or emails — since this runs pre-authentication.
 func ListUsernames() ([]string, error) {
-	rows, err := db.Query(`SELECT username FROM users WHERE is_active = true ORDER BY created_at`)
+	rows, err := pubDB.Query(`SELECT username FROM users WHERE is_active = true ORDER BY created_at`)
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to query usernames")
 	}

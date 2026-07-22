@@ -112,12 +112,8 @@ func (s *categoryTestServer) registerAndLogin(t *testing.T) {
 func setupCategoryTestServer(t *testing.T) (*categoryTestServer, func()) {
 	t.Helper()
 
-	// Remove existing test database
-	os.Remove("./data/test_categories.ddb")
-	os.Remove("./data/test_categories.ddb.wal")
-
-	// Initialize test database
-	if err := models.InitTestDB("./data/test_categories.ddb"); err != nil {
+	// Initialize test database in an isolated temp directory
+	if err := models.InitTestDB(t.TempDir()); err != nil {
 		t.Fatalf("failed to initialize test database: %v", err)
 	}
 
@@ -154,8 +150,6 @@ func setupCategoryTestServer(t *testing.T) (*categoryTestServer, func()) {
 	// Return cleanup function
 	cleanup := func() {
 		models.CloseDB()
-		os.Remove("./data/test_categories.ddb")
-		os.Remove("./data/test_categories.ddb.wal")
 	}
 
 	return testServer, cleanup

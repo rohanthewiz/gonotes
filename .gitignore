@@ -13,6 +13,7 @@ test_db/
 
 *.sqlite
 *.ddb
+*.bytdb
 data/
 
 .env
@@ -20,3 +21,6 @@ data/
 gonotes.exe
 gonotes
 models.test
+
+# migration tool binary
+gonotes-migrate
