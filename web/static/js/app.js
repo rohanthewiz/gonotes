@@ -37,6 +37,13 @@
   // Markdown Configuration with Syntax Highlighting
   // ============================================
 
+  // Copy icon: two offset rounded rectangles (the familiar "copy to clipboard"
+  // glyph). Shared by the fenced-code-block button and the inline-codespan
+  // button so both read as the same affordance at their different sizes.
+  function copyIconSvg(size) {
+    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+  }
+
   // Configure Marked.js to use highlight.js for code blocks.
   // This provides syntax highlighting for Go, Python, JavaScript, TypeScript,
   // HTML, CSS, JSON, SQL, and Bash code blocks in note previews.
@@ -90,8 +97,30 @@
       // Raw code is stashed in a data attribute so the copy handler can read
       // the original (unescaped, un-highlighted) text.
       const rawB64 = btoa(unescape(encodeURIComponent(code)));
-      const copyIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+      const copyIcon = copyIconSvg(16);
       return `<div class="code-block-wrapper"><button type="button" class="code-copy-btn" data-code="${rawB64}" onclick="app.copyCodeBlock(this)" title="Copy code" aria-label="Copy code">${copyIcon}</button><pre><code class="hljs language-${resolvedLang || 'plaintext'}">${highlighted}</code></pre></div>`;
+    };
+
+    // Inline code (`backticked` spans) gets its own small copy button so short
+    // snippets — commands, paths, identifiers — can be lifted out of a note in
+    // the read-only view without a fiddly selection drag.
+    //
+    // Marked API note: current marked passes a token object whose `text` is the
+    // RAW source and expects the renderer to escape it; older builds passed an
+    // already-escaped plain string. Normalizing to raw text up front lets one
+    // renderer serve both, and keeps the clipboard payload un-escaped.
+    renderer.codespan = function(token) {
+      const raw = typeof token === 'string'
+        ? unescapeHtmlEntities(token)
+        : (token.text || '');
+
+      // Same stash-as-base64 trick as the block renderer: the button carries
+      // the original text so the copy handler never has to reverse escaping or
+      // syntax highlighting out of the DOM.
+      const rawB64 = btoa(unescape(encodeURIComponent(raw)));
+      const copyIcon = copyIconSvg(12);
+      return `<span class="inline-code-wrapper"><code>${escapeHtmlForCode(raw)}</code>` +
+        `<button type="button" class="inline-copy-btn" data-code="${rawB64}" title="Copy" aria-label="Copy code">${copyIcon}</button></span>`;
     };
 
     // Configure Marked options for GitHub Flavored Markdown
@@ -109,6 +138,16 @@
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  // Inverse of escapeHtmlForCode: turns "&lt;div&gt;" back into "<div>".
+  // A <textarea> is used deliberately — its content model is raw text, so
+  // assigning innerHTML decodes entities without parsing any markup (no tags
+  // are constructed, no scripts can run).
+  function unescapeHtmlEntities(text) {
+    const ta = document.createElement('textarea');
+    ta.innerHTML = text;
+    return ta.value;
   }
 
   // Initialize markdown configuration when marked library is available
@@ -1571,6 +1610,26 @@
         menu.classList.remove('open');
       });
     }
+  });
+
+  // ============================================
+  // Copy buttons inside rendered markdown
+  // ============================================
+
+  // Delegated because the preview HTML is regenerated on every note render and
+  // then passed through DOMPurify, which strips inline on* handlers from the
+  // sanitized output. A listener on `document` survives both.
+  //
+  // The `btn.onclick` check keeps this compatible with markup whose inline
+  // handler did survive sanitization: there the attribute handler has already
+  // copied, so bailing out avoids writing the clipboard twice.
+  document.addEventListener('click', function(e) {
+    const btn = e.target.closest('.code-copy-btn, .inline-copy-btn');
+    if (!btn || typeof btn.onclick === 'function') return;
+    // An inline codespan can sit inside a markdown link; suppress the
+    // navigation that clicking through the button would otherwise trigger.
+    e.preventDefault();
+    window.app.copyCodeBlock(btn);
   });
 
   // ============================================

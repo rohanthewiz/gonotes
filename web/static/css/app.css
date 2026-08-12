@@ -1320,6 +1320,65 @@ mark.note-search-hit-current {
   opacity: 1;
 }
 
+/* Inline code copy button — trails each `backticked` span in the read-only
+   note view. Layout notes:
+   - The wrapper is inline-flex so the code chip and its button ride the text
+     baseline together and never split across a line break.
+   - The button sits at low opacity by default so a paragraph dense with inline
+     code stays readable, then lifts to full strength on hover/focus. */
+.markdown-content .inline-code-wrapper {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
+/* The code chip itself may wrap internally even though the chip + button pair
+   does not, so long inline snippets can't force horizontal overflow. */
+.markdown-content .inline-code-wrapper > code {
+  white-space: normal;
+}
+
+.markdown-content .inline-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  flex: none;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-dark);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0.5;
+  vertical-align: middle;
+  transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.markdown-content .inline-code-wrapper:hover .inline-copy-btn,
+.markdown-content .inline-copy-btn:focus-visible {
+  opacity: 1;
+  color: var(--primary);
+}
+
+.markdown-content .inline-copy-btn:active {
+  background: rgba(74, 222, 128, 0.35);
+  border-color: #4ade80;
+  color: #4ade80;
+  transform: scale(0.92);
+  opacity: 1;
+}
+
+.markdown-content .inline-copy-btn.copied {
+  background: rgba(74, 222, 128, 0.25);
+  border-color: #4ade80;
+  color: #4ade80;
+  opacity: 1;
+}
+
 .markdown-content blockquote {
   border-left: 4px solid var(--primary);
   padding: var(--spacing-md) var(--spacing-lg);
