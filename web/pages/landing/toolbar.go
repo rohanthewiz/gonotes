@@ -68,10 +68,20 @@ func (t Toolbar) Render(b *element.Builder) any {
 
 		// Right group — new-note, theme, user
 		b.DivClass("toolbar-right").R(
-			// New Note button — icon-only: fountain pen with ink-trail squiggle
+			// New Note button — icon-only: a page with a folded corner and a plus badge.
+			// The page's right edge is deliberately drawn only down to y=11 and its
+			// bottom edge stops at x=10, leaving the lower-right quadrant open so the
+			// plus sits in clear space instead of crossing the outline:
+			//
+			//	┌──────┐        outline: left/top/bottom-left
+			//	│ ───  │╲       fold:    triangle at top-right
+			//	│ ──   │ ╲
+			//	│    ┌─┼─┐      plus:    centered (17.5, 17.5), arms ±3.5
+			//	└────┤ + │
+			//	     └───┘
 			b.Button("class", "btn btn-primary", "id", "btn-new-note", "onclick", "app.newNote()",
 				"title", "New Note", "aria-label", "New Note").R(
-				b.Text(`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12 L12 4 L14 6 L6 14 Z" fill="currentColor" fill-opacity="0.22"/><path d="M3 15 L4 12 L6 14 Z" fill="currentColor" fill-opacity="0.5"/><path d="M12 4 L15 1 L17 3 L14 6 Z" fill="currentColor" fill-opacity="0.4"/><line x1="3" y1="15" x2="5" y2="13"/><path d="M3 20 Q 6 17, 9 20 T 15 20 T 21 20" stroke-width="1.8"/></svg>`),
+				b.Text(`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4"/><path d="M13 3l5 5h-5z" fill="currentColor" fill-opacity="0.25"/><path d="M13 3l5 5v3"/><line x1="7.5" y1="10" x2="12" y2="10"/><line x1="7.5" y1="13.5" x2="11" y2="13.5"/><line x1="17.5" y1="14" x2="17.5" y2="21" stroke-width="1.8"/><line x1="14" y1="17.5" x2="21" y2="17.5" stroke-width="1.8"/></svg>`),
 			),
 			// Theme toggle — just left of user menu
 			b.Button("class", "theme-toggle", "id", "btn-theme-toggle", "onclick", "app.toggleTheme()", "title", "Toggle theme").T("\u2600"),

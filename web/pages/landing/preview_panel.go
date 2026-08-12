@@ -74,7 +74,14 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 			),
 			// Preview footer
 			b.Div("class", "preview-footer", "id", "preview-footer", "style", "display:none").R(
-				b.Button("class", "btn btn-primary", "onclick", "app.editCurrentNote()").T("Edit"),
+				// Edit — the fountain pen with ink-trail squiggle. The pen reads as
+				// "write on this note", so it belongs on Edit rather than on New Note
+				// (which needs a "create" cue instead). .btn already sets a flex gap,
+				// so the inline SVG and the label space themselves.
+				b.Button("class", "btn btn-primary", "onclick", "app.editCurrentNote()").R(
+					b.Text(`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12 L12 4 L14 6 L6 14 Z" fill="currentColor" fill-opacity="0.22"/><path d="M3 15 L4 12 L6 14 Z" fill="currentColor" fill-opacity="0.5"/><path d="M12 4 L15 1 L17 3 L14 6 Z" fill="currentColor" fill-opacity="0.4"/><line x1="3" y1="15" x2="5" y2="13"/><path d="M3 20 Q 6 17, 9 20 T 15 20 T 21 20" stroke-width="1.8"/></svg>`),
+					b.Span().T("Edit"),
+				),
 				b.Button("class", "btn btn-secondary", "onclick", "app.duplicateCurrentNote()").T("Duplicate"),
 				b.Button("class", "btn btn-secondary text-danger", "onclick", "app.deleteCurrentNote()").T("Delete"),
 			),
