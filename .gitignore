@@ -1,7 +1,12 @@
 .idea/
 .vscode/
 .zed/
-.claude
+# Claude Code: keep local settings out, but share the project's skills.
+# The rule has to exclude .claude's *contents* rather than the directory
+# itself — git won't re-include a path whose parent directory is excluded,
+# so a plain ".claude" would make the negation below a no-op.
+.claude/*
+!.claude/skills/
 
 .DS_Store
 test/
@@ -17,6 +22,9 @@ data/
 
 .env
 
-gonotes.exe
-gonotes
+# Leading slash anchors these to the repo root: unanchored, "gonotes" matches
+# any path component of that name and would swallow directories like
+# .claude/skills/gonotes/ along with the built binary.
+/gonotes.exe
+/gonotes
 models.test
