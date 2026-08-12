@@ -125,8 +125,12 @@ func SecurityHeadersMiddleware(c rweb.Context) error {
 		"script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com", // Monaco requires unsafe-eval; CDNs for libraries
 		"style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",                                  // highlight.js theme CSS
 		"img-src 'self' data: https: blob:",
-		"font-src 'self' data:",
+		"font-src 'self' data: https://cdn.jsdelivr.net", // Monaco's codicon icon font loads from its CDN CSS
 		"connect-src 'self' https://cdn.jsdelivr.net https://unpkg.com", // Allow CDN source maps
+		// Monaco language-service workers: created from a data: URI shim that
+		// importScripts the real worker from the CDN (cross-origin workers
+		// can't be created directly, so the shim is the standard approach)
+		"worker-src 'self' blob: data:",
 	}
 	c.Response().SetHeader("Content-Security-Policy", strings.Join(csp, "; "))
 

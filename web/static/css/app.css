@@ -1655,6 +1655,24 @@ mark.note-search-hit-current {
   border: 2px dashed var(--primary);
 }
 
+/* Optional Monaco editor surface — hidden until the user opts in.
+   The .monaco-active class on the wrapper flips which surface is shown:
+   Monaco's container replaces the textarea (which stays in the DOM, hidden,
+   as the form field that actually submits the body). */
+.monaco-body-container {
+  flex: 1;
+  min-height: 0; /* Required so the flex child can shrink and Monaco can measure itself */
+  display: none;
+}
+
+.edit-body-wrapper.monaco-active .monaco-body-container {
+  display: block;
+}
+
+.edit-body-wrapper.monaco-active .edit-body {
+  display: none;
+}
+
 /* Image resize dialog */
 .image-resize-overlay {
   position: fixed;

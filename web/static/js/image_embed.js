@@ -176,6 +176,15 @@
   function doInsertImage(dataUri, altText, textarea) {
     const markdownImage = `![${altText}](${dataUri})`;
 
+    // When the optional Monaco editor is the active surface, insert there
+    // instead (padNewlines keeps the image on its own line, matching the
+    // textarea path below) — Monaco mirrors content back into the textarea
+    if (window.app._monacoActive && window.app._monacoActive()) {
+      window.app._monacoInsertText(markdownImage, { padNewlines: true });
+      showToast('Image embedded', 'success');
+      return;
+    }
+
     // Insert at cursor position
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
@@ -264,5 +273,9 @@
 
   window.app._setupImagePasteHandler = setupImagePasteHandler;
   window.app._setupImageDropHandler = setupImageDropHandler;
+
+  // Entry point for monaco_editor.js: lets Monaco's paste/drop handlers reuse
+  // the same resize dialog + insert pipeline as the textarea handlers
+  window.app._insertImageFile = insertImageAsBase64;
 
 })();

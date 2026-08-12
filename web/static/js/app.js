@@ -381,6 +381,10 @@
   window.app.saveNote = async function(event) {
     event.preventDefault();
 
+    // If the optional Monaco editor is active, flush its content into the
+    // hidden textarea so the FormData read below sees the latest body
+    if (window.app._syncMonacoToBody) window.app._syncMonacoToBody();
+
     const form = document.getElementById('edit-form');
     const formData = new FormData(form);
 
@@ -1194,6 +1198,10 @@
     document.getElementById('edit-body').value = note.body || '';
     document.getElementById('edit-private').checked = note.is_private;
 
+    // Setting .value fires no events, so push the body into Monaco explicitly
+    // when the optional Monaco editor is present (monaco_editor.js)
+    if (window.app._syncBodyToMonaco) window.app._syncBodyToMonaco();
+
     // Reset multi-category entries when populating edit form
     window.app._clearCategoryEntries();
   }
@@ -1206,6 +1214,9 @@
     document.getElementById('edit-body').value = '';
     document.getElementById('edit-private').checked = false;
 
+    // Mirror the cleared body into Monaco when the optional editor is present
+    if (window.app._syncBodyToMonaco) window.app._syncBodyToMonaco();
+
     // Clear multi-category entries
     window.app._clearCategoryEntries();
   }
@@ -1214,6 +1225,10 @@
     document.getElementById('preview-mode').classList.add('hidden');
     document.getElementById('edit-mode').classList.add('active');
     document.getElementById('edit-title').focus();
+
+    // Activate the Monaco editor if the user has opted into it
+    // (monaco_editor.js — loads Monaco lazily on first use)
+    if (window.app._monacoOnEditShown) window.app._monacoOnEditShown();
   }
 
   function showPreviewMode() {

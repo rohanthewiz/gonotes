@@ -114,9 +114,15 @@ func getContentType(path string) string {
 	}
 }
 
-// isAsset checks if the path is a cacheable asset
+// isAsset checks if the path is a cacheable asset.
+// Paths arrive with the "/static/" prefix already stripped, so vendored files
+// look like "vendor/monaco/vs/loader.js" — hence the HasPrefix check alongside
+// the Contains check (which only matches "/vendor/" nested deeper in a path).
+// Vendored libraries are versioned in place (replaced wholesale on upgrade),
+// so the long max-age is safe.
 func isAsset(path string) bool {
-	return strings.Contains(path, "/vendor/") ||
+	return strings.HasPrefix(path, "vendor/") ||
+		strings.Contains(path, "/vendor/") ||
 		strings.HasSuffix(path, ".woff2") ||
 		strings.HasSuffix(path, ".woff") ||
 		strings.HasSuffix(path, ".ttf")

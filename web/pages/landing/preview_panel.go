@@ -122,10 +122,15 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 					),
 				),
 
-				// Body textarea
+				// Body editor: a plain textarea (default) and an optional Monaco editor.
+				// The textarea always carries name="body" so form submission is unchanged;
+				// when Monaco is active it mirrors its content into the (hidden) textarea.
+				// The .monaco-active class on the wrapper switches which surface is visible.
 				b.DivClass("edit-body-wrapper").R(
 					b.TextArea("class", "edit-body", "id", "edit-body", "name", "body",
 						"placeholder", "Write your note in Markdown...").R(),
+					// Monaco mounts here on first activation (lazily loaded from CDN)
+					b.Div("class", "monaco-body-container", "id", "monaco-body-container").R(),
 				),
 
 				// Footer with actions
@@ -133,6 +138,13 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 					b.LabelClass("privacy-toggle").R(
 						b.Input("type", "checkbox", "class", "privacy-checkbox", "id", "edit-private", "name", "is_private"),
 						b.Span().T("Private (Encrypt this note)"),
+					),
+					// Monaco editor opt-in — preference persists in localStorage.
+					// Reuses the privacy-toggle styling for a consistent checkbox look.
+					b.Label("class", "privacy-toggle", "title", "Full Monaco code editor with the complete monaco.editor API (loaded from CDN on demand)").R(
+						b.Input("type", "checkbox", "class", "privacy-checkbox", "id", "edit-monaco-toggle",
+							"onchange", "app.toggleMonacoEditor(this.checked)"),
+						b.Span().T("Monaco editor"),
 					),
 					b.DivClass("edit-actions").R(
 						b.Button("type", "button", "class", "btn btn-secondary", "onclick", "app.showLinkNotePopup()").T("Link to Note"),

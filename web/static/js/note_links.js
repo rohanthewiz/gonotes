@@ -228,6 +228,15 @@
   // Insert a note link at the cursor position in the textarea
   function insertNoteLink(guid, title, textarea) {
     const linkSyntax = `[[note:${guid}|${title}]]`;
+
+    // When the optional Monaco editor is the active surface, insert there
+    // instead — it mirrors content back into the textarea itself
+    if (window.app._monacoActive && window.app._monacoActive()) {
+      window.app._monacoInsertText(linkSyntax);
+      showToast('Note link inserted', 'success');
+      return;
+    }
+
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
     const before = textarea.value.substring(0, start);
