@@ -268,6 +268,36 @@
   }
 
   // ============================================
+  // Attach-file button (paperclip in the edit footer)
+  // ============================================
+
+  // Open the hidden file picker. Living here rather than in app.js keeps the
+  // whole "file -> data URI -> markdown" path in one module: whichever way the
+  // file arrives (paste, drop, or picker) it lands in insertImageAsBase64.
+  window.app.attachFile = function() {
+    const input = document.getElementById('attach-file-input');
+    if (!input) return;
+    // Clearing first means picking the same file twice still fires 'change'
+    // (the input's value is unchanged otherwise, so no event is emitted).
+    input.value = '';
+    input.click();
+  };
+
+  // Change handler for the hidden picker — routes the selection through the
+  // same resize dialog + insert pipeline used by paste and drop.
+  window.app.attachFileSelected = function(input) {
+    const file = input && input.files && input.files[0];
+    if (!file) return;
+
+    // The textarea is the insert target even when Monaco is the visible
+    // surface: doInsertImage checks for Monaco itself and mirrors back.
+    const textarea = document.getElementById('edit-body');
+    if (!textarea) return;
+
+    insertImageAsBase64(file, textarea);
+  };
+
+  // ============================================
   // Expose Functions for app.js
   // ============================================
 

@@ -154,6 +154,29 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 						b.Span().T("Monaco editor"),
 					),
 					b.DivClass("edit-actions").R(
+						// Attach file — a paperclip drawn as one unbroken stroke running
+						// on the diagonal, so it reads as a single bent wire rather than
+						// three separate arcs. Traced from the free end at top-right:
+						//
+						//	          ╭──╮      r=4 hook: the small top bend
+						//	        ╱╱   │
+						//	      ╱╱  ╱╱ │      the two parallel legs are the outer
+						//	    ╱╱  ╱╱   │      wall and the inner return stroke
+						//	  ╱╱  ╱╱     │
+						//	 │  ╱╱     ╱╱       r=2 hook: inner stroke ends early,
+						//	 ╰─╯      ╱╯        leaving the clip open
+						//	  r=6 hook (bottom-left) wraps both legs
+						//
+						// The button opens the hidden file input below; the chosen file
+						// flows through the same resize/embed pipeline as paste & drop.
+						b.Button("type", "button", "class", "btn btn-secondary", "onclick", "app.attachFile()",
+							"title", "Attach an image file", "aria-label", "Attach file").R(
+							b.Text(`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>`),
+						),
+						// Hidden picker backing the paperclip button. No name attribute,
+						// so it is never serialized with the note form on save.
+						b.Input("type", "file", "id", "attach-file-input", "accept", "image/*",
+							"style", "display:none", "onchange", "app.attachFileSelected(this)"),
 						b.Button("type", "button", "class", "btn btn-secondary", "onclick", "app.showLinkNotePopup()").T("Link to Note"),
 						b.Button("type", "button", "class", "btn btn-secondary", "onclick", "app.cancelEdit()").T("Cancel"),
 						b.Button("type", "submit", "class", "btn btn-primary", "id", "btn-save").T("Save"),
