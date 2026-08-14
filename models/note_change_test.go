@@ -1,7 +1,6 @@
 package models_test
 
 import (
-	"os"
 	"testing"
 
 	"gonotes/models"
@@ -14,20 +13,14 @@ const ncTestUserGUID = "nc-test-user-guid-001"
 func setupNoteChangeTestDB(t *testing.T) func() {
 	t.Helper()
 
-	// Remove existing test database files
-	os.Remove("./test_note_change.ddb")
-	os.Remove("./test_note_change.ddb.wal")
-
-	// Initialize test database
-	if err := models.InitTestDB("./test_note_change.ddb"); err != nil {
+	// Initialize test database in an isolated temp directory
+	if err := models.InitTestDB(t.TempDir()); err != nil {
 		t.Fatalf("failed to initialize test database: %v", err)
 	}
 
 	// Return cleanup function
 	return func() {
 		models.CloseDB()
-		os.Remove("./test_note_change.ddb")
-		os.Remove("./test_note_change.ddb.wal")
 	}
 }
 

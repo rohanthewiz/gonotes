@@ -29,8 +29,8 @@ Re-run any time to update to the latest `master`.
 
 ### What it does
 
-- Ensures Go ≥ 1.24 is available (uses system Go, or auto-installs a private copy under `~/.local/go`).
-- Clones/updates the source into `~/.gonotes-src` and builds the `gonotes` binary (DuckDB is cgo, so the build needs a C compiler).
+- Ensures Go ≥ 1.26.1 is available (uses system Go, or auto-installs a private copy under `~/.local/go`). The main binary is now pure Go (bytdb-backed) and needs no C compiler; only the optional DuckDB→bytdb migration tool under `scripts/migrate` is cgo.
+- Clones/updates the source into `~/.gonotes-src` and builds the `gonotes` binary.
 - Generates an app icon and assembles `GoNotes.app`, wiring up Cmd+Q and the standard edit shortcuts.
 
 On first launch, register an account in the app window — the first user you register becomes **admin**. The app stores its data in `~/.gonotes/data` (the same location the `gonotes` CLI uses by default), so the app and command line share one database. Logs go to `~/Library/Logs/GoNotes/gonotes.log`.
@@ -53,7 +53,18 @@ Override defaults with environment variables, e.g. `GN_PORT=9000 ./mac-install.s
 | `GN_APP_NAME` | `GoNotes` | App (and window) name |
 | `GN_PORT` | `8444` | Port the app's server listens on |
 
-> **Note:** DuckDB is single-writer. Don't run the app and a terminal `gonotes` at the same time — they share `~/.gonotes/data/notes.ddb`, and the second to start won't be able to open it.
+> **Note:** the databases are single-writer. Don't run the app and a terminal `gonotes` at the same time — they share `~/.gonotes/data/notes_public.bytdb` and `notes_private.bytdb`, and the second to start won't be able to open them.
+
+## Storage
+
+GoNotes stores data in two [bytdb](https://github.com/rohanthewiz/bytdb) databases under `~/.gonotes/data`, split by privacy:
+
+- `notes_public.bytdb` — non-private notes and their category links, plus the shared/system tables (the categories catalog, users, invite tokens, sync state, sync conflicts). Plaintext on disk.
+- `notes_private.bytdb` — private notes and their category links and sync change-tracking. When `GONOTES_ENCRYPTION_KEY` (32 bytes) is set, this file is AES-256-GCM encrypted at rest; rows stay plaintext in RAM so queries pay no crypto cost. Reopening it later requires the same key.
+
+bytdb keeps all rows in memory (the on-disk write-ahead log is only for durability), so there is no separate read cache. Reads that span a user's whole note set — listing, search, sync — fan out to both databases on separate goroutines and merge (divide and conquer). Note ids are globally unique across the two databases (the private one offsets its id sequence), so a note stays addressable by id no matter which database holds it, and toggling a note's privacy moves it between the two files while preserving its id.
+
+Migrating from a pre-existing DuckDB database? See [scripts/migrate](scripts/migrate) — a standalone tool that reads the legacy `data/notes.ddb`, decrypts any legacy per-note ciphertext, and writes the two bytdb files.
 
 ---
 
@@ -192,7 +203,7 @@ On first run (empty database) the TUI walks you through creating an account; aft
 
 Notes:
 - Categories on the note form are comma-separated names; unknown names are created automatically on save.
-- The TUI shares the database with the web server. Avoid running both against the same directory at the same time (DuckDB allows a single writer process).
+- The TUI shares the databases with the web server. Avoid running both against the same directory at the same time (bytdb allows a single writer process per database).
 - With `GONOTES_ENCRYPTION_KEY` set (env or `config/cfg_files/.env`), private notes are encrypted at rest, same as the web app.
 
 ---
@@ -258,7 +269,7 @@ Notes:
 
 ### Important: stop the server first
 
-As with `import-gob`, DuckDB holds an exclusive lock on the database, so stop the running server before invoking `export-md` or `import-md`.
+As with `import-gob`, the databases are single-writer, so stop the running server before invoking `export-md` or `import-md`.
 
 ---
 
@@ -296,7 +307,7 @@ import-gob: 42 imported, 0 skipped (duplicate GUID), 0 errored (of 42 total)
 
 ### Important: stop the server first
 
-DuckDB holds an exclusive lock on `./data/notes.ddb`, so the running server must be stopped before invoking `import-gob`. After the import completes, restart the server normally.
+The bytdb databases are single-writer, so the running server must be stopped before invoking `import-gob`. After the import completes, restart the server normally.
 
 ### Field mapping
 

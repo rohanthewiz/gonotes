@@ -29,12 +29,8 @@ type testServer struct {
 func newTestServer(t *testing.T) *testServer {
 	t.Helper()
 
-	// Remove existing test database to ensure clean state
-	os.Remove("./data/test_notes.ddb")
-	os.Remove("./data/test_notes.ddb.wal")
-
-	// Initialize database with test path
-	if err := models.InitTestDB("./data/test_notes.ddb"); err != nil {
+	// Initialize database in an isolated temp directory
+	if err := models.InitTestDB(t.TempDir()); err != nil {
 		t.Fatalf("failed to initialize test database: %v", err)
 	}
 
@@ -98,11 +94,9 @@ func (ts *testServer) registerTestUser(t *testing.T) {
 	ts.authToken = data["token"].(string)
 }
 
-// cleanup stops the server and removes test database
+// cleanup stops the server and closes the test databases
 func (ts *testServer) cleanup() {
 	models.CloseDB()
-	os.Remove("./data/test_notes.ddb")
-	os.Remove("./data/test_notes.ddb.wal")
 }
 
 // request makes an HTTP request with auth token and returns status code and parsed JSON response

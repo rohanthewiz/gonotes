@@ -330,24 +330,31 @@ func GetUnifiedChangesForPeer(peerID string, userGUID string, limit int) (*SyncP
 	}, nil
 }
 
-// getNoteAuthoredAt queries the disk database for a note's authored_at timestamp.
-// Falls back to zero time if the note doesn't exist or the query fails.
+// getNoteAuthoredAt returns a note's authored_at timestamp from whichever
+// database holds it. Falls back to zero time if the note isn't found.
 func getNoteAuthoredAt(noteGUID string) (time.Time, error) {
-	var authoredAt sql.NullTime
-	err := db.QueryRow(`SELECT authored_at FROM notes WHERE guid = ?`, noteGUID).Scan(&authoredAt)
-	if err != nil {
-		return time.Time{}, serr.Wrap(err, "failed to get note authored_at")
-	}
-	if authoredAt.Valid {
-		return authoredAt.Time, nil
+	for _, en := range []*dbEngine{pubDB, privDB} {
+		var authoredAt sql.NullTime
+		err := en.QueryRow(`SELECT authored_at FROM notes WHERE guid = ?`, noteGUID).Scan(&authoredAt)
+		if err == sql.ErrNoRows {
+			continue
+		}
+		if err != nil {
+			return time.Time{}, serr.Wrap(err, "failed to get note authored_at")
+		}
+		if authoredAt.Valid {
+			return authoredAt.Time, nil
+		}
+		return time.Time{}, nil
 	}
 	return time.Time{}, nil
 }
 
-// getCategoryUpdatedAt queries the disk database for a category's updated_at timestamp.
+// getCategoryUpdatedAt queries the public catalog for a category's
+// updated_at timestamp.
 func getCategoryUpdatedAt(categoryGUID string) (time.Time, error) {
 	var updatedAt time.Time
-	err := db.QueryRow(`SELECT updated_at FROM categories WHERE guid = ?`, categoryGUID).Scan(&updatedAt)
+	err := pubDB.QueryRow(`SELECT updated_at FROM categories WHERE guid = ?`, categoryGUID).Scan(&updatedAt)
 	if err != nil {
 		return time.Time{}, serr.Wrap(err, "failed to get category updated_at")
 	}
@@ -561,15 +568,15 @@ func deserializeCategoryFragment(fragment any) (CategoryFragment, error) {
 func changeGUIDExists(guid string) bool {
 	var count int
 
-	// Check note_changes
-	err := db.QueryRow(`SELECT COUNT(*) FROM note_changes WHERE guid = ?`, guid).Scan(&count)
-	if err == nil && count > 0 {
-		return true
+	// note_changes live in both databases.
+	for _, en := range []*dbEngine{pubDB, privDB} {
+		if err := en.QueryRow(`SELECT COUNT(*) FROM note_changes WHERE guid = ?`, guid).Scan(&count); err == nil && count > 0 {
+			return true
+		}
 	}
 
-	// Check category_changes
-	err = db.QueryRow(`SELECT COUNT(*) FROM category_changes WHERE guid = ?`, guid).Scan(&count)
-	if err == nil && count > 0 {
+	// category_changes live only in the public database.
+	if err := pubDB.QueryRow(`SELECT COUNT(*) FROM category_changes WHERE guid = ?`, guid).Scan(&count); err == nil && count > 0 {
 		return true
 	}
 
@@ -700,29 +707,32 @@ func getCategorySnapshot(categoryGUID, userGUID string) (*SyncChange, error) {
 // category GUIDs, separated by a pipe character. Identical data sets on
 // two machines will produce the same checksum.
 func GetSyncStatus(userGUID string) (*SyncStatusResponse, error) {
-	// Count notes (non-deleted), optionally filtered by user ownership
+	// Count notes (non-deleted) across both databases, optionally filtered
+	// by user ownership.
 	var noteCount int
-	if userGUID != "" {
-		err := db.QueryRow(`SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL AND created_by = ?`, userGUID).Scan(&noteCount)
+	for _, en := range []*dbEngine{pubDB, privDB} {
+		var c int
+		var err error
+		if userGUID != "" {
+			err = en.QueryRow(`SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL AND created_by = ?`, userGUID).Scan(&c)
+		} else {
+			err = en.QueryRow(`SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL`).Scan(&c)
+		}
 		if err != nil {
 			return nil, serr.Wrap(err, "failed to count notes for sync status")
 		}
-	} else {
-		err := db.QueryRow(`SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL`).Scan(&noteCount)
-		if err != nil {
-			return nil, serr.Wrap(err, "failed to count notes for sync status")
-		}
+		noteCount += c
 	}
 
-	// Count categories, optionally filtered by user ownership
+	// Count categories (public catalog), optionally filtered by ownership.
 	var categoryCount int
 	if userGUID != "" {
-		err := db.QueryRow(`SELECT COUNT(*) FROM categories WHERE created_by = ?`, userGUID).Scan(&categoryCount)
+		err := pubDB.QueryRow(`SELECT COUNT(*) FROM categories WHERE created_by = ?`, userGUID).Scan(&categoryCount)
 		if err != nil {
 			return nil, serr.Wrap(err, "failed to count categories for sync status")
 		}
 	} else {
-		err := db.QueryRow(`SELECT COUNT(*) FROM categories`).Scan(&categoryCount)
+		err := pubDB.QueryRow(`SELECT COUNT(*) FROM categories`).Scan(&categoryCount)
 		if err != nil {
 			return nil, serr.Wrap(err, "failed to count categories for sync status")
 		}
@@ -745,24 +755,28 @@ func GetSyncStatus(userGUID string) (*SyncStatusResponse, error) {
 // category GUIDs. The hash changes whenever an entity is added, removed, or
 // has its GUID altered (which shouldn't happen, but would be caught).
 func computeSyncChecksum(userGUID string) (string, error) {
-	// Collect note GUIDs, optionally filtered by user ownership
+	// Collect note GUIDs from both databases, optionally filtered by owner.
 	var noteGUIDs []string
 	var err error
-	if userGUID != "" {
-		noteGUIDs, err = collectGUIDsWithArgs(`SELECT guid FROM notes WHERE deleted_at IS NULL AND created_by = ? ORDER BY guid`, userGUID)
-	} else {
-		noteGUIDs, err = collectGUIDs(`SELECT guid FROM notes WHERE deleted_at IS NULL ORDER BY guid`)
-	}
-	if err != nil {
-		return "", serr.Wrap(err, "failed to collect note GUIDs for checksum")
+	for _, en := range []*dbEngine{pubDB, privDB} {
+		var g []string
+		if userGUID != "" {
+			g, err = collectGUIDs(en, `SELECT guid FROM notes WHERE deleted_at IS NULL AND created_by = ? ORDER BY guid`, userGUID)
+		} else {
+			g, err = collectGUIDs(en, `SELECT guid FROM notes WHERE deleted_at IS NULL ORDER BY guid`)
+		}
+		if err != nil {
+			return "", serr.Wrap(err, "failed to collect note GUIDs for checksum")
+		}
+		noteGUIDs = append(noteGUIDs, g...)
 	}
 
-	// Collect category GUIDs, optionally filtered by user ownership
+	// Collect category GUIDs from the public catalog, optionally by owner.
 	var categoryGUIDs []string
 	if userGUID != "" {
-		categoryGUIDs, err = collectGUIDsWithArgs(`SELECT guid FROM categories WHERE created_by = ? ORDER BY guid`, userGUID)
+		categoryGUIDs, err = collectGUIDs(pubDB, `SELECT guid FROM categories WHERE created_by = ? ORDER BY guid`, userGUID)
 	} else {
-		categoryGUIDs, err = collectGUIDs(`SELECT guid FROM categories ORDER BY guid`)
+		categoryGUIDs, err = collectGUIDs(pubDB, `SELECT guid FROM categories ORDER BY guid`)
 	}
 	if err != nil {
 		return "", serr.Wrap(err, "failed to collect category GUIDs for checksum")
@@ -786,29 +800,10 @@ func computeSyncChecksum(userGUID string) (string, error) {
 	return fmt.Sprintf("%x", h), nil
 }
 
-// collectGUIDs executes a query that returns a single VARCHAR column and
-// collects all rows into a string slice.
-func collectGUIDs(query string) ([]string, error) {
-	rows, err := db.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var guids []string
-	for rows.Next() {
-		var guid string
-		if err := rows.Scan(&guid); err != nil {
-			return nil, err
-		}
-		guids = append(guids, guid)
-	}
-	return guids, rows.Err()
-}
-
-// collectGUIDsWithArgs executes a parameterized query returning a single VARCHAR column.
-func collectGUIDsWithArgs(query string, args ...any) ([]string, error) {
-	rows, err := db.Query(query, args...)
+// collectGUIDs executes a (possibly parameterized) query on one engine that
+// returns a single VARCHAR column and collects all rows into a slice.
+func collectGUIDs(en *dbEngine, query string, args ...any) ([]string, error) {
+	rows, err := en.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}

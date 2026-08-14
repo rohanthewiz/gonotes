@@ -69,10 +69,7 @@ func (s *syncTestServer) registerAndLogin(t *testing.T) {
 func setupSyncTestServer(t *testing.T) (*syncTestServer, func()) {
 	t.Helper()
 
-	os.Remove("./data/test_sync.ddb")
-	os.Remove("./data/test_sync.ddb.wal")
-
-	if err := models.InitTestDB("./data/test_sync.ddb"); err != nil {
+	if err := models.InitTestDB(t.TempDir()); err != nil {
 		t.Fatalf("failed to initialize test database: %v", err)
 	}
 
@@ -103,8 +100,6 @@ func setupSyncTestServer(t *testing.T) (*syncTestServer, func()) {
 
 	cleanup := func() {
 		models.CloseDB()
-		os.Remove("./data/test_sync.ddb")
-		os.Remove("./data/test_sync.ddb.wal")
 	}
 
 	return testServer, cleanup

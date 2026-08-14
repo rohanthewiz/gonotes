@@ -13,10 +13,9 @@ import (
 func setupImportTest(t *testing.T) (cleanup func(), userGUID string) {
 	t.Helper()
 
-	os.Remove("./test_import.ddb")
-	os.Remove("./test_import.ddb.wal")
+	dbDir := t.TempDir()
 
-	if err := models.InitTestDB("./test_import.ddb"); err != nil {
+	if err := models.InitTestDB(dbDir); err != nil {
 		t.Fatalf("InitTestDB: %v", err)
 	}
 
@@ -26,14 +25,11 @@ func setupImportTest(t *testing.T) (cleanup func(), userGUID string) {
 	})
 	if err != nil {
 		models.CloseDB()
-		os.Remove("./test_import.ddb")
 		t.Fatalf("CreateUser: %v", err)
 	}
 
 	cleanup = func() {
 		models.CloseDB()
-		os.Remove("./test_import.ddb")
-		os.Remove("./test_import.ddb.wal")
 	}
 	return cleanup, user.GUID
 }
@@ -192,8 +188,9 @@ func TestImportGob_AuthoredAtFromDisk(t *testing.T) {
 		t.Fatalf("expected 1 imported, got %+v", summary)
 	}
 
+	// Imported notes are non-private, so they live in the public database.
 	var authoredAt time.Time
-	err := models.DB().QueryRow(
+	err := models.PubDB().QueryRow(
 		`SELECT authored_at FROM notes WHERE guid = ?`, "leg-authored",
 	).Scan(&authoredAt)
 	if err != nil {
