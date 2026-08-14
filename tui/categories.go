@@ -3,9 +3,9 @@ package tui
 import (
 	"gonotes/models"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
 )
 
 // categoriesScreen lists the user's categories. Its primary job is picking a
@@ -29,14 +29,9 @@ func (i catItem) Description() string {
 func (i catItem) FilterValue() string { return i.cat.Name }
 
 func newCategoriesScreen(sess *session) *categoriesScreen {
-	delegate := list.NewDefaultDelegate()
-	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
-		Foreground(colorPrimary).BorderLeftForeground(colorPrimary)
-	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.
-		Foreground(colorSubtle).BorderLeftForeground(colorPrimary)
-
-	l := list.New([]list.Item{}, delegate, sess.width, sess.height)
+	l := list.New([]list.Item{}, newListDelegate(), sess.width, sess.height)
 	l.Title = "Categories"
+	l.Styles = list.DefaultStyles(isDark) // see newListDelegate in browse.go
 	l.Styles.Title = appTitleStyle
 	l.SetStatusBarItemName("category", "categories")
 	l.DisableQuitKeybindings()
@@ -98,7 +93,7 @@ func (s *categoriesScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		}
 		return s, tea.Batch(s.refresh(), status("Category deleted"))
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if s.list.FilterState() == list.Filtering {
 			break
 		}

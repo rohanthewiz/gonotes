@@ -5,9 +5,9 @@ import (
 
 	"gonotes/models"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
 )
 
 // browseScreen is the home screen: the user's notes in a filterable list.
@@ -76,15 +76,28 @@ func firstLine(s string) string {
 	return strings.TrimSpace(strings.TrimLeft(s, "# "))
 }
 
-func newBrowseScreen(sess *session) *browseScreen {
+// newListDelegate builds the shared row renderer used by both list screens
+// (notes and categories), accented with the app's primary color.
+//
+// The explicit NewDefaultItemStyles(isDark) is not cosmetic bookkeeping.
+// list.NewDefaultDelegate() in bubbles v2 hardcodes the dark style set — its
+// own source marks that "XXX ... temporarily" — because lipgloss v2 removed
+// AdaptiveColor and the widget has no way to ask the terminal itself. Without
+// this, a light-background terminal loses the row contrast v1 gave for free.
+func newListDelegate() list.DefaultDelegate {
 	delegate := list.NewDefaultDelegate()
+	delegate.Styles = list.NewDefaultItemStyles(isDark)
 	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
 		Foreground(colorPrimary).BorderLeftForeground(colorPrimary)
 	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.
 		Foreground(colorSubtle).BorderLeftForeground(colorPrimary)
+	return delegate
+}
 
-	l := list.New([]list.Item{}, delegate, sess.width, sess.height)
+func newBrowseScreen(sess *session) *browseScreen {
+	l := list.New([]list.Item{}, newListDelegate(), sess.width, sess.height)
 	l.Title = "GoNotes"
+	l.Styles = list.DefaultStyles(isDark) // same hardcoded-dark caveat as the delegate
 	l.Styles.Title = appTitleStyle
 	l.SetShowStatusBar(true)
 	l.SetStatusBarItemName("note", "notes")
@@ -166,7 +179,7 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		}
 		return s, tea.Batch(s.refresh(), status("Note deleted"))
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		// While the fuzzy filter prompt is active, every key belongs to it.
 		if s.list.FilterState() == list.Filtering {
 			break

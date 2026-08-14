@@ -3,9 +3,9 @@ package tui
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // loginScreen handles both sign-in and first-run registration.
@@ -46,12 +46,30 @@ func newLoginScreen(sess *session) *loginScreen {
 	confirm.EchoMode = textinput.EchoPassword
 	confirm.CharLimit = 128
 
-	return &loginScreen{
+	s := &loginScreen{
 		sess:     sess,
 		username: username,
 		password: password,
 		confirm:  confirm,
 	}
+	s.restyle()
+	return s
+}
+
+// restyle applies the palette's current light/dark answer to the three text
+// inputs. bubbles v2 defaults every widget to a hardcoded dark style set
+// (lipgloss v2 removed AdaptiveColor, so the widget cannot ask the terminal
+// itself), and it copies that set in at construction — so this has to run
+// again if the background turns out to be light.
+//
+// The login screen is built before the program starts, which makes it the
+// only screen that can be on the stack when tea.BackgroundColorMsg lands.
+// See the restyler interface in tui.go.
+func (s *loginScreen) restyle() {
+	st := textinput.DefaultStyles(isDark)
+	s.username.SetStyles(st)
+	s.password.SetStyles(st)
+	s.confirm.SetStyles(st)
 }
 
 func (s *loginScreen) Init() tea.Cmd {
@@ -106,7 +124,7 @@ func (s *loginScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		s.errText = msg.err.Error()
 		return s, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if s.busy {
 			return s, nil // ignore input while a login attempt is in flight
 		}
@@ -207,5 +225,6 @@ func (s *loginScreen) View() string {
 	return card
 }
 
-// Compile-time interface check keeps refactors honest.
+// Compile-time interface checks keep refactors honest.
 var _ screen = (*loginScreen)(nil)
+var _ restyler = (*loginScreen)(nil)

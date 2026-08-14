@@ -3,9 +3,9 @@ package tui
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // confirmScreen is a modal yes/no dialog pushed on top of whatever screen
@@ -28,7 +28,7 @@ func newConfirmScreen(sess *session, prompt string, onYes tea.Cmd) *confirmScree
 func (s *confirmScreen) Init() tea.Cmd { return nil }
 
 func (s *confirmScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
-	if key, ok := msg.(tea.KeyMsg); ok {
+	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "y", "Y", "enter":
 			return s, tea.Sequence(pop(false), s.onYes)
@@ -59,8 +59,9 @@ type promptScreen struct {
 
 func newPromptScreen(sess *session, title string, onSubmit func(string) tea.Cmd) *promptScreen {
 	ti := textinput.New()
+	ti.SetStyles(textinput.DefaultStyles(isDark)) // see the note in form.go
 	ti.CharLimit = 120
-	ti.Width = 32
+	ti.SetWidth(32) // v2: width is unexported
 	ti.Focus()
 	return &promptScreen{sess: sess, title: title, input: ti, onSubmit: onSubmit}
 }
@@ -68,7 +69,7 @@ func newPromptScreen(sess *session, title string, onSubmit func(string) tea.Cmd)
 func (s *promptScreen) Init() tea.Cmd { return textinput.Blink }
 
 func (s *promptScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
-	if key, ok := msg.(tea.KeyMsg); ok {
+	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "enter":
 			value := strings.TrimSpace(s.input.Value())

@@ -3,7 +3,7 @@ package tui
 import (
 	"gonotes/models"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/rohanthewiz/serr"
 )
 
@@ -41,6 +41,20 @@ type refresher interface {
 	refresh() tea.Cmd
 }
 
+// restyler is optionally implemented by screens holding bubbles widgets,
+// which copy their style set in at construction and therefore cannot see a
+// later palette change. The root calls it on every screen in the stack when
+// tea.BackgroundColorMsg reports a background different from the assumed
+// dark default.
+//
+// Only loginScreen implements it here: it is the one screen that exists
+// before the terminal can possibly have answered. Phase 3 makes the rest of
+// the stack conform, at which point a mid-session theme switch is fully
+// supported.
+type restyler interface {
+	restyle()
+}
+
 // session carries state shared by every screen. A pointer to it is embedded
 // in each screen, so window resizes and the authenticated user are always
 // current without message plumbing.
@@ -52,8 +66,12 @@ type session struct {
 
 // Run starts the TUI and blocks until the user quits. The database must be
 // initialized before calling this.
+//
+// tea.WithAltScreen() is gone in v2: the alternate screen is now a property
+// of the view the model returns, not of the program, so it is set in View()
+// below instead of here.
 func Run() error {
-	p := tea.NewProgram(newAppModel(), tea.WithAltScreen())
+	p := tea.NewProgram(newAppModel())
 	if _, err := p.Run(); err != nil {
 		return serr.Wrap(err, "TUI terminated abnormally")
 	}
@@ -80,7 +98,15 @@ func newAppModel() appModel {
 func (m appModel) top() screen { return m.stack[len(m.stack)-1] }
 
 func (m appModel) Init() tea.Cmd {
-	return m.top().Init()
+	// RequestBackgroundColor is how a v2 program asks the terminal whether it
+	// is light or dark. The reply arrives later as a tea.BackgroundColorMsg,
+	// so unlike lipgloss's synchronous HasDarkBackground this costs nothing
+	// when the terminal declines to answer — see the long note in styles.go.
+	//
+	// It is passed uncalled: its signature is func() tea.Msg, which is
+	// exactly tea.Cmd. (Its own doc comment shows it invoked, which does not
+	// compile.)
+	return tea.Batch(tea.RequestBackgroundColor, m.top().Init())
 }
 
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -99,7 +125,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
-	case tea.KeyMsg:
+	// v2 splits key events into KeyPressMsg and KeyReleaseMsg (both satisfy
+	// the tea.KeyMsg interface). Matching the press type specifically means
+	// that if key-release reporting is ever enabled — Phase 5's kitty
+	// keyboard work is the likely trigger — releases won't silently
+	// double-fire every binding.
+	case tea.KeyPressMsg:
 		// ctrl+c always quits, regardless of which screen has focus.
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
@@ -108,6 +139,22 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusText = ""
 		m.statusErr = false
 		m.statusOK = false
+
+	case tea.BackgroundColorMsg:
+		// The terminal answered the Init() query. Rebuilding the palette is
+		// enough for everything the screens render themselves, because those
+		// styles are read fresh on every View(). Widgets are the exception:
+		// bubbles copies its style set into each Model at construction, so
+		// any screen already on the stack needs telling.
+		if msg.IsDark() != isDark {
+			setPalette(msg.IsDark())
+			for _, s := range m.stack {
+				if r, ok := s.(restyler); ok {
+					r.restyle()
+				}
+			}
+		}
+		return m, nil
 
 	case pushMsg:
 		m.stack = append(m.stack, msg.s)
@@ -145,9 +192,16 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m appModel) View() string {
+// View builds the root tea.View. Screens still return plain strings — only
+// the root deals in tea.View, because AltScreen (and, later, cursor and
+// window-title state) is a whole-program property that the screen stack has
+// no business knowing about.
+func (m appModel) View() tea.View {
+	v := tea.NewView("")
+	v.AltScreen = true // replaces the v1 tea.WithAltScreen() program option
+
 	if m.sess.width == 0 {
-		return "" // no size yet; first WindowSizeMsg is on its way
+		return v // no size yet; first WindowSizeMsg is on its way
 	}
 
 	content := m.top().View()
@@ -162,7 +216,8 @@ func (m appModel) View() string {
 		bar = statusBarStyle.Render(truncate(m.statusText, m.sess.width-2))
 	}
 
-	return content + "\n" + bar
+	v.Content = content + "\n" + bar
+	return v
 }
 
 // truncate hard-caps a string to n runes so status text can never wrap and

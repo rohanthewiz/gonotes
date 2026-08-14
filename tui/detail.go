@@ -5,10 +5,11 @@ import (
 
 	"gonotes/models"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/glamour/v2"
+	"charm.land/glamour/v2/styles"
+	"charm.land/lipgloss/v2"
 )
 
 // detailScreen shows a single note full-screen: a sticky metadata header and
@@ -91,12 +92,17 @@ func (s *detailScreen) layout() {
 		vpHeight = 1
 	}
 
+	// v2 turned the viewport constructor into functional options and made
+	// width/height unexported (SetWidth/SetHeight instead of assignment).
 	if !s.ready {
-		s.vp = viewport.New(s.sess.width, vpHeight)
+		s.vp = viewport.New(
+			viewport.WithWidth(s.sess.width),
+			viewport.WithHeight(vpHeight),
+		)
 		s.ready = true
 	} else {
-		s.vp.Width = s.sess.width
-		s.vp.Height = vpHeight
+		s.vp.SetWidth(s.sess.width)
+		s.vp.SetHeight(vpHeight)
 	}
 	s.vp.SetContent(s.renderBody())
 }
@@ -110,8 +116,16 @@ func (s *detailScreen) renderBody() string {
 		return dimStyle.Render("(this note has no body)")
 	}
 
+	// glamour v2 dropped WithAutoStyle(), which used to run its own background
+	// detection. The style is now chosen explicitly from the palette's
+	// already-resolved light/dark answer (styles.go), so there is exactly one
+	// detection in the process instead of two that could disagree.
+	style := styles.LightStyleConfig
+	if isDark {
+		style = styles.DarkStyleConfig
+	}
 	r, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(), // match the terminal's light/dark background
+		glamour.WithStyles(style),
 		glamour.WithWordWrap(min(s.sess.width-2, 100)),
 	)
 	if err != nil {
@@ -167,7 +181,7 @@ func (s *detailScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		// We just deleted the note we're looking at — back to the list.
 		return s, tea.Sequence(pop(true), status("Note deleted"))
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "esc", "q":
 			// Pop with refresh: a flag toggle here should show in the list.

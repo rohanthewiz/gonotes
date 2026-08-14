@@ -5,9 +5,9 @@ import (
 
 	"gonotes/models"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 )
 
 // formScreen creates a new note or edits an existing one.
@@ -52,8 +52,14 @@ const (
 )
 
 func newFormScreen(sess *session, editing *models.Note) *formScreen {
+	// bubbles v2 builds each widget's default styles from a hardcoded dark
+	// set (its own source calls that out as temporary). v1's AdaptiveColor
+	// used to make this automatic, so every constructor now has to re-apply
+	// the palette's light/dark answer or a light terminal renders grey text
+	// on grey.
 	newInput := func(placeholder string, limit int) textinput.Model {
 		ti := textinput.New()
+		ti.SetStyles(textinput.DefaultStyles(isDark))
 		ti.Placeholder = placeholder
 		ti.CharLimit = limit
 		return ti
@@ -68,6 +74,7 @@ func newFormScreen(sess *session, editing *models.Note) *formScreen {
 		categories: newInput("comma, separated, categories (created if new)", 300),
 		body:       textarea.New(),
 	}
+	f.body.SetStyles(textarea.DefaultStyles(isDark))
 	f.body.Placeholder = "markdown body — ctrl+e opens $EDITOR"
 	f.body.CharLimit = 0 // unlimited; notes can be long
 
@@ -101,8 +108,9 @@ func (s *formScreen) layout() {
 	if w < 20 {
 		w = 20
 	}
+	// v2 made the input width unexported; SetWidth replaces `ti.Width = w`.
 	for _, ti := range []*textinput.Model{&s.title, &s.desc, &s.tags, &s.categories} {
-		ti.Width = w
+		ti.SetWidth(w)
 	}
 	s.body.SetWidth(w)
 
@@ -170,7 +178,7 @@ func (s *formScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		}
 		return s, tea.Sequence(pop(true), status("Saved \""+msg.note.Title+"\""))
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if s.busy {
 			return s, nil
 		}
@@ -203,7 +211,11 @@ func (s *formScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				return s, nil
 			}
 
-		case " ":
+		// v1 stringified the space bar as " "; v2 names it "space" (space is
+		// the one printable character whose literal form is invisible, so
+		// ultraviolet gives it a word). Matching " " here would silently stop
+		// toggling the checkbox.
+		case "space":
 			if s.focus == focusPrivate {
 				s.isPrivate = !s.isPrivate
 				return s, nil
