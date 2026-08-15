@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"gonotes/cats"
 
@@ -78,9 +79,15 @@ type catsState struct {
 	// self is this pane's internal id, which control commands address panes
 	// by. The environment only carries the public handle, so it costs a
 	// pane.list to learn — done once during the startup probe. Its consumer is
-	// Phase 7's agent picker, which must leave GoNotes' own pane off the list.
+	// the agent picker, which must leave GoNotes' own pane off the list.
 	self   uint32
 	selfOK bool
+
+	// panes is the cached session layout the capture picker is built from, and
+	// panesAt when it was last refreshed. Both are read and written only on the
+	// event loop; see pollPanes in capture.go for the cache's rules.
+	panes   []cats.PaneInfo
+	panesAt time.Time
 
 	// activity is the phrase for the span currently in progress ("editing:
 	// Recipes"), empty when nothing is running. asking holds the phrase for a
@@ -184,16 +191,22 @@ func (cs *catsState) probeCmd() tea.Cmd {
 	}
 }
 
-// ready installs the probe's verdict and opens the event stream. Runs on the
-// event loop.
+// ready installs the probe's verdict, opens the event stream, and primes the
+// pane cache. Runs on the event loop.
 //
-// The returned Cmd is the one user-visible trace of a FAILED probe. Silent
-// degradation is the rule, but a user sitting inside a cats pane whose socket
-// did not answer is the one person who might wonder why the integration is
-// missing, and the status bar is where they would look. Outside cats there is
-// nothing to explain, so nothing is said — and a successful connection says
-// nothing either, because a notice that displaced the login screen's own
-// feedback would be a regression for the common case.
+// Both branches return a status line, for opposite reasons. A FAILED probe is
+// the one user-visible trace of silent degradation: someone sitting inside a
+// cats pane whose socket did not answer is the one person who might wonder
+// where the integration went, and the status bar is where they would look.
+// Outside cats there is nothing to explain, so nothing is said.
+//
+// A SUCCESSFUL probe now says one thing too, which reverses the Phase 5
+// decision to stay quiet. What changed is that Tier 1 acquired a door the user
+// has to know about: ctrl+g is not in any footer (see captureHint), because a
+// footer is rendered in every terminal and the key only works in this one. A
+// feature nothing advertises is a feature nobody uses. The cost is bounded —
+// one line, cleared by the first keystroke, so it cannot displace the login
+// screen's own feedback, which arrives only after the user has typed.
 func (cs *catsState) ready(msg catsReadyMsg) tea.Cmd {
 	cs.caps, cs.self, cs.selfOK = msg.caps, msg.self, msg.selfOK
 	if !msg.caps.Tier1() {
@@ -204,7 +217,9 @@ func (cs *catsState) ready(msg catsReadyMsg) tea.Cmd {
 	}
 	cs.client = cats.NewClient(msg.caps.ControlSocket)
 	cs.subscribe()
-	return nil
+	// Primed now, while nothing is waiting on it. The picker is opened by a
+	// keystroke, and a keystroke must not dial a socket.
+	return tea.Batch(cs.pollPanes(true), status(captureHint))
 }
 
 // subscribe opens the event stream. Called once Tier 1 is confirmed, from the
@@ -256,10 +271,15 @@ func (cs *catsState) post(msg tea.Msg) {
 //
 // This is the transport's seam, so it stays a switch on the name and nothing
 // else: what a frame MEANS lives with the feature that consumes it —
-// theme_changed in catstheme.go, and the pane events once the Phase 7 picker
-// has a cache for them to invalidate. Until then they are dropped, which is
-// deliberate: the subscription is what put the handshake and the shutdown
-// ordering under test a phase before anything was built on top of them.
+// theme_changed in catstheme.go, the pane events in capture.go.
+//
+// The three pane events are handled identically because they answer the same
+// question: the cached session layout the picker is built from is now wrong.
+// Which of them arrived does not change the response, and pollPanes' own rate
+// limit is what keeps a tab that opens four panes at once from costing four
+// round trips. focus_changed is subscribed but not acted on — the picker does
+// not render which pane is focused, so a refresh would be a round trip that
+// changes nothing on screen.
 //
 // An unknown name is ignored rather than surfaced: the event vocabulary grows
 // on the host's schedule, and a client that complained about names newer than
@@ -268,6 +288,8 @@ func (cs *catsState) frame(ev cats.Event) tea.Cmd {
 	switch ev.Name {
 	case cats.EventThemeChanged:
 		return catsThemeChanged(ev)
+	case cats.EventPaneAgent, cats.EventPaneAdded, cats.EventPaneRemoved:
+		return cs.pollPanes(false)
 	}
 	return nil
 }

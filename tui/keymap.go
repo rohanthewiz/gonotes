@@ -48,6 +48,14 @@ type keyMap struct {
 	Filter   key.Binding // enter: narrow the note list to this category
 	AllNotes key.Binding // clear the category filter
 
+	// ---- Capture from a sibling agent pane --------------------------------
+	// Capture is the door (browse); Move and Pick drive the picker it opens.
+	// The door works only at Tier 1 and says so otherwise, which is why it is
+	// deliberately absent from browseHelp — see captureHint in capture.go.
+	Capture key.Binding
+	Move    key.Binding // ↑/↓ within the picker
+	Pick    key.Binding // enter: capture from the highlighted pane
+
 	// ---- Form -------------------------------------------------------------
 	Save          key.Binding
 	Editor        key.Binding // ctrl+e: hand the body to $VISUAL/$EDITOR
@@ -126,6 +134,22 @@ func defaultKeyMap() keyMap {
 			key.WithHelp("a", "all notes"),
 		),
 
+		// ctrl+g rather than a bare letter: browse spends every unmodified key
+		// on a note action, and g is the one cats forwards as ⌘G (Phase 8's
+		// accelerator table maps onto exactly these bindings).
+		Capture: key.NewBinding(
+			key.WithKeys("ctrl+g"),
+			key.WithHelp("ctrl+g", "capture agent pane"),
+		),
+		Move: key.NewBinding(
+			key.WithKeys("up", "down"),
+			key.WithHelp("↑/↓", "move"),
+		),
+		Pick: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "capture"),
+		),
+
 		Save: key.NewBinding(
 			key.WithKeys("ctrl+s"),
 			key.WithHelp("ctrl+s", "save"),
@@ -188,6 +212,10 @@ func (k keyMap) browseHelp() []key.Binding {
 
 func (k keyMap) categoriesHelp() []key.Binding {
 	return []key.Binding{k.Filter, k.AllNotes, k.New, k.Delete, k.Back}
+}
+
+func (k keyMap) agentPickerHelp() []key.Binding {
+	return []key.Binding{k.Move, k.Pick, k.Back}
 }
 
 func (k keyMap) detailHelp() []key.Binding {

@@ -24,14 +24,18 @@ import (
 type controlServer struct {
 	path string
 
-	mu    sync.Mutex
-	got   []string
-	theme cats.ConfigTheme
+	mu     sync.Mutex
+	got    []string
+	params map[string]json.RawMessage // the last params seen per method
+	theme  cats.ConfigTheme
+	// capture is what the capture verb answers with. Empty by default, which is
+	// a pane that has printed nothing.
+	capture string
 }
 
 func newControlServer(t *testing.T) *controlServer {
 	t.Helper()
-	s := &controlServer{path: catsSockPath(t, "c.sock")}
+	s := &controlServer{path: catsSockPath(t, "c.sock"), params: map[string]json.RawMessage{}}
 	ln, err := net.Listen("unix", s.path)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -47,13 +51,16 @@ func newControlServer(t *testing.T) *controlServer {
 			go func() {
 				defer conn.Close()
 				var req struct {
-					Method string `json:"method"`
+					Method string          `json:"method"`
+					Params json.RawMessage `json:"params"`
 				}
 				if err := json.NewDecoder(conn).Decode(&req); err != nil {
 					return
 				}
 				s.mu.Lock()
 				s.got = append(s.got, req.Method)
+				s.params[req.Method] = req.Params
+				capture := s.capture
 				s.mu.Unlock()
 
 				var data any
@@ -62,9 +69,11 @@ func newControlServer(t *testing.T) *controlServer {
 					data = cats.Pong{Protocol: 1, Service: "catway"}
 				case cats.MethodPaneList:
 					data = cats.PaneListResult{Panes: []cats.PaneInfo{
-						{Pane: 7, Handle: "w1:p7"},
-						{Pane: 9, Handle: "w1:p9", Agent: "claude"},
+						{Pane: 7, Handle: "w1:p7", Agent: "gonotes"},
+						{Pane: 9, Handle: "w1:p9", Agent: "claude", AgentState: cats.StateIdle},
 					}}
+				case cats.MethodCapture:
+					data = cats.CaptureResult{Text: capture}
 				case cats.MethodConfigGet:
 					// The startup theme fetch. Read under the lock because the
 					// test that sets it does so from its own goroutine, and a
@@ -101,6 +110,21 @@ func (s *controlServer) setTheme(t cats.ConfigTheme) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.theme = t
+}
+
+// setCapture arms the text the capture verb answers with.
+func (s *controlServer) setCapture(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.capture = text
+}
+
+// paramsFor returns the params of the last request for a method, so a test can
+// assert on the wire rather than on the wrapper that built it.
+func (s *controlServer) paramsFor(method string) json.RawMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.params[method]
 }
 
 func (s *controlServer) saw(method string) bool {

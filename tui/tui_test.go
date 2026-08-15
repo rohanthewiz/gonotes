@@ -80,6 +80,9 @@ func TestKeyNames(t *testing.T) {
 		{"save", tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl}, "ctrl+s"},
 		{"external editor", tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl}, "ctrl+e"},
 
+		// capture.go: the door into the agent-pane picker.
+		{"capture from an agent pane", tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl}, "ctrl+g"},
+
 		// The one that actually changed in v2. Space is the only printable
 		// character with an invisible literal form, so v2 names it rather
 		// than emitting " ". form.go's private-toggle depends on this.

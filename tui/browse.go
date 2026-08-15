@@ -312,12 +312,39 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 
 		case key.Matches(msg, keys.Categories):
 			return s, push(newCategoriesScreen(s.sess))
+
+		case key.Matches(msg, keys.Capture):
+			return s, s.openCapture()
 		}
 	}
 
 	var cmd tea.Cmd
 	s.list, cmd = s.list.Update(msg)
 	return s, cmd
+}
+
+// openCapture is the ctrl+g door: pick a sibling agent pane and turn its output
+// into a note. See capture.go for the feature; this is only the entry.
+//
+// Three outcomes, and the two that are not the picker are both one status line.
+// Below Tier 1 the feature does not exist, and inside a cats session with no
+// other agent running there is nothing to offer — a modal listing nothing would
+// be a dialog the user has to dismiss to learn that.
+func (s *browseScreen) openCapture() tea.Cmd {
+	cs := s.sess.cats
+	if !cs.tier1() {
+		return status("Capturing an agent pane needs cats — GoNotes is running standalone")
+	}
+
+	// The refresh is for the NEXT opening, not this one: the picker is built
+	// from the cache that is already in hand, because a keystroke must not wait
+	// on a socket. Rate-limited, so holding ctrl+g down costs one call.
+	refresh := cs.pollPanes(false)
+
+	if len(cs.agentPanes()) == 0 {
+		return tea.Batch(refresh, status("No agent panes to capture from"))
+	}
+	return tea.Batch(refresh, push(newAgentPickerScreen(s.sess)))
 }
 
 func (s *browseScreen) View() string {

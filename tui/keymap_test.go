@@ -44,6 +44,10 @@ func TestBindingKeys(t *testing.T) {
 		{"filter by category", keys.Filter, []string{"enter"}},
 		{"all notes", keys.AllNotes, []string{"a"}},
 
+		{"capture from an agent pane", keys.Capture, []string{"ctrl+g"}},
+		{"move within the picker", keys.Move, []string{"up", "down"}},
+		{"pick a pane to capture", keys.Pick, []string{"enter"}},
+
 		{"save", keys.Save, []string{"ctrl+s"}},
 		{"external editor", keys.Editor, []string{"ctrl+e"}},
 		{"next field", keys.NextField, []string{"tab"}},
@@ -101,7 +105,15 @@ func TestHelpSetsAreHandled(t *testing.T) {
 			handled: []key.Binding{
 				keys.Open, keys.New, keys.Edit, keys.Delete,
 				keys.Flag, keys.Categories, keys.Quit, keys.Back,
+				// The capture door. It is handled but deliberately NOT
+				// advertised — see captureHint in capture.go.
+				keys.Capture,
 			},
+		},
+		{
+			screen:  "agent picker",
+			help:    keys.agentPickerHelp(),
+			handled: []key.Binding{keys.Move, keys.Pick, keys.Back},
 		},
 		{
 			screen: "categories",
@@ -171,7 +183,8 @@ func TestHelpSetsAreHandled(t *testing.T) {
 // footer instead of erroring.
 func TestHelpSetsHaveText(t *testing.T) {
 	sets := map[string][]key.Binding{
-		"browse":     keys.browseHelp(),
+		"agentPicker": keys.agentPickerHelp(),
+		"browse":      keys.browseHelp(),
 		"categories": keys.categoriesHelp(),
 		"detail":     keys.detailHelp(),
 		"form":       keys.formHelp(),

@@ -91,6 +91,21 @@ func newFormScreen(sess *session, editing *models.Note) *formScreen {
 	return f
 }
 
+// prefill seeds a NEW note's fields from something other than the user typing —
+// today, a capture from a sibling agent pane (capture.go).
+//
+// It deliberately does not touch focus. The title it is given is generated, so
+// the title field is exactly where the user's first keystroke should land, and
+// that is already where a fresh form starts. It is also deliberately separate
+// from the `editing` path in newFormScreen: this note does not exist yet, so it
+// must save as a create (noteID 0) and must not try to load categories for an
+// id that was never assigned.
+func (s *formScreen) prefill(title, tags, body string) {
+	s.title.SetValue(title)
+	s.tags.SetValue(tags)
+	s.body.SetValue(body)
+}
+
 func (s *formScreen) Init() tea.Cmd {
 	s.layout()
 	cmds := []tea.Cmd{textinput.Blink}

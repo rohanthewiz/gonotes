@@ -237,7 +237,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	// The three cats messages. They are handled here, at the root, rather than
+	// The cats messages. They are handled here, at the root, rather than
 	// wherever their effects land, because catsState has exactly one mutator
 	// and this is it — see the threading rule at the top of cats_glue.go.
 	case catsReadyMsg:
@@ -245,6 +245,16 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case catsEventMsg:
 		return m, m.sess.cats.frame(msg.ev)
+
+	case catsPanesMsg:
+		m.sess.cats.setPanes(msg)
+		return m, nil
+
+	// captureDoneMsg is the one data result that is NOT routed to the active
+	// screen. A capture can take seconds and the user is free to navigate while
+	// it runs; see appModel.captureDone.
+	case captureDoneMsg:
+		return m, m.captureDone(msg)
 
 	case catsLinkMsg:
 		// The stream is the only thing that notices a cats which died after the
