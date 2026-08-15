@@ -24,8 +24,9 @@ import (
 type controlServer struct {
 	path string
 
-	mu  sync.Mutex
-	got []string
+	mu    sync.Mutex
+	got   []string
+	theme cats.ConfigTheme
 }
 
 func newControlServer(t *testing.T) *controlServer {
@@ -64,6 +65,14 @@ func newControlServer(t *testing.T) *controlServer {
 						{Pane: 7, Handle: "w1:p7"},
 						{Pane: 9, Handle: "w1:p9", Agent: "claude"},
 					}}
+				case cats.MethodConfigGet:
+					// The startup theme fetch. Read under the lock because the
+					// test that sets it does so from its own goroutine, and a
+					// -race run is the point of having the suite at all.
+					s.mu.Lock()
+					theme := s.theme
+					s.mu.Unlock()
+					data = cats.ConfigGetResult{Path: "/fake/cats.yaml", Theme: theme}
 				case cats.MethodSubscribe:
 					// Ack and hold the connection open, as a live stream does.
 					// The sleep is what keeps this goroutine from closing the
@@ -84,6 +93,14 @@ func newControlServer(t *testing.T) *controlServer {
 		}
 	}()
 	return s
+}
+
+// setTheme arms the appearance config.get will answer with. Zero by default,
+// which is a host with no colors — and so a startup fetch that changes nothing.
+func (s *controlServer) setTheme(t cats.ConfigTheme) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.theme = t
 }
 
 func (s *controlServer) saw(method string) bool {

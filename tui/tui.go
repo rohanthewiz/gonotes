@@ -100,6 +100,9 @@ type session struct {
 //
 // The cats wiring is ordered, and each step is where it is for a reason:
 //
+//	theme fetch    before newAppModel — bubbles widgets copy their style set in
+//	               at construction, and newAppModel builds the login screen, so
+//	               a palette that landed later would repaint rather than paint.
 //	cs.init()      before NewProgram — the first hook report claims the pane,
 //	               and the OSC 7 emission has to reach the terminal before
 //	               Bubble Tea switches to the alternate screen and owns output.
@@ -115,6 +118,10 @@ type session struct {
 // so nothing downstream of it can run before the event loop does — see
 // probeCmd for the shutdown deadlock that ordering avoids.
 func Run(st Store) error {
+	// One synchronous config.get inside a cats pane, and nothing at all outside
+	// one. See catstheme.go for why it is worth blocking the launch for.
+	catsThemeAtStartup()
+
 	m := newAppModel(st)
 	cs := m.sess.cats
 	cs.init()
@@ -205,6 +212,16 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// (a repaint, a terminal that re-announces on focus) and rebuilding
 		// every widget for an identical palette is visible work for no visible
 		// difference.
+		//
+		// A host theme outranks the terminal's answer, and inside cats the two
+		// are the same answer at different resolutions: the OSC 11 reply comes
+		// from cats' own emulator reporting the background its theme just gave
+		// us. Acting on it would trade a full host palette for the built-in one
+		// picked by a single light/dark bit derived from that same background —
+		// the theme sync undone by the first repaint.
+		if hostOwnsThePalette() {
+			return m, nil
+		}
 		if setPalette(DefaultPalette(msg.IsDark())) {
 			return m, paletteChanged()
 		}

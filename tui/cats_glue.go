@@ -254,16 +254,23 @@ func (cs *catsState) post(msg tea.Msg) {
 
 // frame dispatches one event. Runs on the event loop.
 //
-// Phase 5 lands the transport, not its consumers: theme_changed becomes a
-// repaint in Phase 6 and the pane events refresh the picker's cache in Phase
-// 7. Until then every frame is dropped here — deliberately, because the
-// subscription is what proves the handshake and the shutdown ordering under
-// test now rather than after two more phases have been built on top of it.
+// This is the transport's seam, so it stays a switch on the name and nothing
+// else: what a frame MEANS lives with the feature that consumes it —
+// theme_changed in catstheme.go, and the pane events once the Phase 7 picker
+// has a cache for them to invalidate. Until then they are dropped, which is
+// deliberate: the subscription is what put the handshake and the shutdown
+// ordering under test a phase before anything was built on top of them.
 //
 // An unknown name is ignored rather than surfaced: the event vocabulary grows
 // on the host's schedule, and a client that complained about names newer than
 // itself would turn every cats upgrade into noise.
-func (cs *catsState) frame(cats.Event) tea.Cmd { return nil }
+func (cs *catsState) frame(ev cats.Event) tea.Cmd {
+	switch ev.Name {
+	case cats.EventThemeChanged:
+		return catsThemeChanged(ev)
+	}
+	return nil
+}
 
 // stop closes the stopping channel exactly once. Both the quit path and the
 // shutdown path can reach it, and either may be first.
