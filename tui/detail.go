@@ -32,14 +32,14 @@ func newDetailScreen(sess *session, note models.Note) *detailScreen {
 
 func (s *detailScreen) Init() tea.Cmd {
 	s.layout()
-	return loadNoteCategoriesCmd(s.note.ID, s.sess.user.GUID)
+	return loadNoteCategoriesCmd(s.sess.store, s.note.ID, s.sess.user.GUID)
 }
 
 // refresh re-fetches the note after an edit made on the form screen above us.
 func (s *detailScreen) refresh() tea.Cmd {
 	return tea.Batch(
-		loadNoteCmd(s.note.ID, s.sess.user.GUID),
-		loadNoteCategoriesCmd(s.note.ID, s.sess.user.GUID),
+		loadNoteCmd(s.sess.store, s.note.ID, s.sess.user.GUID),
+		loadNoteCategoriesCmd(s.sess.store, s.note.ID, s.sess.user.GUID),
 	)
 }
 
@@ -180,11 +180,11 @@ func (s *detailScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		case key.Matches(msg, keys.Edit):
 			return s, push(newFormScreen(s.sess, &s.note))
 		case key.Matches(msg, keys.Flag):
-			return s, toggleFlagCmd(s.note.ID, s.sess.user.GUID)
+			return s, toggleFlagCmd(s.sess.store, s.note.ID, s.sess.user.GUID)
 		case key.Matches(msg, keys.Delete):
 			return s, push(newConfirmScreen(s.sess,
 				"Delete \""+s.note.Title+"\"?",
-				deleteNoteCmd(s.note.ID, s.sess.user.GUID)))
+				deleteNoteCmd(s.sess.store, s.note.ID, s.sess.user.GUID)))
 		}
 	}
 

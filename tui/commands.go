@@ -16,11 +16,16 @@ import (
 // This file holds every asynchronous operation the TUI performs, expressed as
 // tea.Cmd functions plus the message types they resolve to.
 //
-// Design choice: all models.* calls happen inside tea.Cmd closures, never in
-// Update(). Bubble Tea runs commands on separate goroutines, so DB latency
-// (DuckDB disk writes, encryption) never blocks rendering or key handling.
-// Each message carries its own err field; screens surface failures through
-// the shared status bar rather than crashing the program.
+// Design choice: all data access happens inside tea.Cmd closures, never in
+// Update(). Bubble Tea runs commands on separate goroutines, so storage
+// latency (bytdb disk writes, or a round trip to the server in HTTP mode)
+// never blocks rendering or key handling. Each message carries its own err
+// field; screens surface failures through the shared status bar rather than
+// crashing the program.
+//
+// Every command takes the Store as its first argument rather than reaching for
+// models.* directly. Callers pass s.sess.store, which is set once at startup —
+// see store.go for why the seam exists and tui.go for where it is threaded in.
 
 // ---- Navigation messages -------------------------------------------------
 // Screens never mutate the root's stack directly; they emit these messages
@@ -62,9 +67,25 @@ type usernamesLoadedMsg struct {
 	err   error
 }
 
-func loadUsernamesCmd() tea.Cmd {
+// bootstrapCmd is the login screen's opening move. It asks the store whether
+// the user is already authenticated — a cached token or environment
+// credentials in HTTP mode — and only falls back to loading the username list
+// for the prefill when they are not.
+//
+// The two live in one command because they are alternatives, not a pair: if
+// the session resumes, the login screen is replaced outright and the username
+// list would be answering a question nobody asked. Sequencing them here also
+// means the resume decision is made before the screen renders anything the
+// user could type into.
+//
+// A resume error is swallowed deliberately. "Could not resume" is not a
+// failure the user needs to read; it just means the login screen stays.
+func bootstrapCmd(st Store) tea.Cmd {
 	return func() tea.Msg {
-		names, err := models.ListUsernames()
+		if user, err := st.ResumeSession(); err == nil && user != nil {
+			return loggedInMsg{user: user}
+		}
+		names, err := st.ListUsernames()
 		return usernamesLoadedMsg{names: names, err: err}
 	}
 }
@@ -75,25 +96,25 @@ type loggedInMsg struct{ user *models.User }
 
 type loginFailedMsg struct{ err error }
 
-func loginCmd(username, password string) tea.Cmd {
+func loginCmd(st Store, username, password string) tea.Cmd {
 	return func() tea.Msg {
-		user, err := models.AuthenticateUser(models.UserLoginInput{
-			Username: username,
-			Password: password,
-		})
+		user, err := st.AuthenticateUser(username, password)
 		if err != nil {
 			return loginFailedMsg{err: err}
+		}
+		if user == nil {
+			// The local store reports bad credentials this way (nil user, nil
+			// error); without this the screen would sit on "Signing in..."
+			// forever after a typo.
+			return loginFailedMsg{err: serr.New("invalid username or password")}
 		}
 		return loggedInMsg{user: user}
 	}
 }
 
-func registerCmd(username, password string) tea.Cmd {
+func registerCmd(st Store, username, password string) tea.Cmd {
 	return func() tea.Msg {
-		user, err := models.CreateUser(models.UserRegisterInput{
-			Username: username,
-			Password: password,
-		})
+		user, err := st.CreateUser(username, password)
 		if err != nil {
 			return loginFailedMsg{err: err}
 		}
@@ -108,22 +129,20 @@ type notesLoadedMsg struct {
 	err   error
 }
 
-// loadNotesCmd fetches all of the user's notes (limit 0 = no cap). Personal
-// note collections are small enough that loading everything and letting the
-// list widget filter client-side is both simpler and snappier than paging
-// through SQL LIMIT/OFFSET queries.
-func loadNotesCmd(userGUID string) tea.Cmd {
+// loadNotesCmd fetches all of the user's notes — see Store.ListNotes for why
+// there is no pagination.
+func loadNotesCmd(st Store, userGUID string) tea.Cmd {
 	return func() tea.Msg {
-		notes, err := models.ListNotes(userGUID, 0, 0)
+		notes, err := st.ListNotes(userGUID)
 		return notesLoadedMsg{notes: notes, err: err}
 	}
 }
 
 // loadCategoryNotesCmd fetches only the notes attached to one category —
 // used when a category filter is active in the browser.
-func loadCategoryNotesCmd(categoryID int64, userGUID string) tea.Cmd {
+func loadCategoryNotesCmd(st Store, categoryID int64, userGUID string) tea.Cmd {
 	return func() tea.Msg {
-		notes, err := models.GetCategoryNotes(categoryID, userGUID)
+		notes, err := st.GetCategoryNotes(categoryID, userGUID)
 		return notesLoadedMsg{notes: notes, err: err}
 	}
 }
@@ -133,9 +152,9 @@ type noteLoadedMsg struct {
 	err  error
 }
 
-func loadNoteCmd(id int64, userGUID string) tea.Cmd {
+func loadNoteCmd(st Store, id int64, userGUID string) tea.Cmd {
 	return func() tea.Msg {
-		note, err := models.GetNoteByID(id, userGUID)
+		note, err := st.GetNoteByID(id, userGUID)
 		return noteLoadedMsg{note: note, err: err}
 	}
 }
@@ -150,18 +169,18 @@ type noteSavedMsg struct {
 // comma-separated names from the form; unknown categories are created on the
 // fly so assigning a brand-new category doesn't require a separate trip to
 // the category screen.
-func saveNoteCmd(noteID int64, input models.NoteInput, categoriesCSV string, userGUID string) tea.Cmd {
+func saveNoteCmd(st Store, noteID int64, input models.NoteInput, categoriesCSV string, userGUID string) tea.Cmd {
 	return func() tea.Msg {
 		var note *models.Note
 		var err error
 
 		if noteID == 0 {
-			// The models layer expects the caller to supply the GUID
-			// (the web API does the same), so we generate one here.
+			// Both stores expect the caller to supply the GUID (the web API
+			// does the same), so we generate one here.
 			input.GUID = uuid.New().String()
-			note, err = models.CreateNote(input, userGUID)
+			note, err = st.CreateNote(input, userGUID)
 		} else {
-			note, err = models.UpdateNote(noteID, input, userGUID)
+			note, err = st.UpdateNote(noteID, input, userGUID)
 		}
 		if err != nil {
 			return noteSavedMsg{err: err}
@@ -170,7 +189,7 @@ func saveNoteCmd(noteID int64, input models.NoteInput, categoriesCSV string, use
 			return noteSavedMsg{err: serr.New("note not found or not owned by you")}
 		}
 
-		if err = syncNoteCategories(note.ID, categoriesCSV, userGUID); err != nil {
+		if err = syncNoteCategories(st, note.ID, categoriesCSV, userGUID); err != nil {
 			// The note itself saved fine; report the category issue but
 			// still return the note so the UI reflects the save.
 			return noteSavedMsg{note: note, err: serr.Wrap(err, "note saved, but category update failed")}
@@ -182,7 +201,7 @@ func saveNoteCmd(noteID int64, input models.NoteInput, categoriesCSV string, use
 // syncNoteCategories makes the note's category set match the given
 // comma-separated names: missing links are added (creating categories as
 // needed) and links no longer named are removed.
-func syncNoteCategories(noteID int64, categoriesCSV string, userGUID string) error {
+func syncNoteCategories(st Store, noteID int64, categoriesCSV string, userGUID string) error {
 	// Parse the desired set, preserving nothing but trimmed, non-empty names.
 	desired := map[string]bool{}
 	for _, raw := range strings.Split(categoriesCSV, ",") {
@@ -191,7 +210,7 @@ func syncNoteCategories(noteID int64, categoriesCSV string, userGUID string) err
 		}
 	}
 
-	current, err := models.GetNoteCategories(noteID, userGUID)
+	current, err := st.GetNoteCategories(noteID, userGUID)
 	if err != nil {
 		return serr.Wrap(err, "failed to load current note categories")
 	}
@@ -201,7 +220,7 @@ func syncNoteCategories(noteID int64, categoriesCSV string, userGUID string) err
 	for _, c := range current {
 		currentByName[c.Name] = c
 		if !desired[c.Name] {
-			if err = models.RemoveCategoryFromNote(noteID, c.ID); err != nil {
+			if err = st.RemoveCategoryFromNote(noteID, c.ID); err != nil {
 				return serr.Wrap(err, "failed to remove category "+c.Name)
 			}
 		}
@@ -212,17 +231,17 @@ func syncNoteCategories(noteID int64, categoriesCSV string, userGUID string) err
 		if _, exists := currentByName[name]; exists {
 			continue
 		}
-		cat, err := models.GetCategoryByName(name, userGUID)
+		cat, err := st.GetCategoryByName(name, userGUID)
 		if err != nil {
 			return serr.Wrap(err, "failed to look up category "+name)
 		}
 		if cat == nil {
-			cat, err = models.CreateCategory(models.CategoryInput{Name: name}, userGUID)
+			cat, err = st.CreateCategory(name, userGUID)
 			if err != nil {
 				return serr.Wrap(err, "failed to create category "+name)
 			}
 		}
-		if err = models.AddCategoryToNote(noteID, cat.ID, userGUID); err != nil {
+		if err = st.AddCategoryToNote(noteID, cat.ID, userGUID); err != nil {
 			return serr.Wrap(err, "failed to attach category "+name)
 		}
 	}
@@ -231,9 +250,9 @@ func syncNoteCategories(noteID int64, categoriesCSV string, userGUID string) err
 
 type noteDeletedMsg struct{ err error }
 
-func deleteNoteCmd(id int64, userGUID string) tea.Cmd {
+func deleteNoteCmd(st Store, id int64, userGUID string) tea.Cmd {
 	return func() tea.Msg {
-		ok, err := models.DeleteNote(id, userGUID)
+		ok, err := st.DeleteNote(id, userGUID)
 		if err == nil && !ok {
 			err = serr.New("note not found or not owned by you")
 		}
@@ -246,9 +265,9 @@ type flagToggledMsg struct {
 	err  error
 }
 
-func toggleFlagCmd(id int64, userGUID string) tea.Cmd {
+func toggleFlagCmd(st Store, id int64, userGUID string) tea.Cmd {
 	return func() tea.Msg {
-		note, err := models.ToggleNoteFlag(id, userGUID)
+		note, err := st.ToggleNoteFlag(id, userGUID)
 		return flagToggledMsg{note: note, err: err}
 	}
 }
@@ -260,9 +279,9 @@ type categoriesLoadedMsg struct {
 	err  error
 }
 
-func loadCategoriesCmd(userGUID string) tea.Cmd {
+func loadCategoriesCmd(st Store, userGUID string) tea.Cmd {
 	return func() tea.Msg {
-		cats, err := models.ListCategories(0, 0, userGUID)
+		cats, err := st.ListCategories(userGUID)
 		return categoriesLoadedMsg{cats: cats, err: err}
 	}
 }
@@ -274,18 +293,18 @@ type categoryPickedMsg struct{ cat *models.Category }
 
 type categoryCreatedMsg struct{ err error }
 
-func createCategoryCmd(name string, userGUID string) tea.Cmd {
+func createCategoryCmd(st Store, name string, userGUID string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := models.CreateCategory(models.CategoryInput{Name: name}, userGUID)
+		_, err := st.CreateCategory(name, userGUID)
 		return categoryCreatedMsg{err: err}
 	}
 }
 
 type categoryDeletedMsg struct{ err error }
 
-func deleteCategoryCmd(id int64, userGUID string) tea.Cmd {
+func deleteCategoryCmd(st Store, id int64, userGUID string) tea.Cmd {
 	return func() tea.Msg {
-		return categoryDeletedMsg{err: models.DeleteCategory(id, userGUID)}
+		return categoryDeletedMsg{err: st.DeleteCategory(id, userGUID)}
 	}
 }
 
@@ -296,9 +315,9 @@ type noteCatsLoadedMsg struct {
 	err  error
 }
 
-func loadNoteCategoriesCmd(noteID int64, userGUID string) tea.Cmd {
+func loadNoteCategoriesCmd(st Store, noteID int64, userGUID string) tea.Cmd {
 	return func() tea.Msg {
-		cats, err := models.GetNoteCategories(noteID, userGUID)
+		cats, err := st.GetNoteCategories(noteID, userGUID)
 		return noteCatsLoadedMsg{cats: cats, err: err}
 	}
 }

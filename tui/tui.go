@@ -66,22 +66,32 @@ func paletteChanged() tea.Cmd {
 }
 
 // session carries state shared by every screen. A pointer to it is embedded
-// in each screen, so window resizes and the authenticated user are always
-// current without message plumbing.
+// in each screen, so window resizes, the authenticated user, and the data
+// store are always current without message plumbing.
 type session struct {
+	// store is how every screen reaches its data. It is set once, before the
+	// program starts, and never reassigned — which is what makes it safe to
+	// read from the command goroutines. See store.go.
+	store Store
+
 	user   *models.User
 	width  int
 	height int // content height available to screens (status bar excluded)
 }
 
-// Run starts the TUI and blocks until the user quits. The database must be
-// initialized before calling this.
+// Run starts the TUI and blocks until the user quits.
+//
+// The caller chooses the store and is responsible for whatever it needs: a
+// local store requires models.InitDB to have succeeded, an HTTP store requires
+// nothing (it will report its own connection failures through the status bar).
+// That inversion is the point of Phase 4 — the TUI no longer assumes it owns
+// the database files.
 //
 // tea.WithAltScreen() is gone in v2: the alternate screen is now a property
 // of the view the model returns, not of the program, so it is set in View()
 // below instead of here.
-func Run() error {
-	p := tea.NewProgram(newAppModel())
+func Run(st Store) error {
+	p := tea.NewProgram(newAppModel(st))
 	if _, err := p.Run(); err != nil {
 		return serr.Wrap(err, "TUI terminated abnormally")
 	}
@@ -97,8 +107,8 @@ type appModel struct {
 	statusOK   bool
 }
 
-func newAppModel() appModel {
-	sess := &session{}
+func newAppModel(st Store) appModel {
+	sess := &session{store: st}
 	return appModel{
 		sess:  sess,
 		stack: []screen{newLoginScreen(sess)},

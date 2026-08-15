@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -74,7 +75,7 @@ func (s *loginScreen) restyle() {
 }
 
 func (s *loginScreen) Init() tea.Cmd {
-	return tea.Batch(loadUsernamesCmd(), textinput.Blink)
+	return tea.Batch(bootstrapCmd(s.sess.store), textinput.Blink)
 }
 
 // fields returns the currently visible inputs in focus order.
@@ -103,6 +104,23 @@ func (s *loginScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	switch msg := msg.(type) {
 
 	case usernamesLoadedMsg:
+		// HTTP mode: the store cannot enumerate accounts (see ErrNoUserList),
+		// so every convenience below is unavailable and none of it is an
+		// error. Fall back to the username the environment names — the same
+		// variables gn-clip.sh reads, so a machine already set up for it needs
+		// no extra configuration.
+		//
+		// Note what is deliberately NOT done here: registering mode is never
+		// entered. An empty list means "no accounts" only when the list is
+		// trustworthy; guessing wrong would greet a returning user with an
+		// account-creation form against a server that already has their notes.
+		if errors.Is(msg.err, ErrNoUserList) {
+			if name, _ := envCredentials(); name != "" {
+				s.username.SetValue(name)
+				return s, s.setFocus(1)
+			}
+			return s, nil
+		}
 		if msg.err != nil {
 			s.errText = "Could not read users: " + msg.err.Error()
 			return s, nil
@@ -174,10 +192,10 @@ func (s *loginScreen) submit() tea.Cmd {
 			return nil
 		}
 		s.busy = true
-		return registerCmd(username, password)
+		return registerCmd(s.sess.store, username, password)
 	}
 	s.busy = true
-	return loginCmd(username, password)
+	return loginCmd(s.sess.store, username, password)
 }
 
 func (s *loginScreen) View() string {

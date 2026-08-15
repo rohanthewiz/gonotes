@@ -127,6 +127,37 @@ func setupTestDB(t *testing.T) *models.User {
 	return user
 }
 
+// storeFixture builds one of the Store implementations the boot flows below
+// run against.
+//
+// Running each flow twice is the point of the Phase 4 seam. The local case
+// proves the pass-through wrappers really reach bytdb; the fake case proves
+// the screens depend on the *interface* and nothing else — if a screen ever
+// reaches around the Store back into models.*, the fake run is where it
+// shows, because there is no database open at all.
+type storeFixture struct {
+	name  string
+	build func(t *testing.T) (Store, *models.User)
+}
+
+func storeFixtures() []storeFixture {
+	return []storeFixture{
+		{
+			name: "local",
+			build: func(t *testing.T) (Store, *models.User) {
+				return NewLocalStore(), setupTestDB(t)
+			},
+		},
+		{
+			name: "fake",
+			build: func(t *testing.T) (Store, *models.User) {
+				fs := newFakeStore()
+				return fs, fs.addUser("tui_tester", "test-password-123")
+			},
+		},
+	}
+}
+
 // waitForAll blocks until everything in want has appeared in the program's
 // output. A substring check over the accumulated bytes is the reliable
 // assertion here — the alternate-screen renderer positions the cursor per
@@ -155,54 +186,142 @@ func waitForAll(t *testing.T, tm *teatest.TestModel, want ...string) {
 }
 
 func TestLoginScreenRenders(t *testing.T) {
-	setupTestDB(t)
+	for _, fx := range storeFixtures() {
+		t.Run(fx.name, func(t *testing.T) {
+			st, _ := fx.build(t)
 
-	tm := teatest.NewTestModel(t, newAppModel(), teatest.WithInitialTermSize(100, 40))
+			tm := teatest.NewTestModel(t, newAppModel(st), teatest.WithInitialTermSize(100, 40))
 
-	// The database has exactly one user, so the login screen prefills the
-	// username and jumps focus to the password field — a code path worth
-	// exercising because it depends on a command's result reaching Update.
-	waitForAll(t, tm, "Sign in", "tui_tester", "Password")
+			// The store reports exactly one user, so the login screen prefills
+			// the username and jumps focus to the password field — a code path
+			// worth exercising because it depends on a command's result
+			// reaching Update.
+			waitForAll(t, tm, "Sign in", "tui_tester", "Password")
+
+			tm.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+			tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
+		})
+	}
+}
+
+func TestBrowseScreenRendersSeededNotes(t *testing.T) {
+	for _, fx := range storeFixtures() {
+		t.Run(fx.name, func(t *testing.T) {
+			st, user := fx.build(t)
+
+			// Seed through the Store rather than models.* so the same lines
+			// work for both fixtures — which is itself a small proof that the
+			// interface covers what the TUI needs.
+			body := "# Heading\n\nSome body text."
+			for _, title := range []string{"Alpha note", "Beta note"} {
+				if _, err := st.CreateNote(models.NoteInput{
+					GUID:  "tui-" + title,
+					Title: title,
+					Body:  &body,
+				}, user.GUID); err != nil {
+					t.Fatalf("CreateNote %q: %v", title, err)
+				}
+			}
+
+			tm := teatest.NewTestModel(t, newAppModel(st), teatest.WithInitialTermSize(100, 40))
+
+			// Skip the credential dance: loggedInMsg is exactly what a
+			// successful loginCmd emits, and the root handles it by replacing
+			// the stack with the browse screen. This keeps the test about
+			// rendering, not bcrypt.
+			tm.Send(loggedInMsg{user: user})
+			// ...then re-assert the size. WithInitialTermSize delivers one
+			// WindowSizeMsg at startup, and nothing orders it against a message
+			// we inject this early; if loggedInMsg wins the race the browse
+			// list sizes itself to 0x0 and draws nothing. In a real terminal
+			// the resize always arrives seconds before a login, so this is
+			// harness bookkeeping rather than a behavior the app needs.
+			tm.Send(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+			// "notes" is the plural the list widget puts in its own status bar,
+			// so matching it proves the widget sized itself and drew rows
+			// rather than the screen merely printing a title.
+			waitForAll(t, tm, "GoNotes", "Alpha note", "Beta note", "notes")
+
+			tm.Send(tea.KeyPressMsg{Code: 'q'})
+			tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
+		})
+	}
+}
+
+// TestResumedSessionSkipsTheLoginScreen covers the HTTP-mode shortcut: a store
+// that can answer ResumeSession (a cached token, or credentials in the
+// environment) must land on the notes list without the login screen ever
+// taking a keystroke.
+//
+// The fake expresses that with a field rather than a token, which is the point
+// — the behavior belongs to the boot sequence in bootstrapCmd, not to HTTP.
+func TestResumedSessionSkipsTheLoginScreen(t *testing.T) {
+	fs := newFakeStore()
+	user := fs.addUser("tui_tester", "test-password-123")
+	fs.resume = user
+	fs.seedNote(user.GUID, "Resumed note", "body")
+
+	tm := teatest.NewTestModel(t, newAppModel(fs), teatest.WithInitialTermSize(100, 40))
+	tm.Send(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	// The note's title can only be on screen if the browse list loaded, which
+	// can only happen if loggedInMsg arrived without a password being typed.
+	waitForAll(t, tm, "GoNotes", "Resumed note")
+
+	tm.Send(tea.KeyPressMsg{Code: 'q'})
+	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
+}
+
+// TestLoginPrefillsFromEnvWhenUsernamesAreUnavailable pins the HTTP-mode
+// degradation in login.go: ErrNoUserList is not an error to display, and it
+// must not flip the screen into first-run registration mode.
+func TestLoginPrefillsFromEnvWhenUsernamesAreUnavailable(t *testing.T) {
+	t.Setenv(envUser, "env_user")
+
+	fs := newFakeStore()
+	fs.failWith = ErrNoUserList // ListUsernames now declines, as httpStore does
+
+	tm := teatest.NewTestModel(t, newAppModel(fs), teatest.WithInitialTermSize(100, 40))
+
+	// "Sign in" (not "Create your account") plus the env-supplied username.
+	waitForAll(t, tm, "Sign in", "env_user")
 
 	tm.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
 }
 
-func TestBrowseScreenRendersSeededNotes(t *testing.T) {
-	user := setupTestDB(t)
+// TestBadPasswordClearsTheBusyFlag guards a path that had no test and did not
+// work: the local store reports invalid credentials as (nil user, nil error),
+// so a screen that only checked err left `busy` set — every subsequent key was
+// ignored and the screen sat on "Signing in..." forever. loginCmd now turns
+// that into a loginFailedMsg.
+func TestBadPasswordClearsTheBusyFlag(t *testing.T) {
+	fs := newFakeStore()
+	fs.addUser("tui_tester", "correct-password")
 
-	body := "# Heading\n\nSome body text."
-	for _, title := range []string{"Alpha note", "Beta note"} {
-		if _, err := models.CreateNote(models.NoteInput{
-			GUID:  "tui-" + title,
-			Title: title,
-			Body:  &body,
-		}, user.GUID); err != nil {
-			t.Fatalf("CreateNote %q: %v", title, err)
-		}
+	s := newLoginScreen(&session{store: fs, width: 80, height: 24})
+	s.username.SetValue("tui_tester")
+	s.password.SetValue("wrong-password")
+
+	cmd := s.submit()
+	if cmd == nil {
+		t.Fatal("submit returned no command")
+	}
+	if !s.busy {
+		t.Fatal("submit should mark the screen busy while the attempt is in flight")
 	}
 
-	tm := teatest.NewTestModel(t, newAppModel(), teatest.WithInitialTermSize(100, 40))
+	msg := cmd()
+	failed, ok := msg.(loginFailedMsg)
+	if !ok {
+		t.Fatalf("a wrong password produced %T, want loginFailedMsg", msg)
+	}
 
-	// Skip the credential dance: loggedInMsg is exactly what a successful
-	// loginCmd emits, and the root handles it by replacing the stack with the
-	// browse screen. This keeps the test about rendering, not bcrypt.
-	tm.Send(loggedInMsg{user: user})
-	// ...then re-assert the size. WithInitialTermSize delivers one
-	// WindowSizeMsg at startup, and nothing orders it against a message we
-	// inject this early; if loggedInMsg wins the race the browse list sizes
-	// itself to 0x0 and draws nothing. In a real terminal the resize always
-	// arrives seconds before a login, so this is harness bookkeeping rather
-	// than a behavior the app needs.
-	tm.Send(tea.WindowSizeMsg{Width: 100, Height: 40})
-
-	// "notes" is the plural the list widget puts in its own status bar, so
-	// matching it proves the widget sized itself and drew rows rather than
-	// the screen merely printing a title.
-	waitForAll(t, tm, "GoNotes", "Alpha note", "Beta note", "notes")
-
-	tm.Send(tea.KeyPressMsg{Code: 'q'})
-	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
+	updated, _ := s.Update(failed)
+	if updated.(*loginScreen).busy {
+		t.Error("busy must clear on failure, or the screen stops accepting keys")
+	}
 }
 
 // TestAltScreenIsRequested guards the v2 change that is easiest to lose: the
@@ -212,9 +331,14 @@ func TestBrowseScreenRendersSeededNotes(t *testing.T) {
 // asserted in the same stream as the content — reading FinalOutput separately
 // would find the enter-altscreen bytes already consumed.
 func TestAltScreenIsRequested(t *testing.T) {
-	setupTestDB(t)
+	// No database: this is a rendering assertion, and the fake store is enough
+	// to get a login screen on the wire. It needs an account, though — an
+	// empty store means a fresh install, and the screen says "Create your
+	// account" instead.
+	fs := newFakeStore()
+	fs.addUser("tui_tester", "test-password-123")
 
-	tm := teatest.NewTestModel(t, newAppModel(), teatest.WithInitialTermSize(100, 40))
+	tm := teatest.NewTestModel(t, newAppModel(fs), teatest.WithInitialTermSize(100, 40))
 	waitForAll(t, tm, "\x1b[?1049h", "Sign in")
 
 	tm.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
@@ -226,9 +350,9 @@ func TestAltScreenIsRequested(t *testing.T) {
 // half-finished View() string → View() tea.View conversion is a program that
 // renders an empty frame forever.
 func TestRootViewCarriesContent(t *testing.T) {
-	setupTestDB(t)
-
-	m := newAppModel()
+	fs := newFakeStore()
+	fs.addUser("tui_tester", "test-password-123")
+	m := newAppModel(fs)
 
 	// Before any WindowSizeMsg there is no size, so the view is deliberately
 	// blank — but it must still request the alternate screen.

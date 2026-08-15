@@ -213,9 +213,9 @@ func (s *browseScreen) restyle() {
 // by the root when a pushed screen (form/detail/confirm) pops with changes.
 func (s *browseScreen) refresh() tea.Cmd {
 	if s.catFilter != nil {
-		return loadCategoryNotesCmd(s.catFilter.ID, s.sess.user.GUID)
+		return loadCategoryNotesCmd(s.sess.store, s.catFilter.ID, s.sess.user.GUID)
 	}
-	return loadNotesCmd(s.sess.user.GUID)
+	return loadNotesCmd(s.sess.store, s.sess.user.GUID)
 }
 
 func (s *browseScreen) selectedNote() *models.Note {
@@ -300,14 +300,14 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 
 		case key.Matches(msg, keys.Flag):
 			if n := s.selectedNote(); n != nil {
-				return s, toggleFlagCmd(n.ID, s.sess.user.GUID)
+				return s, toggleFlagCmd(s.sess.store, n.ID, s.sess.user.GUID)
 			}
 
 		case key.Matches(msg, keys.Delete):
 			if n := s.selectedNote(); n != nil {
 				return s, push(newConfirmScreen(s.sess,
 					"Delete \""+n.Title+"\"?",
-					deleteNoteCmd(n.ID, s.sess.user.GUID)))
+					deleteNoteCmd(s.sess.store, n.ID, s.sess.user.GUID)))
 			}
 
 		case key.Matches(msg, keys.Categories):

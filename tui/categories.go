@@ -50,7 +50,7 @@ func (s *categoriesScreen) Init() tea.Cmd {
 }
 
 func (s *categoriesScreen) refresh() tea.Cmd {
-	return loadCategoriesCmd(s.sess.user.GUID)
+	return loadCategoriesCmd(s.sess.store, s.sess.user.GUID)
 }
 
 func (s *categoriesScreen) selected() *models.Category {
@@ -121,14 +121,14 @@ func (s *categoriesScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		case key.Matches(msg, keys.New):
 			return s, push(newPromptScreen(s.sess, "New category name",
 				func(name string) tea.Cmd {
-					return createCategoryCmd(name, s.sess.user.GUID)
+					return createCategoryCmd(s.sess.store, name, s.sess.user.GUID)
 				}))
 
 		case key.Matches(msg, keys.Delete):
 			if c := s.selected(); c != nil {
 				return s, push(newConfirmScreen(s.sess,
 					"Delete category \""+c.Name+"\"? Notes keep their other categories.",
-					deleteCategoryCmd(c.ID, s.sess.user.GUID)))
+					deleteCategoryCmd(s.sess.store, c.ID, s.sess.user.GUID)))
 			}
 		}
 	}

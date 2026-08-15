@@ -96,7 +96,7 @@ func (s *formScreen) Init() tea.Cmd {
 	cmds := []tea.Cmd{textinput.Blink}
 	if s.editing != nil {
 		// Prefill the categories field with the note's current assignments.
-		cmds = append(cmds, loadNoteCategoriesCmd(s.editing.ID, s.sess.user.GUID))
+		cmds = append(cmds, loadNoteCategoriesCmd(s.sess.store, s.editing.ID, s.sess.user.GUID))
 	}
 	return tea.Batch(cmds...)
 }
@@ -309,7 +309,7 @@ func (s *formScreen) save() tea.Cmd {
 	}
 
 	s.busy = true
-	return saveNoteCmd(noteID, input, s.categories.Value(), s.sess.user.GUID)
+	return saveNoteCmd(s.sess.store, noteID, input, s.categories.Value(), s.sess.user.GUID)
 }
 
 // chrome renders everything drawn around the body textarea: above is the

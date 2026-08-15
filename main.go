@@ -8,6 +8,7 @@ import (
 	"gonotes/web"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/rohanthewiz/logger"
 	"github.com/rohanthewiz/rutil/fileops"
@@ -144,10 +145,27 @@ func main() {
 	}
 }
 
-// runTui prepares the working directory and database, then hands the
-// terminal to the Bubble Tea interface. The web server, JWT signing, and the
-// sync client are all skipped — the TUI talks to the models layer directly,
-// so none of the HTTP machinery is needed.
+// tuiProbeTimeout bounds the health check that decides local vs HTTP mode.
+// It sits on the critical path of every `gonotes tui` launch, so it has to be
+// short — but not so short that a busy loopback server (or a laptop waking
+// from sleep) is misread as absent, which would send the TUI into
+// models.InitDB and straight into a lock conflict. Two seconds is the
+// compromise; a live local server answers in single-digit milliseconds.
+const tuiProbeTimeout = 2 * time.Second
+
+// runTui prepares the working directory, decides how the TUI will reach its
+// data, then hands the terminal to the Bubble Tea interface.
+//
+// The decision is the part worth reading. bytdb is single-process: if a
+// GoNotes server (or the MacApp, which embeds one) is already running against
+// this data directory, opening the databases here would fail on the lock. So
+// the launch probes for a live server first:
+//
+//	server answering  →  HTTP store; models.InitDB is never called
+//	nothing there     →  local store over the bytdb files, as before
+//
+// The web server, JWT signing, and the sync client are skipped either way; in
+// HTTP mode the remote server owns all of that.
 func runTui(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return serr.Wrap(err, "failed to create directory", "dir", dir)
@@ -161,11 +179,20 @@ func runTui(dir string) error {
 	// Real errors still come through (and are also surfaced in the status bar).
 	logger.SetLogLevel("error")
 
-	// Pickup local configs (may contain the encryption key)
+	// Pickup local configs (may contain the encryption key, and may set
+	// GONOTES_URL — so this has to happen before the probe reads it).
 	if issues, err := fileops.EnvFromFile("config/cfg_files/.env"); err != nil {
 		for _, issue := range issues {
 			logger.Warn("Cfg file issue", serr.StringFromErr(issue))
 		}
+	}
+
+	// HTTP mode. Note the early return: no InitDB, no CloseDB, no encryption
+	// setup. The server holds the key and bytdb encrypts whole databases at
+	// rest, so it decrypts private bodies on read — which is why HTTP mode
+	// shows the same note text local mode does rather than ciphertext.
+	if serverURL := tui.ServerURL(); tui.ProbeServer(serverURL, tuiProbeTimeout) {
+		return tui.Run(tui.NewHTTPStore(serverURL))
 	}
 
 	if err := models.InitDB(); err != nil {
@@ -181,7 +208,7 @@ func runTui(dir string) error {
 		}
 	}
 
-	return tui.Run()
+	return tui.Run(tui.NewLocalStore())
 }
 
 func serve(dir, port string) error {
