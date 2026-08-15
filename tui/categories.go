@@ -49,6 +49,11 @@ func (s *categoriesScreen) Init() tea.Cmd {
 	return s.refresh()
 }
 
+// takingText: the same fuzzy-filter condition as browseScreen. See metakeys.go.
+func (s *categoriesScreen) takingText() bool {
+	return s.list.FilterState() == list.Filtering
+}
+
 func (s *categoriesScreen) refresh() tea.Cmd {
 	return loadCategoriesCmd(s.sess.store, s.sess.user.GUID)
 }

@@ -74,6 +74,11 @@ func (s *loginScreen) restyle() {
 	s.confirm.SetStyles(st)
 }
 
+// takingText: every field on this screen is a text input and one of them is
+// always focused, so a ⌘ chord whose only twin is a bare letter is swallowed
+// here rather than typed into a username or a password. See metakeys.go.
+func (s *loginScreen) takingText() bool { return true }
+
 func (s *loginScreen) Init() tea.Cmd {
 	return tea.Batch(bootstrapCmd(s.sess.store), textinput.Blink)
 }

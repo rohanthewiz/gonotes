@@ -129,6 +129,12 @@ func (s *formScreen) restyle() {
 	s.body.SetStyles(textarea.DefaultStyles(pal.Dark))
 }
 
+// takingText is unconditional here: every focus position except the private
+// checkbox has a text widget under the cursor, and the checkbox is one tab away
+// from one. So a ⌘ chord with no ctrl-shaped twin is swallowed on this screen
+// rather than translated — see metakeys.go.
+func (s *formScreen) takingText() bool { return true }
+
 // inputs returns the four single-line fields in focus order. Having one place
 // that enumerates them keeps restyle and layout from drifting apart as fields
 // are added.

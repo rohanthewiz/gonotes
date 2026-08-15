@@ -1,0 +1,63 @@
+# cats-plugin.toml registers GoNotes with the cats plugin host.
+#
+#   Install:            catctl plugin install rohanthewiz/gonotes
+#   Local development:  catctl plugin link .   (from this checkout)
+#   Launch:             catctl plugin run rohanthewiz.gonotes
+#
+# Written against ../cats-todo/cats-plugin.toml, which is the reference
+# manifest for this format.
+#
+# BEING A PLUGIN AND BEING A CATS-NATIVE CLIENT ARE ORTHOGONAL, and GoNotes is
+# both. The native side (cats/, tui/cats_glue.go) is what the TUI does once it
+# is running in a cats pane — hook reporting, host theme, ⌘ accelerators,
+# capturing a sibling agent's output into a note — and it works identically
+# whether the pane was opened by this manifest, by `gonotes tui` typed into a
+# shell, or by nothing at all. This file only answers a different question:
+# how does the pane get opened in the first place, from the ⌘K palette instead
+# of from a shell.
+
+id = "rohanthewiz.gonotes"
+name = "GoNotes"
+version = "0.1.0"
+description = "A self-hosted note-taking app: markdown notes with categories, tags, private (encrypted) bodies and full-text fuzzy search, in a terminal UI that reports its work to cats and can capture a sibling agent pane straight into a note."
+platforms = ["linux", "macos"]
+
+# Build the binary at install/link time; the host runs this once in the plugin
+# root. GoNotes is its own Go module, so a plain `go build .` resolves
+# everything from this repo's go.mod.
+#
+# The output goes to bin/ rather than the repo root on purpose: /gonotes is
+# already .gitignore'd as the hand-built binary, and giving the plugin host its
+# own copy means `go build .` in a working tree cannot leave a half-built
+# binary where a plugin launch will find it.
+[[build]]
+command = ["sh", "-c", "mkdir -p bin && go build -o bin/gonotes ."]
+
+# The TUI, which is the whole point of launching GoNotes from cats.
+#
+# NO -d FLAG, DELIBERATELY. An action's argv[0] is anchored to the plugin root
+# but the pane it opens in has the USER'S project as its cwd, so a data
+# directory that depended on cwd would put a different set of notes behind
+# every tab. It does not: `gonotes tui` defaults --dir to $HOME/.gonotes,
+# computed from os.UserHomeDir and chdir'd into before anything opens, so the
+# notes are the same ones from anywhere. Spelling that out as `-d ~/.gonotes`
+# here would be strictly worse — this argv is exec'd directly, with no shell to
+# expand the tilde, so it would create a directory literally named "~".
+#
+# One process at a time owns the bytdb files, and the TUI already knows it:
+# it probes for a running GoNotes server first and comes up in HTTP mode
+# against it if there is one (see runTui). So this action is safe to launch
+# beside the `serve` action below, or beside the MacApp, rather than failing
+# on a lock.
+[[actions]]
+id = "tui"
+title = "GoNotes"
+command = ["./bin/gonotes", "tui"]
+
+# The web server, for the browser UI and for the API the TUI's HTTP mode talks
+# to. Second, so a bare `plugin run` (which takes the first action) opens the
+# TUI — the reason a terminal multiplexer has a notes plugin at all.
+[[actions]]
+id = "serve"
+title = "GoNotes — web server"
+command = ["./bin/gonotes"]

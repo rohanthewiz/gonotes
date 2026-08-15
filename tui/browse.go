@@ -209,6 +209,14 @@ func (s *browseScreen) restyle() {
 	applyListStyles(&s.list)
 }
 
+// takingText is true only while the fuzzy filter prompt is up — the one state
+// in which this screen's unmodified keys are characters rather than note
+// actions. It is the same condition Update checks before its own switch, and it
+// is what stops ⌘F from typing an "f" into a half-typed search. See metakeys.go.
+func (s *browseScreen) takingText() bool {
+	return s.list.FilterState() == list.Filtering
+}
+
 // refresh reloads the list honoring the active category filter. Also called
 // by the root when a pushed screen (form/detail/confirm) pops with changes.
 func (s *browseScreen) refresh() tea.Cmd {

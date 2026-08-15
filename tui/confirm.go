@@ -81,6 +81,11 @@ func (s *promptScreen) restyle() {
 	s.input.SetStyles(textinput.DefaultStyles(pal.Dark))
 }
 
+// takingText: this screen is one focused text input and nothing else. Its
+// sibling confirmScreen deliberately does not implement texter — y/n is a
+// command, not dictation. See metakeys.go.
+func (s *promptScreen) takingText() bool { return true }
+
 func (s *promptScreen) Init() tea.Cmd { return textinput.Blink }
 
 func (s *promptScreen) Update(msg tea.Msg) (screen, tea.Cmd) {

@@ -176,6 +176,20 @@ func (m appModel) Init() tea.Cmd {
 }
 
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// The ⌘ accelerator layer runs before everything else, because its job is
+	// to decide what the rest of Update even sees. A claimed chord is REPLACED
+	// by its twin keystroke and handled from here on as if the user had typed
+	// that; an unclaimed one is dropped here, so it can never reach a focused
+	// text widget as a bare letter. Both halves are in metakeys.go.
+	if k, ok := msg.(tea.KeyPressMsg); ok {
+		if twin, claimed := metaTranslate(k, m.takingText()); claimed {
+			if twin == nil {
+				return m, nil
+			}
+			msg = *twin
+		}
+	}
+
 	switch msg := msg.(type) {
 
 	case tea.WindowSizeMsg:
