@@ -5,9 +5,11 @@ import (
 
 	"gonotes/models"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // formScreen creates a new note or edits an existing one.
@@ -59,7 +61,6 @@ func newFormScreen(sess *session, editing *models.Note) *formScreen {
 	// on grey.
 	newInput := func(placeholder string, limit int) textinput.Model {
 		ti := textinput.New()
-		ti.SetStyles(textinput.DefaultStyles(isDark))
 		ti.Placeholder = placeholder
 		ti.CharLimit = limit
 		return ti
@@ -74,7 +75,7 @@ func newFormScreen(sess *session, editing *models.Note) *formScreen {
 		categories: newInput("comma, separated, categories (created if new)", 300),
 		body:       textarea.New(),
 	}
-	f.body.SetStyles(textarea.DefaultStyles(isDark))
+	f.restyle()
 	f.body.Placeholder = "markdown body — ctrl+e opens $EDITOR"
 	f.body.CharLimit = 0 // unlimited; notes can be long
 
@@ -100,28 +101,63 @@ func (s *formScreen) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// restyle applies the palette's current light/dark answer to the five widgets.
+// bubbles v2 defaults every widget to a hardcoded dark style set (lipgloss v2
+// removed AdaptiveColor, so the widget cannot ask the terminal itself) and
+// copies that set in at construction — so this runs once at construction and
+// again whenever the palette changes.
+func (s *formScreen) restyle() {
+	st := textinput.DefaultStyles(pal.Dark)
+	for _, ti := range s.inputs() {
+		ti.SetStyles(st)
+	}
+	s.body.SetStyles(textarea.DefaultStyles(pal.Dark))
+}
+
+// inputs returns the four single-line fields in focus order. Having one place
+// that enumerates them keeps restyle and layout from drifting apart as fields
+// are added.
+func (s *formScreen) inputs() []*textinput.Model {
+	return []*textinput.Model{&s.title, &s.desc, &s.tags, &s.categories}
+}
+
 // layout sizes the inputs to the terminal. The textarea takes all vertical
-// space left after the fixed-height fields, so bigger terminals give more
-// body room automatically.
+// space left after the chrome, so bigger terminals give more body room
+// automatically.
+//
+// The chrome height is *measured*, not counted. It used to be `height - 14`,
+// derived from a comment tallying "heading(2) + 4 labeled inputs(4*2=8) +
+// private(1) + body label(1) + help(2) ≈ 14" — a constant that was wrong the
+// moment any of those lines wrapped, and that nothing would have flagged if a
+// field were added. Rendering the chrome and asking lipgloss how tall it came
+// out is both exact and self-maintaining, and it is cheap: the strings are
+// built once per resize, not per frame.
 func (s *formScreen) layout() {
 	w := s.sess.width - 4
 	if w < 20 {
 		w = 20
 	}
 	// v2 made the input width unexported; SetWidth replaces `ti.Width = w`.
-	for _, ti := range []*textinput.Model{&s.title, &s.desc, &s.tags, &s.categories} {
+	for _, ti := range s.inputs() {
 		ti.SetWidth(w)
 	}
 	s.body.SetWidth(w)
 
-	// Fixed chrome: heading(2) + 4 labeled inputs(4*2=8) + private(1) +
-	// body label(1) + help(2) ≈ 14 lines.
-	bodyHeight := s.sess.height - 14
-	if bodyHeight < 3 {
-		bodyHeight = 3
+	above, below := s.chrome()
+	bodyHeight := s.sess.height - lipgloss.Height(above) - lipgloss.Height(below)
+	// A floor rather than a hard requirement: on a terminal too short to hold
+	// the chrome the form scrolls off the bottom, which is survivable and
+	// recoverable by resizing. A zero-height textarea is neither — it renders
+	// nothing and swallows every keystroke typed into it.
+	if bodyHeight < minBodyHeight {
+		bodyHeight = minBodyHeight
 	}
 	s.body.SetHeight(bodyHeight)
 }
+
+// minBodyHeight is the smallest textarea that is still usable: one line of
+// text plus room to see a line above and below it while scrolling.
+const minBodyHeight = 3
 
 func (s *formScreen) setFocus(idx int) tea.Cmd {
 	s.focus = (idx + focusCount) % focusCount
@@ -183,23 +219,23 @@ func (s *formScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			return s, nil
 		}
 
-		switch msg.String() {
-		case "ctrl+s":
+		switch {
+		case key.Matches(msg, keys.Save):
 			return s, s.save()
 
-		case "ctrl+e":
+		case key.Matches(msg, keys.Editor):
 			return s, openEditorCmd(s.body.Value())
 
-		case "esc":
+		case key.Matches(msg, keys.Back):
 			return s, tea.Sequence(pop(false), status("Edit canceled"))
 
-		case "tab":
+		case key.Matches(msg, keys.NextField):
 			return s, s.setFocus(s.focus + 1)
 
-		case "shift+tab":
+		case key.Matches(msg, keys.PrevField):
 			return s, s.setFocus(s.focus - 1)
 
-		case "enter":
+		case key.Matches(msg, keys.Submit):
 			// Enter advances through single-line fields (web-form muscle
 			// memory), toggles the checkbox, and inside the body falls
 			// through to insert a newline.
@@ -211,11 +247,9 @@ func (s *formScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				return s, nil
 			}
 
-		// v1 stringified the space bar as " "; v2 names it "space" (space is
-		// the one printable character whose literal form is invisible, so
-		// ultraviolet gives it a word). Matching " " here would silently stop
-		// toggling the checkbox.
-		case "space":
+		case key.Matches(msg, keys.TogglePrivate):
+			// Only claim the space bar on the checkbox row; everywhere else it
+			// has to reach the focused input as a literal character.
 			if s.focus == focusPrivate {
 				s.isPrivate = !s.isPrivate
 				return s, nil
@@ -278,7 +312,14 @@ func (s *formScreen) save() tea.Cmd {
 	return saveNoteCmd(noteID, input, s.categories.Value(), s.sess.user.GUID)
 }
 
-func (s *formScreen) View() string {
+// chrome renders everything drawn around the body textarea: above is the
+// heading and the labeled fields, below is the help/busy line.
+//
+// Split out of View so layout() can measure it. Neither half carries a
+// trailing newline — View joins with them — so lipgloss.Height on each returns
+// exactly the lines it will occupy, and the two heights plus the textarea's
+// add up to the whole screen.
+func (s *formScreen) chrome() (above, below string) {
 	var b strings.Builder
 
 	heading := "New note"
@@ -316,17 +357,20 @@ func (s *formScreen) View() string {
 	if s.focus == focusBody {
 		bodyLabel = labelFocusedStyle
 	}
-	b.WriteString(bodyLabel.Render("Body") + "\n")
-	b.WriteString(s.body.View())
-	b.WriteString("\n")
+	b.WriteString(bodyLabel.Render("Body"))
 
 	if s.busy {
-		b.WriteString(dimStyle.Render("Saving..."))
+		below = dimStyle.Render("Saving...")
 	} else {
-		b.WriteString(helpStyle.Render("ctrl+s save • ctrl+e $EDITOR • tab next field • esc cancel"))
+		below = renderHelp(keys.formHelp()...)
 	}
+	return b.String(), below
+}
 
-	return b.String()
+func (s *formScreen) View() string {
+	above, below := s.chrome()
+	return above + "\n" + s.body.View() + "\n" + below
 }
 
 var _ screen = (*formScreen)(nil)
+var _ restyler = (*formScreen)(nil)

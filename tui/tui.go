@@ -41,18 +41,28 @@ type refresher interface {
 	refresh() tea.Cmd
 }
 
-// restyler is optionally implemented by screens holding bubbles widgets,
-// which copy their style set in at construction and therefore cannot see a
-// later palette change. The root calls it on every screen in the stack when
-// tea.BackgroundColorMsg reports a background different from the assumed
-// dark default.
+// restyler is implemented by every screen that holds state derived from the
+// palette rather than read from it at render time — bubbles widgets (which
+// copy their style set in at construction) and cached rendered output.
 //
-// Only loginScreen implements it here: it is the one screen that exists
-// before the terminal can possibly have answered. Phase 3 makes the rest of
-// the stack conform, at which point a mid-session theme switch is fully
-// supported.
+// The package-level styles in styles.go do not need this: they are read fresh
+// on every View(), so a screen that only uses them repaints correctly with no
+// notification at all. Everything a screen *stores* is what this exists for.
+//
+// The root broadcasts to the whole stack, not just the top screen, so a screen
+// resumed after a pop is never left painted in the old colors.
 type restyler interface {
 	restyle()
+}
+
+// paletteChangedMsg announces that setPalette accepted a new palette. It is a
+// message rather than a direct call so the restyle happens on the Bubble Tea
+// event loop: Phase 6's host theme changes arrive on a socket goroutine, and
+// mutating bubbles models from there would race every Update in flight.
+type paletteChangedMsg struct{}
+
+func paletteChanged() tea.Cmd {
+	return func() tea.Msg { return paletteChangedMsg{} }
 }
 
 // session carries state shared by every screen. A pointer to it is embedded
@@ -141,17 +151,22 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusOK = false
 
 	case tea.BackgroundColorMsg:
-		// The terminal answered the Init() query. Rebuilding the palette is
-		// enough for everything the screens render themselves, because those
-		// styles are read fresh on every View(). Widgets are the exception:
-		// bubbles copies its style set into each Model at construction, so
-		// any screen already on the stack needs telling.
-		if msg.IsDark() != isDark {
-			setPalette(msg.IsDark())
-			for _, s := range m.stack {
-				if r, ok := s.(restyler); ok {
-					r.restyle()
-				}
+		// The terminal answered the Init() query. setPalette reports whether
+		// this actually changed anything — the reply can arrive more than once
+		// (a repaint, a terminal that re-announces on focus) and rebuilding
+		// every widget for an identical palette is visible work for no visible
+		// difference.
+		if setPalette(DefaultPalette(msg.IsDark())) {
+			return m, paletteChanged()
+		}
+		return m, nil
+
+	case paletteChangedMsg:
+		// Screens that only read the styles in styles.go repaint on their own;
+		// this reaches the ones holding derived state. See the restyler doc.
+		for _, s := range m.stack {
+			if r, ok := s.(restyler); ok {
+				r.restyle()
 			}
 		}
 		return m, nil

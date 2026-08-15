@@ -2,48 +2,53 @@ package tui
 
 import (
 	"image/color"
+	"strings"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/lipgloss/v2"
 )
 
-// Central color palette. Keeping every color here (rather than inline in
-// views) means a re-theme is a one-file change.
+// Every lipgloss style the TUI draws with lives here, rebuilt from the active
+// Palette (palette.go) by applyPalette. Keeping them in one file means a
+// re-theme — whether the terminal reports a light background or the cats host
+// pushes its own colors — is one function call, not a sweep through six views.
 //
-// Light/dark handling, and why this file gained a function:
+// Light/dark handling, and why this is a function rather than a var block:
 //
-// Lipgloss v1 had `AdaptiveColor{Light, Dark}`, a value that resolved itself
-// at render time by consulting a package-global background detection. v2
-// deleted it — colors are now plain `color.Color` values, and choosing
-// between a light and a dark variant is the application's job via
-// `lipgloss.LightDark(isDark)`.
+// Lipgloss v1 had AdaptiveColor{Light, Dark}, a value that resolved itself at
+// render time by consulting a package-global background detection. v2 deleted
+// it — colors are plain color.Color values now, and choosing between a light
+// and a dark variant is the application's job.
 //
-// That forces a decision about *when* detection happens, and the obvious
-// answer is wrong twice over. `lipgloss.HasDarkBackground` writes an OSC 11
-// query and blocks on the reply with a 2s timeout — and BackgroundColor tries
-// stdin and stdout in turn, so a terminal that ignores OSC 11 costs ~4s of
-// black screen. Calling it from a package-level var initializer would also
-// run it during `gonotes serve`, since main imports this package
-// unconditionally.
+// That forces a decision about *when* detection happens, and the obvious answer
+// is wrong twice over. lipgloss.HasDarkBackground writes an OSC 11 query and
+// blocks on the reply with a 2s timeout — and BackgroundColor tries stdin and
+// stdout in turn, so a terminal that ignores OSC 11 costs ~4s of black screen.
+// Calling it from a package-level var initializer would also run it during
+// `gonotes serve`, since main imports this package unconditionally.
 //
-// So detection is asynchronous instead: the root model asks for the
-// background color with tea.RequestBackgroundColor() and calls setPalette()
-// when tea.BackgroundColorMsg arrives (lipgloss's own docs point Bubble Tea
-// users at exactly this). Until then the vars hold the dark variant, which is
-// also what bubbles v2 hardcodes in its widget defaults. A terminal that
-// never answers simply stays dark rather than stalling.
+// So detection is asynchronous: the root model asks with
+// tea.RequestBackgroundColor() and installs a new palette when
+// tea.BackgroundColorMsg arrives (lipgloss's own docs point Bubble Tea users at
+// exactly this). Until then the dark palette holds, which is also what bubbles
+// v2 hardcodes in its widget defaults. A terminal that never answers simply
+// stays dark rather than stalling.
 //
-// Phase 3 replaces this with a Palette struct and a restyle broadcast to the
-// whole screen stack; setPalette and the restyler interface in tui.go are the
-// seams that work lands in.
+// The styles below are read fresh on every View(), so screens pick a new
+// palette up immediately. Widgets are the exception — bubbles copies its style
+// set into each Model at construction — which is what the restyler interface in
+// tui.go exists to fix.
 
-// In v2 lipgloss.Color is a *function* returning a color.Color, not a type,
-// so these are declared against the standard image/color interface.
+// In v2 lipgloss.Color is a *function* returning a color.Color, not a type, so
+// these are declared against the standard image/color interface.
 var (
 	colorPrimary color.Color // brand accent
 	colorSubtle  color.Color // secondary text
 	colorSuccess color.Color
 	colorDanger  color.Color
 	colorWarn    color.Color
+	colorFg      color.Color // terminal foreground
+	colorSel     color.Color // selection fill (accent over background)
 )
 
 var (
@@ -78,31 +83,30 @@ var (
 
 	// detailHeaderStyle underlines the metadata block above a note body.
 	detailHeaderStyle lipgloss.Style
+
+	// previewPaneStyle draws the browse screen's wide-layout right pane: a
+	// vertical rule separating it from the list, and a gutter so rendered
+	// markdown does not touch the rule.
+	previewPaneStyle lipgloss.Style
+
+	// previewTitleStyle heads that pane with the selected note's title.
+	previewTitleStyle lipgloss.Style
+
+	// errorTextStyle renders inline error text inside a dialog (as opposed to
+	// the status bar's version, which is padded to sit on the bottom line).
+	errorTextStyle lipgloss.Style
 )
 
-// isDark records which variant the palette currently holds. The bubbles v2
-// widgets (list, textinput, textarea) build their own default styles and
-// hardcode the dark set, so every construction site has to pass this along —
-// see newListDelegate in browse.go and the widget constructors in form.go,
-// login.go and confirm.go.
-var isDark = true
-
-func init() { setPalette(true) } // dark until the terminal says otherwise
-
-// setPalette rebuilds every style for a light or dark terminal background.
-// Safe to call more than once. The package-level styles above are read on
-// every render, so screens pick the new palette up immediately; styles that
-// bubbles widgets copied into themselves at construction do not, which is
-// what the restyler interface in tui.go exists to fix.
-func setPalette(dark bool) {
-	isDark = dark
-	c := lipgloss.LightDark(dark)
-
-	colorPrimary = c(lipgloss.Color("#5A56E0"), lipgloss.Color("#7D79F6"))
-	colorSubtle = c(lipgloss.Color("#8A8A8A"), lipgloss.Color("#6C6C6C"))
-	colorSuccess = c(lipgloss.Color("#2E7D32"), lipgloss.Color("#7CD992"))
-	colorDanger = c(lipgloss.Color("#C62828"), lipgloss.Color("#FF8A80"))
-	colorWarn = c(lipgloss.Color("#B26A00"), lipgloss.Color("#FFC46B"))
+// applyPalette rebuilds every style above from p. Called only by setPalette,
+// which owns the "did anything change" decision.
+func applyPalette(p Palette) {
+	colorPrimary = lipgloss.Color(p.Primary)
+	colorSubtle = lipgloss.Color(p.Subtle)
+	colorSuccess = lipgloss.Color(p.Success)
+	colorDanger = lipgloss.Color(p.Danger)
+	colorWarn = lipgloss.Color(p.Warn)
+	colorFg = lipgloss.Color(p.Fg)
+	colorSel = lipgloss.Color(p.Sel)
 
 	appTitleStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#FFFFFF")).
@@ -132,4 +136,32 @@ func setPalette(dark bool) {
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderBottom(true).
 		BorderForeground(colorSubtle)
+
+	previewPaneStyle = lipgloss.NewStyle().
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderLeft(true).
+		BorderForeground(colorSubtle).
+		PaddingLeft(1)
+
+	previewTitleStyle = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
+
+	errorTextStyle = lipgloss.NewStyle().Foreground(colorDanger)
+}
+
+// renderHelp formats a key hint line from the keymap — "enter view • n new •
+// q quit" — so the footer text and the bindings that actually fire can never
+// drift apart. Disabled bindings and those without help text are skipped.
+//
+// The list-based screens do not use this: bubbles renders their footer itself
+// from AdditionalShortHelpKeys, fed from the same keymap.
+func renderHelp(bindings ...key.Binding) string {
+	parts := make([]string, 0, len(bindings))
+	for _, b := range bindings {
+		h := b.Help()
+		if !b.Enabled() || h.Key == "" {
+			continue
+		}
+		parts = append(parts, h.Key+" "+h.Desc)
+	}
+	return helpStyle.Render(strings.Join(parts, " • "))
 }

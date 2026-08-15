@@ -5,12 +5,15 @@ import (
 
 	"gonotes/models"
 
+	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
-// browseScreen is the home screen: the user's notes in a filterable list.
+// browseScreen is the home screen: the user's notes in a filterable list, with
+// a markdown preview beside it when the terminal is wide enough.
 //
 // Search & filtering (two complementary mechanisms):
 //   - "/" activates bubbles/list's built-in fuzzy filter, which we point at
@@ -20,13 +23,43 @@ import (
 //     that category's notes (server-side via the join table). esc clears it.
 //
 // The two compose: you can filter by category first, then "/" within it.
+//
+// Layout:
+//
+//	width < 100                    width >= 100
+//	┌──────────────────┐           ┌───────────┬──────────────────┐
+//	│ list (full)      │           │ list ~40% │ markdown preview │
+//	└──────────────────┘           └───────────┴──────────────────┘
+//
+// The preview costs nothing extra to populate — loadNotesCmd already returns
+// full bodies, because the fuzzy filter searches them — so the wide layout is
+// purely a rendering decision, made per frame from the current width.
 type browseScreen struct {
 	sess *session
 	list list.Model
 
 	// catFilter is the active category filter; nil means "all notes".
 	catFilter *models.Category
+
+	// listWidth is the list's width under the current layout: the full
+	// terminal when narrow, a fraction of it when the preview pane is showing.
+	// Zero until the first layout.
+	listWidth int
+	// previewWidth is the preview pane's total width including its rule and
+	// gutter, or 0 when the layout is narrow — which is also the "is the
+	// preview showing" test.
+	previewWidth int
 }
+
+// widePaneMin is the terminal width at which the preview pane appears. Below
+// it the list alone would be squeezed under ~60 columns, which is where note
+// titles start truncating badly; a preview bought at that price is a bad trade.
+const widePaneMin = 100
+
+// listWidthFraction is the share of a wide terminal given to the list. Titles
+// and dates fit comfortably at 40% of 100 columns, and prose reads better with
+// the larger half.
+const listWidthFraction = 0.4
 
 // noteItem adapts a models.Note to the list.Item interface.
 type noteItem struct{ note models.Note }
@@ -56,15 +89,38 @@ func (i noteItem) Description() string {
 	return dimStyle.Render(date) + "  " + desc
 }
 
-// FilterValue feeds the fuzzy filter. Including a bounded slice of the body
-// makes "/" a genuine content search, while the cap keeps matching fast even
-// with hundreds of long notes.
+// filterBodyRunes caps how much of a note body feeds the fuzzy filter. The cap
+// keeps matching fast with hundreds of long notes while still making "/" a
+// genuine content search rather than a title search.
+const filterBodyRunes = 2000
+
+// FilterValue feeds the fuzzy filter.
+//
+// The cap is applied in runes, not bytes. Slicing a UTF-8 string at a byte
+// offset can land mid-rune, and the resulting invalid byte would flow into
+// bubbles' matcher — which normalizes and compares runes, so a note whose
+// 2000th byte falls inside a multi-byte character would match slightly
+// differently than the same note one character shorter. Rare and silent, which
+// is precisely why it is worth not having.
 func (i noteItem) FilterValue() string {
-	body := i.note.Body.String
-	if len(body) > 2000 {
-		body = body[:2000]
-	}
+	body := truncateRunes(i.note.Body.String, filterBodyRunes)
 	return i.note.Title + " " + i.note.Tags.String + " " + i.note.Description.String + " " + body
+}
+
+// truncateRunes returns at most n runes of s, cutting on a character boundary.
+// Unlike truncate() in tui.go it appends no ellipsis — this is for machine
+// consumption, where a stray "…" would be one more token to match against.
+func truncateRunes(s string, n int) string {
+	if len(s) <= n {
+		// A string of n bytes can hold at most n runes, so this is a safe fast
+		// path that skips the conversion for the common short-body case.
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
 }
 
 func firstLine(s string) string {
@@ -79,50 +135,78 @@ func firstLine(s string) string {
 // newListDelegate builds the shared row renderer used by both list screens
 // (notes and categories), accented with the app's primary color.
 //
-// The explicit NewDefaultItemStyles(isDark) is not cosmetic bookkeeping.
+// The explicit NewDefaultItemStyles(pal.Dark) is not cosmetic bookkeeping.
 // list.NewDefaultDelegate() in bubbles v2 hardcodes the dark style set — its
 // own source marks that "XXX ... temporarily" — because lipgloss v2 removed
 // AdaptiveColor and the widget has no way to ask the terminal itself. Without
 // this, a light-background terminal loses the row contrast v1 gave for free.
 func newListDelegate() list.DefaultDelegate {
 	delegate := list.NewDefaultDelegate()
-	delegate.Styles = list.NewDefaultItemStyles(isDark)
+	delegate.Styles = list.NewDefaultItemStyles(pal.Dark)
 	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
-		Foreground(colorPrimary).BorderLeftForeground(colorPrimary)
+		Foreground(colorPrimary).BorderLeftForeground(colorPrimary).
+		Background(colorSel)
 	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.
-		Foreground(colorSubtle).BorderLeftForeground(colorPrimary)
+		Foreground(colorSubtle).BorderLeftForeground(colorPrimary).
+		Background(colorSel)
 	return delegate
+}
+
+// applyListStyles restyles a list.Model in place from the current palette.
+// Shared by both list screens and called again on a palette change: everything
+// it touches was copied into the model at construction and cannot see the new
+// colors on its own.
+//
+// list.Model.Help is easy to miss — it is a nested help.Model with its own
+// style set, hardcoded dark by the same v2 constructor pattern, and it draws
+// the footer on every frame.
+func applyListStyles(l *list.Model) {
+	l.SetDelegate(newListDelegate())
+	l.Styles = list.DefaultStyles(pal.Dark)
+	l.Styles.Title = appTitleStyle
+	l.Help.Styles = help.DefaultStyles(pal.Dark)
 }
 
 func newBrowseScreen(sess *session) *browseScreen {
 	l := list.New([]list.Item{}, newListDelegate(), sess.width, sess.height)
 	l.Title = "GoNotes"
-	l.Styles = list.DefaultStyles(isDark) // same hardcoded-dark caveat as the delegate
-	l.Styles.Title = appTitleStyle
+	applyListStyles(&l)
 	l.SetShowStatusBar(true)
 	l.SetStatusBarItemName("note", "notes")
 	// We own quit ("q") and back ("esc") semantics; the widget must not
 	// intercept them for its own quit behavior.
 	l.DisableQuitKeybindings()
-	// Surface our custom actions inside the list's built-in help footer.
-	l.AdditionalShortHelpKeys = func() []key.Binding {
-		return []key.Binding{
-			key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "view")),
-			key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new")),
-			key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
-			key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
-			key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "flag")),
-			key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "categories")),
-			key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
-		}
-	}
+	// Surface our custom actions inside the list's built-in help footer, fed
+	// from the same keymap the Update switch dispatches on so the footer can
+	// never advertise a key that no longer works.
+	l.AdditionalShortHelpKeys = func() []key.Binding { return keys.browseHelp() }
 
 	return &browseScreen{sess: sess, list: l}
 }
 
 func (s *browseScreen) Init() tea.Cmd {
-	s.list.SetSize(s.sess.width, s.sess.height)
+	s.layout()
 	return s.refresh()
+}
+
+// layout splits the terminal between the list and the preview pane. Called on
+// init and on every resize; the result is read by View.
+func (s *browseScreen) layout() {
+	if s.sess.width < widePaneMin {
+		s.listWidth = s.sess.width
+		s.previewWidth = 0
+	} else {
+		s.listWidth = int(float64(s.sess.width) * listWidthFraction)
+		s.previewWidth = s.sess.width - s.listWidth
+	}
+	s.list.SetSize(s.listWidth, s.sess.height)
+}
+
+// restyle rebuilds everything the list copied in at construction. The markdown
+// preview needs no attention: its cache is keyed on the palette generation, so
+// a palette change orphans the old entries automatically.
+func (s *browseScreen) restyle() {
+	applyListStyles(&s.list)
 }
 
 // refresh reloads the list honoring the active category filter. Also called
@@ -145,7 +229,7 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	switch msg := msg.(type) {
 
 	case tea.WindowSizeMsg:
-		s.list.SetSize(s.sess.width, s.sess.height)
+		s.layout()
 		return s, nil
 
 	case notesLoadedMsg:
@@ -185,11 +269,11 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			break
 		}
 
-		switch msg.String() {
-		case "q":
+		switch {
+		case key.Matches(msg, keys.Quit):
 			return s, tea.Quit
 
-		case "esc":
+		case key.Matches(msg, keys.Back):
 			// esc peels back UI state in order: applied fuzzy filter first,
 			// then the category filter, and does nothing at the home state.
 			if s.list.FilterState() == list.FilterApplied {
@@ -201,32 +285,32 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			}
 			return s, nil
 
-		case "enter":
+		case key.Matches(msg, keys.Open):
 			if n := s.selectedNote(); n != nil {
 				return s, push(newDetailScreen(s.sess, *n))
 			}
 
-		case "n":
+		case key.Matches(msg, keys.New):
 			return s, push(newFormScreen(s.sess, nil))
 
-		case "e":
+		case key.Matches(msg, keys.Edit):
 			if n := s.selectedNote(); n != nil {
 				return s, push(newFormScreen(s.sess, n))
 			}
 
-		case "f":
+		case key.Matches(msg, keys.Flag):
 			if n := s.selectedNote(); n != nil {
 				return s, toggleFlagCmd(n.ID, s.sess.user.GUID)
 			}
 
-		case "d":
+		case key.Matches(msg, keys.Delete):
 			if n := s.selectedNote(); n != nil {
 				return s, push(newConfirmScreen(s.sess,
 					"Delete \""+n.Title+"\"?",
 					deleteNoteCmd(n.ID, s.sess.user.GUID)))
 			}
 
-		case "c":
+		case key.Matches(msg, keys.Categories):
 			return s, push(newCategoriesScreen(s.sess))
 		}
 	}
@@ -237,8 +321,51 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 }
 
 func (s *browseScreen) View() string {
-	return s.list.View()
+	// Both layouts clamp the list to its pane. JoinHorizontal would pad a short
+	// block itself, but it cannot rescue an over-wide one — and the list can be
+	// over-wide, see the note on clampPane.
+	list := clampPane(s.list.View(), s.listWidth, s.sess.height)
+	if s.previewWidth == 0 {
+		return list
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, list, s.previewView())
+}
+
+// previewView renders the selected note's markdown into the right-hand pane.
+//
+// Rendering happens through the (id, width, palette) cache in markdown.go, so
+// holding an arrow key down re-renders each note once, not once per frame —
+// the difference between a responsive list and a laggy one over long notes.
+func (s *browseScreen) previewView() string {
+	// The border and its left gutter come out of the content width.
+	inner := s.previewWidth - previewPaneStyle.GetHorizontalFrameSize()
+	if inner < 1 {
+		return ""
+	}
+
+	var body string
+	switch n := s.selectedNote(); {
+	case n == nil:
+		body = dimStyle.Render("(no note selected)")
+	default:
+		title := previewTitleStyle.Render(truncate(n.Title, inner))
+		meta := dimStyle.Render("updated " + n.UpdatedAt.Format("2006-01-02 15:04"))
+		var content string
+		if strings.TrimSpace(n.Body.String) == "" {
+			content = dimStyle.Render("(this note has no body)")
+		} else {
+			content = renderMarkdownCached(
+				noteCacheKey(n.ID, n.UpdatedAt.Unix()), n.Body.String, inner)
+		}
+		body = title + "\n" + meta + "\n\n" + content
+	}
+
+	// Clamp the content to the pane's inner box first, then let the style draw
+	// the rule and gutter around it. Doing it the other way round would measure
+	// the border as content and lose a column of every line.
+	return previewPaneStyle.Render(clampPane(body, inner, s.sess.height))
 }
 
 var _ screen = (*browseScreen)(nil)
 var _ refresher = (*browseScreen)(nil)
+var _ restyler = (*browseScreen)(nil)

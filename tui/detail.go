@@ -5,10 +5,9 @@ import (
 
 	"gonotes/models"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/glamour/v2"
-	"charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
 )
 
@@ -107,35 +106,27 @@ func (s *detailScreen) layout() {
 	s.vp.SetContent(s.renderBody())
 }
 
-// renderBody converts the markdown body to styled terminal output. On any
-// renderer error we fall back to the raw text — showing something always
-// beats showing an error where the note should be.
+// renderBody converts the markdown body to styled terminal output.
+//
+// The render goes through markdown.go's cache. That matters more than it looks
+// on this screen: layout() re-renders on every resize, on every reload after a
+// flag toggle, and again when the category list lands — three times for one
+// note open, all producing identical output. The cache key carries the note's
+// update timestamp, so an edit still re-renders.
 func (s *detailScreen) renderBody() string {
 	body := s.note.Body.String
 	if strings.TrimSpace(body) == "" {
 		return dimStyle.Render("(this note has no body)")
 	}
+	return renderMarkdownCached(
+		noteCacheKey(s.note.ID, s.note.UpdatedAt.Unix()), body, s.sess.width)
+}
 
-	// glamour v2 dropped WithAutoStyle(), which used to run its own background
-	// detection. The style is now chosen explicitly from the palette's
-	// already-resolved light/dark answer (styles.go), so there is exactly one
-	// detection in the process instead of two that could disagree.
-	style := styles.LightStyleConfig
-	if isDark {
-		style = styles.DarkStyleConfig
-	}
-	r, err := glamour.NewTermRenderer(
-		glamour.WithStyles(style),
-		glamour.WithWordWrap(min(s.sess.width-2, 100)),
-	)
-	if err != nil {
-		return body
-	}
-	out, err := r.Render(body)
-	if err != nil {
-		return body
-	}
-	return out
+// restyle re-renders the body under the new palette. The viewport itself holds
+// no palette-derived style set (it draws only its content), so the cached
+// markdown is the whole of this screen's derived state.
+func (s *detailScreen) restyle() {
+	s.layout()
 }
 
 func (s *detailScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
@@ -182,15 +173,15 @@ func (s *detailScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		return s, tea.Sequence(pop(true), status("Note deleted"))
 
 	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "esc", "q":
+		switch {
+		case key.Matches(msg, keys.Back, keys.Quit):
 			// Pop with refresh: a flag toggle here should show in the list.
 			return s, pop(true)
-		case "e":
+		case key.Matches(msg, keys.Edit):
 			return s, push(newFormScreen(s.sess, &s.note))
-		case "f":
+		case key.Matches(msg, keys.Flag):
 			return s, toggleFlagCmd(s.note.ID, s.sess.user.GUID)
-		case "d":
+		case key.Matches(msg, keys.Delete):
 			return s, push(newConfirmScreen(s.sess,
 				"Delete \""+s.note.Title+"\"?",
 				deleteNoteCmd(s.note.ID, s.sess.user.GUID)))
@@ -206,9 +197,9 @@ func (s *detailScreen) View() string {
 	if !s.ready {
 		return ""
 	}
-	help := helpStyle.Render("↑/↓ scroll • e edit • f flag • d delete • esc back")
-	return s.headerView() + "\n" + s.vp.View() + "\n" + help
+	return s.headerView() + "\n" + s.vp.View() + "\n" + renderHelp(keys.detailHelp()...)
 }
 
 var _ screen = (*detailScreen)(nil)
 var _ refresher = (*detailScreen)(nil)
+var _ restyler = (*detailScreen)(nil)

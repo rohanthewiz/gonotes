@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -62,11 +63,11 @@ func newLoginScreen(sess *session) *loginScreen {
 // itself), and it copies that set in at construction — so this has to run
 // again if the background turns out to be light.
 //
-// The login screen is built before the program starts, which makes it the
-// only screen that can be on the stack when tea.BackgroundColorMsg lands.
-// See the restyler interface in tui.go.
+// The login screen is built before the program starts, which makes it the one
+// screen guaranteed to be on the stack when tea.BackgroundColorMsg lands. See
+// the restyler interface in tui.go.
 func (s *loginScreen) restyle() {
-	st := textinput.DefaultStyles(isDark)
+	st := textinput.DefaultStyles(pal.Dark)
 	s.username.SetStyles(st)
 	s.password.SetStyles(st)
 	s.confirm.SetStyles(st)
@@ -130,22 +131,24 @@ func (s *loginScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		}
 		s.errText = ""
 
-		switch msg.String() {
-		case "tab", "down":
+		switch {
+		// The arrows move between fields here, unlike on the note form where
+		// they belong to the textarea's cursor — hence the separate bindings.
+		case key.Matches(msg, keys.NextField, keys.FieldDown):
 			return s, s.setFocus(s.focus + 1)
-		case "shift+tab", "up":
+		case key.Matches(msg, keys.PrevField, keys.FieldUp):
 			return s, s.setFocus(s.focus - 1)
-		case "enter":
+		case key.Matches(msg, keys.Submit):
 			// Enter advances until the last field, then submits — familiar
 			// from web login forms.
 			if s.focus < len(s.fields())-1 {
 				return s, s.setFocus(s.focus + 1)
 			}
 			return s, s.submit()
-		case "esc":
+		case key.Matches(msg, keys.Back):
 			// No screen below us to pop to; esc here means "get me out".
-			// ("q" must NOT quit here — it's a legitimate character in
-			// usernames and passwords.)
+			// (keys.Quit must NOT be honored here — "q" is a legitimate
+			// character in usernames and passwords.)
 			return s, tea.Quit
 		}
 	}
@@ -210,12 +213,12 @@ func (s *loginScreen) View() string {
 		b.WriteString("\n")
 	}
 	if s.errText != "" {
-		b.WriteString(lipgloss.NewStyle().Foreground(colorDanger).Render(s.errText))
+		b.WriteString(errorTextStyle.Render(s.errText))
 		b.WriteString("\n")
 	}
 
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("enter submit • tab next field • ctrl+c quit"))
+	b.WriteString(renderHelp(keys.loginHelp()...))
 
 	// Center the login card in the terminal for a polished first impression.
 	card := dialogBoxStyle.Width(48).Render(b.String())

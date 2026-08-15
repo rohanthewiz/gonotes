@@ -31,21 +31,17 @@ func (i catItem) FilterValue() string { return i.cat.Name }
 func newCategoriesScreen(sess *session) *categoriesScreen {
 	l := list.New([]list.Item{}, newListDelegate(), sess.width, sess.height)
 	l.Title = "Categories"
-	l.Styles = list.DefaultStyles(isDark) // see newListDelegate in browse.go
-	l.Styles.Title = appTitleStyle
+	applyListStyles(&l) // see the note on applyListStyles in browse.go
 	l.SetStatusBarItemName("category", "categories")
 	l.DisableQuitKeybindings()
-	l.AdditionalShortHelpKeys = func() []key.Binding {
-		return []key.Binding{
-			key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "filter notes")),
-			key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "all notes")),
-			key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new")),
-			key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
-			key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-		}
-	}
+	l.AdditionalShortHelpKeys = func() []key.Binding { return keys.categoriesHelp() }
 
 	return &categoriesScreen{sess: sess, list: l}
+}
+
+// restyle rebuilds the styles the list widget copied in at construction.
+func (s *categoriesScreen) restyle() {
+	applyListStyles(&s.list)
 }
 
 func (s *categoriesScreen) Init() tea.Cmd {
@@ -98,14 +94,14 @@ func (s *categoriesScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			break
 		}
 
-		switch msg.String() {
-		case "esc", "q":
+		switch {
+		case key.Matches(msg, keys.Back, keys.Quit):
 			if s.list.FilterState() == list.FilterApplied {
 				break // let the list clear its own fuzzy filter first
 			}
 			return s, pop(false)
 
-		case "enter":
+		case key.Matches(msg, keys.Filter):
 			if c := s.selected(); c != nil {
 				// Pop first, then deliver the pick to the browse screen that
 				// is now on top. tea.Sequence guarantees that ordering;
@@ -116,19 +112,19 @@ func (s *categoriesScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				})
 			}
 
-		case "a":
+		case key.Matches(msg, keys.AllNotes):
 			// Convenience escape hatch: jump back with the filter cleared.
 			return s, tea.Sequence(pop(false), func() tea.Msg {
 				return categoryPickedMsg{cat: nil}
 			})
 
-		case "n":
+		case key.Matches(msg, keys.New):
 			return s, push(newPromptScreen(s.sess, "New category name",
 				func(name string) tea.Cmd {
 					return createCategoryCmd(name, s.sess.user.GUID)
 				}))
 
-		case "d":
+		case key.Matches(msg, keys.Delete):
 			if c := s.selected(); c != nil {
 				return s, push(newConfirmScreen(s.sess,
 					"Delete category \""+c.Name+"\"? Notes keep their other categories.",
@@ -143,8 +139,10 @@ func (s *categoriesScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 }
 
 func (s *categoriesScreen) View() string {
-	return s.list.View()
+	// Same clamp as the browse list, for the same reason — see clampPane.
+	return clampPane(s.list.View(), s.sess.width, s.sess.height)
 }
 
 var _ screen = (*categoriesScreen)(nil)
 var _ refresher = (*categoriesScreen)(nil)
+var _ restyler = (*categoriesScreen)(nil)
