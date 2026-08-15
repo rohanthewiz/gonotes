@@ -74,6 +74,13 @@ type session struct {
 	// read from the command goroutines. See store.go.
 	store Store
 
+	// cats is the host-integration state: what this process knows about the
+	// cats pane it may be running in, and the handles it reports back through.
+	// Always non-nil; its zero value is Tier 0 (not in cats, nothing
+	// connected), so screens call into it without an availability check. See
+	// cats_glue.go.
+	cats *catsState
+
 	user   *models.User
 	width  int
 	height int // content height available to screens (status bar excluded)
@@ -90,9 +97,34 @@ type session struct {
 // tea.WithAltScreen() is gone in v2: the alternate screen is now a property
 // of the view the model returns, not of the program, so it is set in View()
 // below instead of here.
+//
+// The cats wiring is ordered, and each step is where it is for a reason:
+//
+//	cs.init()      before NewProgram — the first hook report claims the pane,
+//	               and the OSC 7 emission has to reach the terminal before
+//	               Bubble Tea switches to the alternate screen and owns output.
+//	cs.send        before p.Run() — the stream's callbacks reach the event
+//	               loop through it, and it must be in place before anything
+//	               can be subscribed.
+//	cs.close()     after p.Run() returns, ALWAYS. init claimed the pane even
+//	               on a run that failed to start, so the release is owed
+//	               either way; deferring the error return until after is what
+//	               makes that unconditional.
+//
+// The probe itself is NOT started here. It is a tea.Cmd issued from Init(),
+// so nothing downstream of it can run before the event loop does — see
+// probeCmd for the shutdown deadlock that ordering avoids.
 func Run(st Store) error {
-	p := tea.NewProgram(newAppModel(st))
-	if _, err := p.Run(); err != nil {
+	m := newAppModel(st)
+	cs := m.sess.cats
+	cs.init()
+
+	p := tea.NewProgram(m)
+	cs.send = p.Send
+
+	_, err := p.Run()
+	cs.close()
+	if err != nil {
 		return serr.Wrap(err, "TUI terminated abnormally")
 	}
 	return nil
@@ -107,8 +139,12 @@ type appModel struct {
 	statusOK   bool
 }
 
+// newAppModel builds the root model. Its signature deliberately did not change
+// when the cats integration landed: the state it adds is constructed inert
+// here and only detects anything when Run calls init on it, which is what lets
+// every pre-existing test keep constructing an app model with no host at all.
 func newAppModel(st Store) appModel {
-	sess := &session{store: st}
+	sess := &session{store: st, cats: newCatsState()}
 	return appModel{
 		sess:  sess,
 		stack: []screen{newLoginScreen(sess)},
@@ -126,7 +162,10 @@ func (m appModel) Init() tea.Cmd {
 	// It is passed uncalled: its signature is func() tea.Msg, which is
 	// exactly tea.Cmd. (Its own doc comment shows it invoked, which does not
 	// compile.)
-	return tea.Batch(tea.RequestBackgroundColor, m.top().Init())
+	//
+	// probeCmd is nil outside a cats pane, which tea.Batch drops — so at Tier
+	// 0 this is the same two-command batch it has always been.
+	return tea.Batch(tea.RequestBackgroundColor, m.sess.cats.probeCmd(), m.top().Init())
 }
 
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -181,6 +220,23 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	// The three cats messages. They are handled here, at the root, rather than
+	// wherever their effects land, because catsState has exactly one mutator
+	// and this is it — see the threading rule at the top of cats_glue.go.
+	case catsReadyMsg:
+		return m, m.sess.cats.ready(msg)
+
+	case catsEventMsg:
+		return m, m.sess.cats.frame(msg.ev)
+
+	case catsLinkMsg:
+		// The stream is the only thing that notices a cats which died after the
+		// probe said Tier 1. Dropping Control here is what re-gates every
+		// Tier-1 feature without tearing down the client the reconnect loop is
+		// about to start using again.
+		m.sess.cats.caps.Control = msg.up
+		return m, nil
+
 	case pushMsg:
 		m.stack = append(m.stack, msg.s)
 		return m, msg.s.Init()
@@ -224,6 +280,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m appModel) View() tea.View {
 	v := tea.NewView("")
 	v.AltScreen = true // replaces the v1 tea.WithAltScreen() program option
+
+	// The window title is a Tier-0 feature: any terminal that understands OSC
+	// 2 gets it, and cats is only the host that does the most with it. Set
+	// before the size check so a program that has not been measured yet still
+	// names itself in the tab bar.
+	v.WindowTitle = m.sess.cats.windowTitle()
 
 	if m.sess.width == 0 {
 		return v // no size yet; first WindowSizeMsg is on its way

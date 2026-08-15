@@ -334,7 +334,23 @@ type editorFinishedMsg struct {
 // When the editor exits we read the file back and restore the TUI.
 // This gives full-power editing (syntax highlighting, macros, etc.) for long
 // notes, which a textarea widget can't match.
-func openEditorCmd(currentBody string) tea.Cmd {
+//
+// This is the longest span the TUI has — the user is in another program, for
+// as long as they like — which makes it the one worth telling the host about:
+// cats badges the pane while it runs and turns the working→idle edge into a
+// "finished" toast and phone push. cs is the reporter seam (nil-safe, inert
+// outside cats); noteTitle names the note in that badge.
+//
+// The span is opened HERE rather than at the call site because only this
+// function knows whether an editor is actually going to run: the temp-file
+// write can fail, and a "working" report for an editor that never launched
+// would leave the pane badged until the next transition. The closing edge is
+// in form.go, on editorFinishedMsg — which every path below resolves to.
+//
+// Note that openEditorCmd runs on the event loop (it is called from a screen's
+// Update); only the tea.Cmd it returns runs on its own goroutine. That is what
+// makes the cs.working call safe — see the threading rule in cats_glue.go.
+func openEditorCmd(cs *catsState, currentBody, noteTitle string) tea.Cmd {
 	editor := os.Getenv("VISUAL")
 	if editor == "" {
 		editor = os.Getenv("EDITOR")
@@ -349,6 +365,8 @@ func openEditorCmd(currentBody string) tea.Cmd {
 		return func() tea.Msg { return editorFinishedMsg{err: wrapped} }
 	}
 
+	cs.working(editorActivity(noteTitle))
+
 	c := exec.Command(editor, tmp)
 	return tea.ExecProcess(c, func(execErr error) tea.Msg {
 		defer os.Remove(tmp) // best-effort cleanup; the file may hold decrypted text
@@ -361,4 +379,18 @@ func openEditorCmd(currentBody string) tea.Cmd {
 		}
 		return editorFinishedMsg{body: string(content)}
 	})
+}
+
+// editorActivity is the phrase the host shows while the editor is open. An
+// untitled note still gets a phrase rather than a bare "editing:", because the
+// status is read on a phone with no other context.
+//
+// It is not truncated here: the reporter clamps to what cats will actually
+// display (32 bytes, on a rune boundary), and doing it twice would mean two
+// places that have to agree about the limit.
+func editorActivity(noteTitle string) string {
+	if t := strings.TrimSpace(noteTitle); t != "" {
+		return "editing: " + t
+	}
+	return "editing a note"
 }

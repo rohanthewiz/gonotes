@@ -201,6 +201,12 @@ func (s *formScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		return s, nil
 
 	case editorFinishedMsg:
+		// Close the host-reported span first, and on BOTH outcomes: an editor
+		// that exited with an error is still an editor that is no longer
+		// running, and leaving the pane badged "editing" would be worse than
+		// never having badged it. openEditorCmd opens the span; see the note
+		// there for why the two edges live apart.
+		s.sess.cats.idle()
 		if msg.err != nil {
 			return s, statusErr(msg.err, "External editor")
 		}
@@ -224,7 +230,7 @@ func (s *formScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			return s, s.save()
 
 		case key.Matches(msg, keys.Editor):
-			return s, openEditorCmd(s.body.Value())
+			return s, openEditorCmd(s.sess.cats, s.body.Value(), s.title.Value())
 
 		case key.Matches(msg, keys.Back):
 			return s, tea.Sequence(pop(false), status("Edit canceled"))
@@ -308,6 +314,13 @@ func (s *formScreen) save() tea.Cmd {
 		input.IsFlagged = s.editing.IsFlagged
 	}
 
+	// Deliberately NOT reported to the cats host as a working span, unlike the
+	// external editor. cats turns a working→idle edge into a "finished" toast
+	// and a phone push, so a span is a claim that the user might reasonably
+	// have walked away during it. A save is one bytdb write, or one POST — it
+	// resolves faster than the badge would render, and pushing a notification
+	// for it is how a channel earns being muted. The editor, where the user is
+	// in another program for as long as they like, is the span that qualifies.
 	s.busy = true
 	return saveNoteCmd(s.sess.store, noteID, input, s.categories.Value(), s.sess.user.GUID)
 }
