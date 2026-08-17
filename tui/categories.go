@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	"gonotes/models"
 
 	"charm.land/bubbles/v2/key"
@@ -10,8 +12,13 @@ import (
 
 // categoriesScreen lists the user's categories. Its primary job is picking a
 // category filter for the notes list (enter), with light management on the
-// side (n = new, d = delete). Renames and subcategories stay in the web UI —
-// the TUI optimizes for the frequent operations.
+// side (n = new, d = delete). Renames stay in the web UI — the TUI optimizes
+// for the frequent operations.
+//
+// Subcategories are one level down, behind "s": the row shows which ones a
+// category defines, and subcategoriesScreen is where they are picked as a
+// filter or added and removed. Keeping them off this screen is what lets enter
+// keep meaning "filter by this category" — the thing this screen is opened for.
 type categoriesScreen struct {
 	sess *session
 	list list.Model
@@ -24,13 +31,27 @@ type categoriesScreen struct {
 type catItem struct{ cat models.Category }
 
 func (i catItem) Title() string { return i.cat.Name }
+
+// Description shows the category's subcategories when it has any, because that
+// is the row's most useful fact: it says both that "s" has something to open
+// here and what filing under this category can mean. The description and the
+// creation date are the fallbacks, in that order — a date is a last resort.
 func (i catItem) Description() string {
+	if subs := i.cat.ToOutput().Subcategories; len(subs) > 0 {
+		return dimStyle.Render("▸ " + strings.Join(subs, ", "))
+	}
 	if d := i.cat.Description.String; d != "" {
 		return d
 	}
 	return dimStyle.Render("created " + i.cat.CreatedAt.Format("2006-01-02"))
 }
-func (i catItem) FilterValue() string { return i.cat.Name }
+
+// FilterValue includes the subcategory names so the fuzzy filter finds a
+// category by something it contains — typing "/backend" is how someone who
+// remembers the subcategory but not which category holds it gets there.
+func (i catItem) FilterValue() string {
+	return models.FormatCategorySpec(i.cat.Name, i.cat.ToOutput().Subcategories)
+}
 
 func newCategoriesScreen(sess *session) *categoriesScreen {
 	l := list.New([]list.Item{}, newListDelegate(), sess.width, sess.height)
@@ -83,6 +104,8 @@ func (s *categoriesScreen) pick() tea.Cmd {
 	// top. tea.Sequence guarantees that ordering; tea.Batch would not.
 	picked := *c
 	return tea.Sequence(pop(false), func() tea.Msg {
+		// No subs: enter on this screen means the whole category, subcategories
+		// and all. Narrowing is subcategoriesScreen's job.
 		return categoryPickedMsg{cat: &picked}
 	})
 }
@@ -156,6 +179,14 @@ func (s *categoriesScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			return s, tea.Sequence(pop(false), func() tea.Msg {
 				return categoryPickedMsg{cat: nil}
 			})
+
+		case key.Matches(msg, keys.Subcats):
+			// The highlighted category's own copy travels down: the subcategory
+			// screen edits its definition and hands back what the store returned,
+			// so it never has to re-read the list this screen already loaded.
+			if c := s.selected(); c != nil {
+				return s, push(newSubcategoriesScreen(s.sess, *c))
+			}
 
 		case key.Matches(msg, keys.New):
 			return s, push(newPromptScreen(s.sess, "New category name",

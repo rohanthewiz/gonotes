@@ -43,6 +43,11 @@ func TestBindingKeys(t *testing.T) {
 
 		{"filter by category", keys.Filter, []string{"enter"}},
 		{"all notes", keys.AllNotes, []string{"a"}},
+		{"open subcategories", keys.Subcats, []string{"s"}},
+		// Shares the space bar with TogglePrivate, on a screen that binding never
+		// reaches. Pinned separately so a rebind of one cannot quietly move the
+		// other.
+		{"select a subcategory", keys.SelectSub, []string{"space"}},
 
 		{"capture from an agent pane", keys.Capture, []string{"ctrl+g"}},
 		{"move within the picker", keys.Move, []string{"up", "down"}},
@@ -119,7 +124,15 @@ func TestHelpSetsAreHandled(t *testing.T) {
 			screen: "categories",
 			help:   keys.categoriesHelp(),
 			handled: []key.Binding{
-				keys.Filter, keys.AllNotes, keys.New, keys.Delete,
+				keys.Filter, keys.Subcats, keys.AllNotes, keys.New, keys.Delete,
+				keys.Back, keys.Quit,
+			},
+		},
+		{
+			screen: "subcategories",
+			help:   keys.subcategoriesHelp(),
+			handled: []key.Binding{
+				keys.Filter, keys.SelectSub, keys.New, keys.Delete,
 				keys.Back, keys.Quit,
 			},
 		},
@@ -183,13 +196,14 @@ func TestHelpSetsAreHandled(t *testing.T) {
 // footer instead of erroring.
 func TestHelpSetsHaveText(t *testing.T) {
 	sets := map[string][]key.Binding{
-		"agentPicker": keys.agentPickerHelp(),
-		"browse":      keys.browseHelp(),
-		"categories": keys.categoriesHelp(),
-		"detail":     keys.detailHelp(),
-		"form":       keys.formHelp(),
-		"login":      keys.loginHelp(),
-		"prompt":     keys.promptHelp(),
+		"agentPicker":   keys.agentPickerHelp(),
+		"browse":        keys.browseHelp(),
+		"categories":    keys.categoriesHelp(),
+		"subcategories": keys.subcategoriesHelp(),
+		"detail":        keys.detailHelp(),
+		"form":          keys.formHelp(),
+		"login":         keys.loginHelp(),
+		"prompt":        keys.promptHelp(),
 	}
 	for name, set := range sets {
 		for i, b := range set {

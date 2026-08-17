@@ -2,6 +2,7 @@ package tui
 
 import (
 	"database/sql"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -32,10 +33,20 @@ type fakeStore struct {
 
 	notes []models.Note
 	cats  []models.Category
-	links map[int64][]int64 // note id → category ids, in attach order
+	// links is note id → its category links, in attach order. Each link carries
+	// the subcategory selection, because that is where the real schema keeps it
+	// (the note_categories junction row) and a fake that stored selections on the
+	// category instead would hide the bugs this seam exists to catch.
+	links map[int64][]fakeLink
 
 	nextNoteID int64
 	nextCatID  int64
+
+	// linkWrites counts every write to the junction — attach, detach, or a
+	// change of selection. In production each of those records a sync change, so
+	// a test can assert that an edit-free re-save costs nothing by watching this
+	// rather than by inspecting state that looks identical either way.
+	linkWrites int
 
 	// resume, when set, is what ResumeSession returns — the HTTP store's
 	// cached-token path expressed without a token.
@@ -46,11 +57,17 @@ type fakeStore struct {
 	failWith error
 }
 
+// fakeLink is one row of the note_categories junction.
+type fakeLink struct {
+	catID int64
+	subs  []string
+}
+
 func newFakeStore() *fakeStore {
 	return &fakeStore{
 		users:      map[string]*models.User{},
 		passwd:     map[string]string{},
-		links:      map[int64][]int64{},
+		links:      map[int64][]fakeLink{},
 		nextNoteID: 1,
 		nextCatID:  1,
 	}
@@ -161,11 +178,57 @@ func (f *fakeStore) GetCategoryNotes(categoryID int64, userGUID string) ([]model
 		if n.CreatedBy.String != userGUID || n.DeletedAt.Valid {
 			continue
 		}
-		for _, id := range f.links[n.ID] {
-			if id == categoryID {
+		for _, l := range f.links[n.ID] {
+			if l.catID == categoryID {
 				out = append(out, n)
 				break
 			}
+		}
+	}
+	return out, nil
+}
+
+// GetCategorySubcategoryNotes mirrors the real AND semantics: a note qualifies
+// only if its link carries EVERY requested subcategory. Getting that wrong in
+// the double would make a broken filter look like a working one.
+func (f *fakeStore) GetCategorySubcategoryNotes(categoryName string, subcategories []string, userGUID string) ([]models.Note, error) {
+	cat, err := f.GetCategoryByName(categoryName, userGUID)
+	if err != nil {
+		return nil, err
+	}
+	if cat == nil {
+		return nil, nil
+	}
+	if len(subcategories) == 0 {
+		return f.GetCategoryNotes(cat.ID, userGUID)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failWith != nil {
+		return nil, f.failWith
+	}
+
+	var out []models.Note
+	for _, n := range f.notes {
+		if n.CreatedBy.String != userGUID || n.DeletedAt.Valid {
+			continue
+		}
+		for _, l := range f.links[n.ID] {
+			if l.catID != cat.ID {
+				continue
+			}
+			hasAll := true
+			for _, want := range subcategories {
+				if !slices.Contains(l.subs, want) {
+					hasAll = false
+					break
+				}
+			}
+			if hasAll {
+				out = append(out, n)
+			}
+			break
 		}
 	}
 	return out, nil
@@ -314,6 +377,29 @@ func (f *fakeStore) DeleteCategory(id int64, userGUID string) error {
 	return serr.New("category not found")
 }
 
+// SetCategorySubcategories writes the definition and, like the real update,
+// leaves the name and description it was handed in place — a caller that dropped
+// them would see them preserved here and blanked in production.
+func (f *fakeStore) SetCategorySubcategories(cat models.Category, subcategories []string, userGUID string) (*models.Category, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failWith != nil {
+		return nil, f.failWith
+	}
+	for i := range f.cats {
+		if f.cats[i].ID != cat.ID || f.cats[i].CreatedBy.String != userGUID {
+			continue
+		}
+		f.cats[i].Name = cat.Name
+		f.cats[i].Description = cat.Description
+		f.cats[i].Subcategories = subcategoriesJSON(subcategories)
+		f.cats[i].UpdatedAt = time.Now()
+		updated := f.cats[i]
+		return &updated, nil
+	}
+	return nil, serr.New("category not found")
+}
+
 func (f *fakeStore) GetCategoryByName(name, userGUID string) (*models.Category, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -336,9 +422,9 @@ func (f *fakeStore) GetNoteCategories(noteID int64, userGUID string) ([]models.C
 		return nil, f.failWith
 	}
 	var out []models.Category
-	for _, catID := range f.links[noteID] {
+	for _, l := range f.links[noteID] {
 		for _, c := range f.cats {
-			if c.ID == catID {
+			if c.ID == l.catID {
 				out = append(out, c)
 			}
 		}
@@ -346,24 +432,79 @@ func (f *fakeStore) GetNoteCategories(noteID int64, userGUID string) ([]models.C
 	return out, nil
 }
 
-func (f *fakeStore) AddCategoryToNote(noteID, categoryID int64, userGUID string) error {
+// GetNoteCategoryDetails joins the definition (on the category) to the selection
+// (on the link), which is exactly the join the real one does across two
+// databases — and sorts by name, because the real one does and the form's
+// prefill string is built in that order.
+func (f *fakeStore) GetNoteCategoryDetails(noteID int64, userGUID string) ([]models.NoteCategoryDetailOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for _, id := range f.links[noteID] {
-		if id == categoryID {
+	if f.failWith != nil {
+		return nil, f.failWith
+	}
+	var out []models.NoteCategoryDetailOutput
+	for _, l := range f.links[noteID] {
+		for _, c := range f.cats {
+			if c.ID != l.catID {
+				continue
+			}
+			detail := models.NoteCategoryDetailOutput{
+				ID:                    c.ID,
+				Name:                  c.Name,
+				Subcategories:         c.ToOutput().Subcategories,
+				SelectedSubcategories: slices.Clone(l.subs),
+				CreatedAt:             c.CreatedAt,
+				UpdatedAt:             c.UpdatedAt,
+			}
+			if c.Description.Valid {
+				desc := c.Description.String
+				detail.Description = &desc
+			}
+			out = append(out, detail)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (f *fakeStore) AddCategoryToNote(noteID, categoryID int64, userGUID string) error {
+	return f.AddCategoryToNoteWithSubcategories(noteID, categoryID, nil, userGUID)
+}
+
+func (f *fakeStore) AddCategoryToNoteWithSubcategories(noteID, categoryID int64, subcategories []string, userGUID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, l := range f.links[noteID] {
+		if l.catID == categoryID {
 			return serr.New("category already added to this note")
 		}
 	}
-	f.links[noteID] = append(f.links[noteID], categoryID)
+	f.links[noteID] = append(f.links[noteID],
+		fakeLink{catID: categoryID, subs: slices.Clone(subcategories)})
+	f.linkWrites++
 	return nil
+}
+
+func (f *fakeStore) SetNoteCategorySubcategories(noteID, categoryID int64, subcategories []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, l := range f.links[noteID] {
+		if l.catID == categoryID {
+			f.links[noteID][i].subs = slices.Clone(subcategories)
+			f.linkWrites++
+			return nil
+		}
+	}
+	return serr.New("relationship not found")
 }
 
 func (f *fakeStore) RemoveCategoryFromNote(noteID, categoryID int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for i, id := range f.links[noteID] {
-		if id == categoryID {
+	for i, l := range f.links[noteID] {
+		if l.catID == categoryID {
 			f.links[noteID] = append(f.links[noteID][:i], f.links[noteID][i+1:]...)
+			f.linkWrites++
 			return nil
 		}
 	}

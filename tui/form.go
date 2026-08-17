@@ -26,6 +26,14 @@ import (
 // Categories are a comma-separated field rather than a picker: typing a name
 // that doesn't exist yet auto-creates the category on save, which makes
 // organizing notes a zero-ceremony affair (see syncNoteCategories).
+//
+// Subcategories ride in the same field, after a slash: "Work/backend, Personal"
+// files the note under Work's backend subcategory and under Personal plainly.
+// That notation is not invented here — it is what the Markdown frontmatter and
+// gn-clip.sh's -c already take (models.ParseCategorySpecs) — and it is why a
+// one-line field is enough for a two-level hierarchy. A subcategory typed here
+// for the first time is added to the category's definition too, so it shows up
+// as a chip in the web UI and a row on the TUI's subcategory screen.
 type formScreen struct {
 	sess *session
 
@@ -72,7 +80,7 @@ func newFormScreen(sess *session, editing *models.Note) *formScreen {
 		title:      newInput("note title (required)", 200),
 		desc:       newInput("short description", 300),
 		tags:       newInput("comma,separated,tags", 300),
-		categories: newInput("comma, separated, categories (created if new)", 300),
+		categories: newInput("Work/backend, Personal — created if new", 300),
 		body:       textarea.New(),
 	}
 	f.restyle()
@@ -212,12 +220,12 @@ func (s *formScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		return s, nil
 
 	case noteCatsLoadedMsg:
+		// Prefill in the same notation the field accepts, subcategory selections
+		// included: a note filed under Work/backend must come back as
+		// "Work/backend", or the first save from this form would quietly drop the
+		// subcategory the user never touched.
 		if msg.err == nil && len(msg.cats) > 0 {
-			names := make([]string, len(msg.cats))
-			for i, c := range msg.cats {
-				names[i] = c.Name
-			}
-			s.categories.SetValue(strings.Join(names, ", "))
+			s.categories.SetValue(models.FormatCategorySpecCSV(noteCatSpecs(msg.cats)))
 		}
 		return s, nil
 

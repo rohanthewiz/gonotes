@@ -190,7 +190,7 @@ On first run (empty database) the TUI walks you through creating an account; aft
 | | `f` | Toggle the follow-up flag |
 | | `d` | Delete (with confirmation) |
 | | `c` | Category picker — filter the list by category |
-| | `esc` | Clear search, then category filter |
+| | `esc` | Clear search, then subcategory filter, then category filter |
 | | `q` | Quit |
 | Note view | `↑/↓` | Scroll |
 | | `e` / `f` / `d` | Edit / flag / delete |
@@ -199,10 +199,15 @@ On first run (empty database) the TUI walks you through creating an account; aft
 | | `ctrl+s` | Save |
 | | `esc` | Cancel |
 | Categories | `enter` | Filter notes by the selected category |
+| | `s` | Open that category's subcategories |
 | | `n` / `d` | New / delete category |
+| Subcategories | `enter` | Filter notes by the selected subcategories |
+| | `space` | Toggle a subcategory into the filter (several = notes carrying all of them) |
+| | `n` / `d` | Add / remove a subcategory of this category |
 
 Notes:
-- Categories on the note form are comma-separated names; unknown names are created automatically on save.
+- Categories on the note form are comma-separated, and a `/` adds subcategories: `Work/backend, Personal` files the note under Work's `backend` subcategory and under Personal. Unknown categories *and* unknown subcategories are created automatically on save — the same notation the Markdown frontmatter and `gn-clip.sh -c` use.
+- Adding or removing a subcategory on the Categories screen edits what that category *offers*; notes already filed under a removed subcategory keep it until they are edited.
 - The TUI shares the databases with the web server. Avoid running both against the same directory at the same time (bytdb allows a single writer process per database).
 - With `GONOTES_ENCRYPTION_KEY` set (env or `config/cfg_files/.env`), private notes are encrypted at rest, same as the web app.
 

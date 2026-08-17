@@ -44,9 +44,15 @@ type keyMap struct {
 	Categories key.Binding // open the category screen
 	Scroll     key.Binding // help-only: the viewport's own ↑/↓ handling
 
-	// ---- Category screen --------------------------------------------------
+	// ---- Category and subcategory screens ---------------------------------
 	Filter   key.Binding // enter: narrow the note list to this category
 	AllNotes key.Binding // clear the category filter
+	Subcats  key.Binding // open the highlighted category's subcategories
+	// SelectSub toggles a subcategory into the filter being built. It shares the
+	// space bar with TogglePrivate, which is safe because the two screens are
+	// disjoint — but they stay separate bindings so each footer can name the
+	// thing that screen actually toggles.
+	SelectSub key.Binding
 
 	// ---- Capture from a sibling agent pane --------------------------------
 	// Capture is the door (browse); Move and Pick drive the picker it opens.
@@ -133,6 +139,18 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("a"),
 			key.WithHelp("a", "all notes"),
 		),
+		// "s" is free on the category screen (which spends letters on a, n, d and
+		// q) and is the first letter of the thing it opens. It is deliberately NOT
+		// one of the chords cats forwards — see metakeys.go — so no ⌘S ambiguity
+		// arises from reusing the letter here.
+		Subcats: key.NewBinding(
+			key.WithKeys("s"),
+			key.WithHelp("s", "subcategories"),
+		),
+		SelectSub: key.NewBinding(
+			key.WithKeys("space"),
+			key.WithHelp("space", "select"),
+		),
 
 		// ctrl+g rather than a bare letter: browse spends every unmodified key
 		// on a note action, and g is the one cats forwards as ⌘G (Phase 8's
@@ -211,7 +229,11 @@ func (k keyMap) browseHelp() []key.Binding {
 }
 
 func (k keyMap) categoriesHelp() []key.Binding {
-	return []key.Binding{k.Filter, k.AllNotes, k.New, k.Delete, k.Back}
+	return []key.Binding{k.Filter, k.Subcats, k.AllNotes, k.New, k.Delete, k.Back}
+}
+
+func (k keyMap) subcategoriesHelp() []key.Binding {
+	return []key.Binding{k.Filter, k.SelectSub, k.New, k.Delete, k.Back}
 }
 
 func (k keyMap) agentPickerHelp() []key.Binding {

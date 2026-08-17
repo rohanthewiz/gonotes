@@ -147,6 +147,19 @@ func loadCategoryNotesCmd(st Store, categoryID int64, userGUID string) tea.Cmd {
 	}
 }
 
+// loadCategorySubNotesCmd narrows a category filter further, to the notes filed
+// under every one of the given subcategories.
+//
+// It resolves to the same notesLoadedMsg as the two commands above, which is
+// what keeps the browse screen's handling of "here are your notes" in one place
+// no matter which of the three filters produced them.
+func loadCategorySubNotesCmd(st Store, categoryName string, subcategories []string, userGUID string) tea.Cmd {
+	return func() tea.Msg {
+		notes, err := st.GetCategorySubcategoryNotes(categoryName, subcategories, userGUID)
+		return notesLoadedMsg{notes: notes, err: err}
+	}
+}
+
 type noteLoadedMsg struct {
 	note *models.Note
 	err  error
@@ -166,9 +179,9 @@ type noteSavedMsg struct {
 
 // saveNoteCmd creates or updates a note, then reconciles its category
 // assignments. noteID == 0 means create. categoriesCSV is the raw
-// comma-separated names from the form; unknown categories are created on the
-// fly so assigning a brand-new category doesn't require a separate trip to
-// the category screen.
+// comma-separated specs from the form ("Work/backend, Personal"); unknown
+// categories and unknown subcategories are created on the fly so assigning a
+// brand-new one doesn't require a separate trip to the category screen.
 func saveNoteCmd(st Store, noteID int64, input models.NoteInput, categoriesCSV string, userGUID string) tea.Cmd {
 	return func() tea.Msg {
 		var note *models.Note
@@ -198,39 +211,75 @@ func saveNoteCmd(st Store, noteID int64, input models.NoteInput, categoriesCSV s
 	}
 }
 
-// syncNoteCategories makes the note's category set match the given
-// comma-separated names: missing links are added (creating categories as
-// needed) and links no longer named are removed.
+// syncNoteCategories makes the note's category assignments match the specs
+// typed into the form's one-line field. A spec is "Name" or "Name/sub" or
+// "Name/sub1/sub2" — see models.ParseCategorySpecs, which the Markdown importer
+// uses for the same notation.
+//
+// There are three writes it can make per category, and the order matters:
+//
+//	                    ┌ not named any more ─────────────→ remove the link
+//	current link ───────┤
+//	                    └ named, selection changed ───────→ update the link
+//	no link yet ─────────→ find-or-create the category ──→ attach with subs
+//
+// and one more that is not about this note at all: a subcategory nobody has used
+// before is merged into the category's DEFINITION, so the web UI's chips and the
+// TUI's subcategory screen offer it from then on. That merge is what makes
+// "type it and it exists" work for subcategories the way it already did for
+// categories. It only ever adds names — another note may be filed under a name
+// this form never mentioned.
+//
+// Unchanged links are left completely alone (no rewrite of an identical
+// selection), which keeps a plain re-save from producing a sync change record
+// per category.
 func syncNoteCategories(st Store, noteID int64, categoriesCSV string, userGUID string) error {
-	// Parse the desired set, preserving nothing but trimmed, non-empty names.
+	names, subsByName := models.ParseCategorySpecCSV(categoriesCSV)
 	desired := map[string]bool{}
-	for _, raw := range strings.Split(categoriesCSV, ",") {
-		if name := strings.TrimSpace(raw); name != "" {
-			desired[name] = true
-		}
+	for _, name := range names {
+		desired[name] = true
 	}
 
-	current, err := st.GetNoteCategories(noteID, userGUID)
+	// The detail shape rather than GetNoteCategories: reconciling a selection
+	// requires knowing what is currently selected.
+	current, err := st.GetNoteCategoryDetails(noteID, userGUID)
 	if err != nil {
 		return serr.Wrap(err, "failed to load current note categories")
 	}
 
-	// Remove links that are no longer desired.
-	currentByName := map[string]models.Category{}
+	linked := map[string]models.NoteCategoryDetailOutput{}
 	for _, c := range current {
-		currentByName[c.Name] = c
-		if !desired[c.Name] {
-			if err = st.RemoveCategoryFromNote(noteID, c.ID); err != nil {
-				return serr.Wrap(err, "failed to remove category "+c.Name)
-			}
+		linked[c.Name] = c
+		if desired[c.Name] {
+			continue
+		}
+		if err = st.RemoveCategoryFromNote(noteID, c.ID); err != nil {
+			return serr.Wrap(err, "failed to remove category "+c.Name)
 		}
 	}
 
-	// Add links that don't exist yet, creating unknown categories on the fly.
-	for name := range desired {
-		if _, exists := currentByName[name]; exists {
+	// Iterate the parsed order, not the map: the writes then happen in the order
+	// the user typed, which is the order any error message will name them in.
+	for _, name := range names {
+		subs := subsByName[name]
+
+		if existing, ok := linked[name]; ok {
+			// Already attached. Rewrite the selection only if it actually
+			// differs — see SameSubcategories for why order does not count.
+			if !models.SameSubcategories(existing.SelectedSubcategories, subs) {
+				if err = st.SetNoteCategorySubcategories(noteID, existing.ID, subs); err != nil {
+					return serr.Wrap(err, "failed to update subcategories on "+name)
+				}
+			}
+			// categoryFromDetail is the existing detail→Category mapping (see
+			// store_http.go); the definition merge needs a Category to carry the
+			// fields the update must not blank.
+			if err = registerSubcategories(st, categoryFromDetail(existing), subs, userGUID); err != nil {
+				return err
+			}
 			continue
 		}
+
 		cat, err := st.GetCategoryByName(name, userGUID)
 		if err != nil {
 			return serr.Wrap(err, "failed to look up category "+name)
@@ -241,9 +290,31 @@ func syncNoteCategories(st Store, noteID int64, categoriesCSV string, userGUID s
 				return serr.Wrap(err, "failed to create category "+name)
 			}
 		}
-		if err = st.AddCategoryToNote(noteID, cat.ID, userGUID); err != nil {
+		if err = registerSubcategories(st, *cat, subs, userGUID); err != nil {
+			return err
+		}
+		// One call with the selection rather than attach-then-update: the API
+		// and the models layer both take subcategories on the insert.
+		if err = st.AddCategoryToNoteWithSubcategories(noteID, cat.ID, subs, userGUID); err != nil {
 			return serr.Wrap(err, "failed to attach category "+name)
 		}
+	}
+	return nil
+}
+
+// registerSubcategories adds any unfamiliar name in subs to the category's
+// definition, and does nothing when they are all already there — which is the
+// common case, so the no-op path costs no round trip.
+func registerSubcategories(st Store, cat models.Category, subs []string, userGUID string) error {
+	if len(subs) == 0 {
+		return nil
+	}
+	merged, changed := models.MergeSubcategories(cat.ToOutput().Subcategories, subs)
+	if !changed {
+		return nil
+	}
+	if _, err := st.SetCategorySubcategories(cat, merged, userGUID); err != nil {
+		return serr.Wrap(err, "failed to record new subcategories on "+cat.Name)
 	}
 	return nil
 }
@@ -286,10 +357,17 @@ func loadCategoriesCmd(st Store, userGUID string) tea.Cmd {
 	}
 }
 
-// categoryPickedMsg is emitted by the category screen after it pops itself;
-// the browse screen (newly on top) receives it and applies the filter.
-// A nil cat means "show all notes" (clear the filter).
-type categoryPickedMsg struct{ cat *models.Category }
+// categoryPickedMsg is emitted by the category (or subcategory) screen after it
+// pops itself; the browse screen (newly on top) receives it and applies the
+// filter. A nil cat means "show all notes" (clear the filter).
+//
+// subs narrows within the category — the notes filed under ALL of those
+// subcategories. It is only ever non-empty alongside a cat, since a subcategory
+// has no meaning without the category that defines it.
+type categoryPickedMsg struct {
+	cat  *models.Category
+	subs []string
+}
 
 type categoryCreatedMsg struct{ err error }
 
@@ -308,17 +386,55 @@ func deleteCategoryCmd(st Store, id int64, userGUID string) tea.Cmd {
 	}
 }
 
-// noteCatsLoadedMsg carries the categories attached to a single note
-// (used by the detail header and to prefill the form's category field).
+// noteCatsLoadedMsg carries the categories attached to a single note, each with
+// the subcategories that note selected (used by the detail header and to
+// prefill the form's category field).
+//
+// It carries details rather than plain categories because both consumers show
+// the assignment, and "Work" where the note is really filed under
+// "Work/backend" is not a shorter truth — in the form it is a WRONG prefill,
+// which saving would then write back as a deselection.
 type noteCatsLoadedMsg struct {
-	cats []models.Category
+	cats []models.NoteCategoryDetailOutput
 	err  error
 }
 
 func loadNoteCategoriesCmd(st Store, noteID int64, userGUID string) tea.Cmd {
 	return func() tea.Msg {
-		cats, err := st.GetNoteCategories(noteID, userGUID)
+		cats, err := st.GetNoteCategoryDetails(noteID, userGUID)
 		return noteCatsLoadedMsg{cats: cats, err: err}
+	}
+}
+
+// noteCatSpecs renders a note's assignments in the one-line spec notation, in
+// the order the store returned them (which is by category name).
+//
+// Shared by the detail header and the form's prefill so the two never disagree
+// about how an assignment is spelled — and so what the form shows is exactly
+// what syncNoteCategories will parse back out of it.
+func noteCatSpecs(details []models.NoteCategoryDetailOutput) []string {
+	specs := make([]string, 0, len(details))
+	for _, d := range details {
+		specs = append(specs, models.FormatCategorySpec(d.Name, d.SelectedSubcategories))
+	}
+	return specs
+}
+
+// categorySubsUpdatedMsg reports the result of editing a category's subcategory
+// DEFINITION. It carries the updated category so the screen that asked can
+// re-render from the server's answer rather than from what it hoped it wrote.
+type categorySubsUpdatedMsg struct {
+	cat *models.Category
+	err error
+}
+
+// setCategorySubcategoriesCmd replaces a category's subcategory definition.
+// Used by the subcategory screen's add and delete; the form's save path reaches
+// the same store call through registerSubcategories.
+func setCategorySubcategoriesCmd(st Store, cat models.Category, subs []string, userGUID string) tea.Cmd {
+	return func() tea.Msg {
+		updated, err := st.SetCategorySubcategories(cat, subs, userGUID)
+		return categorySubsUpdatedMsg{cat: updated, err: err}
 	}
 }
 

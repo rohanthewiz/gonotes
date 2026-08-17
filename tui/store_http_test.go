@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -120,7 +121,19 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		writeOK(w, http.StatusOK, api.user.ToOutput())
 	}))
 
+	// GET /notes carries the category+subcategory filter as well as the plain
+	// list, because that is the only endpoint the real API exposes it on —
+	// cat=<name> plus a repeated subcats[] — and the store's one name-keyed read
+	// goes through here. Reproducing the parameter names is the point: a store
+	// that sent "subcats" or a comma-joined value would silently filter to
+	// nothing against the real server.
 	mux.HandleFunc("GET /api/v1/notes", auth(func(w http.ResponseWriter, r *http.Request) {
+		if cat := r.URL.Query().Get("cat"); cat != "" {
+			subs := r.URL.Query()["subcats[]"]
+			notes, _ := api.data.GetCategorySubcategoryNotes(cat, subs, api.user.GUID)
+			writeOK(w, http.StatusOK, noteOutputs(notes))
+			return
+		}
 		notes, _ := api.data.ListNotes(api.user.GUID)
 		writeOK(w, http.StatusOK, noteOutputs(notes))
 	}))
@@ -178,28 +191,33 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 
 	// The note-categories endpoint answers with the richer detail shape, not
 	// CategoryOutput — reproducing that here is the only way the store's
-	// categoryFromDetail mapping gets tested.
+	// categoryFromDetail mapping and the selected-subcategory round trip get
+	// tested.
 	mux.HandleFunc("GET /api/v1/notes/{id}/categories", auth(func(w http.ResponseWriter, r *http.Request) {
-		cats, _ := api.data.GetNoteCategories(pathID(r, "id"), api.user.GUID)
-		details := make([]models.NoteCategoryDetailOutput, 0, len(cats))
-		for _, c := range cats {
-			details = append(details, models.NoteCategoryDetailOutput{
-				ID:        c.ID,
-				Name:      c.Name,
-				CreatedAt: c.CreatedAt,
-				UpdatedAt: c.UpdatedAt,
-			})
-		}
+		details, _ := api.data.GetNoteCategoryDetails(pathID(r, "id"), api.user.GUID)
 		writeOK(w, http.StatusOK, details)
 	}))
 
 	mux.HandleFunc("POST /api/v1/notes/{id}/categories/{cid}", auth(func(w http.ResponseWriter, r *http.Request) {
 		noteID, catID := pathID(r, "id"), pathID(r, "cid")
-		if err := api.data.AddCategoryToNote(noteID, catID, api.user.GUID); err != nil {
+		// The real handler decodes the body only when there is one and treats a
+		// missing subcategories field as "none", which is what lets the same
+		// endpoint serve both attach paths.
+		if err := api.data.AddCategoryToNoteWithSubcategories(
+			noteID, catID, subcategoriesFromBody(r), api.user.GUID); err != nil {
 			writeErr(w, http.StatusConflict, err.Error())
 			return
 		}
 		writeOK(w, http.StatusCreated, map[string]any{"note_id": noteID, "category_id": catID, "added": true})
+	}))
+
+	mux.HandleFunc("PUT /api/v1/notes/{id}/categories/{cid}", auth(func(w http.ResponseWriter, r *http.Request) {
+		noteID, catID := pathID(r, "id"), pathID(r, "cid")
+		if err := api.data.SetNoteCategorySubcategories(noteID, catID, subcategoriesFromBody(r)); err != nil {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeOK(w, http.StatusOK, map[string]any{"note_id": noteID, "category_id": catID, "updated": true})
 	}))
 
 	mux.HandleFunc("DELETE /api/v1/notes/{id}/categories/{cid}", auth(func(w http.ResponseWriter, r *http.Request) {
@@ -228,6 +246,34 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		_ = json.Unmarshal(body, &in)
 		cat, _ := api.data.CreateCategory(in.Name, api.user.GUID)
 		writeOK(w, http.StatusCreated, cat.ToOutput())
+	}))
+
+	// PUT /categories/{id} is a whole-object update in the real API — it rejects
+	// an empty name outright and writes name, description and subcategories from
+	// the body. Enforcing the name check here is what catches a store that sends
+	// only the subcategories and blanks the rest.
+	mux.HandleFunc("PUT /api/v1/categories/{id}", auth(func(w http.ResponseWriter, r *http.Request) {
+		var in models.CategoryInput
+		body, _ := readAll(r)
+		if err := json.Unmarshal(body, &in); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if in.Name == "" {
+			writeErr(w, http.StatusBadRequest, "name is required")
+			return
+		}
+
+		cat := models.Category{ID: pathID(r, "id"), Name: in.Name}
+		if in.Description != nil {
+			cat.Description = ptrToNull(in.Description)
+		}
+		updated, err := api.data.SetCategorySubcategories(cat, in.Subcategories, api.user.GUID)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeOK(w, http.StatusOK, updated.ToOutput())
 	}))
 
 	mux.HandleFunc("DELETE /api/v1/categories/{id}", auth(func(w http.ResponseWriter, r *http.Request) {
@@ -309,6 +355,24 @@ func readAll(r *http.Request) ([]byte, error) {
 			return buf, nil
 		}
 	}
+}
+
+// subcategoriesFromBody decodes the {"subcategories": [...]} body the real
+// note-category endpoints accept. An absent or unreadable body is "none", which
+// is how the real handler treats it — the attach endpoint is documented as
+// taking an OPTIONAL body.
+func subcategoriesFromBody(r *http.Request) []string {
+	body, _ := readAll(r)
+	if len(body) == 0 {
+		return nil
+	}
+	var in struct {
+		Subcategories []string `json:"subcategories"`
+	}
+	if err := json.Unmarshal(body, &in); err != nil {
+		return nil
+	}
+	return in.Subcategories
 }
 
 func pathID(r *http.Request, name string) int64 {
@@ -597,6 +661,86 @@ func TestSyncNoteCategoriesOverHTTP(t *testing.T) {
 	}
 	if got := categoryNames(t, st, note.ID, api.user.GUID); got != "archive,work" {
 		t.Errorf("after second sync: %q, want %q", got, "archive,work")
+	}
+}
+
+// TestSubcategoriesOverHTTP runs the whole subcategory feature across the wire,
+// because every piece of it is a different endpoint and three of them are only
+// reachable in HTTP mode through a body or a query string the local store never
+// builds: the attach body, the link PUT, the category PUT, and the name-keyed
+// /notes?cat=...&subcats[]=... read.
+//
+// A store that got any of those shapes wrong would still pass every fakeStore
+// test in this package, which is exactly why this one talks HTTP.
+func TestSubcategoriesOverHTTP(t *testing.T) {
+	api := newFakeAPI(t)
+	st := api.store(t)
+	if _, err := st.AuthenticateUser("api_user", fakeAPIPassword); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	note, err := st.CreateNote(models.NoteInput{Title: "Filed deep"}, api.user.GUID)
+	if err != nil {
+		t.Fatalf("CreateNote: %v", err)
+	}
+
+	// The form's save path: creates the category, registers the subcategories on
+	// its definition (PUT /categories/:id), and attaches with a selection.
+	if err := syncNoteCategories(st, note.ID, "Work/backend/api", api.user.GUID); err != nil {
+		t.Fatalf("initial sync: %v", err)
+	}
+
+	details, err := st.GetNoteCategoryDetails(note.ID, api.user.GUID)
+	if err != nil {
+		t.Fatalf("GetNoteCategoryDetails: %v", err)
+	}
+	if len(details) != 1 {
+		t.Fatalf("expected one category, got %d", len(details))
+	}
+	if got := details[0].SelectedSubcategories; !slices.Equal(got, []string{"backend", "api"}) {
+		t.Errorf("selection over the wire = %v, want [backend api]", got)
+	}
+	if got := details[0].Subcategories; !slices.Equal(got, []string{"backend", "api"}) {
+		t.Errorf("definition over the wire = %v, want [backend api]", got)
+	}
+
+	// The definition update must not have blanked the name — the real handler
+	// rejects a nameless PUT with 400, and the fake API mirrors that.
+	cat, err := st.GetCategoryByName("Work", api.user.GUID)
+	if err != nil || cat == nil {
+		t.Fatalf("GetCategoryByName(Work) = %+v, %v", cat, err)
+	}
+
+	// The filter read: AND semantics, through the one endpoint that offers it.
+	notes, err := st.GetCategorySubcategoryNotes("Work", []string{"backend", "api"}, api.user.GUID)
+	if err != nil {
+		t.Fatalf("GetCategorySubcategoryNotes: %v", err)
+	}
+	if len(notes) != 1 || notes[0].Title != "Filed deep" {
+		t.Errorf("filtering by Work/backend/api returned %d notes, want the one", len(notes))
+	}
+	notes, err = st.GetCategorySubcategoryNotes("Work", []string{"ops"}, api.user.GUID)
+	if err != nil {
+		t.Fatalf("GetCategorySubcategoryNotes(ops): %v", err)
+	}
+	if len(notes) != 0 {
+		t.Errorf("filtering by an unused subcategory returned %d notes, want none", len(notes))
+	}
+
+	// Editing the selection: the link PUT, not a detach-and-reattach.
+	if err := syncNoteCategories(st, note.ID, "Work/api", api.user.GUID); err != nil {
+		t.Fatalf("edit sync: %v", err)
+	}
+	details, err = st.GetNoteCategoryDetails(note.ID, api.user.GUID)
+	if err != nil {
+		t.Fatalf("GetNoteCategoryDetails after edit: %v", err)
+	}
+	if len(details) != 1 || !slices.Equal(details[0].SelectedSubcategories, []string{"api"}) {
+		t.Fatalf("after the edit the note is filed as %+v, want Work/api alone", details)
+	}
+	// The definition keeps every name it learned; only the selection narrowed.
+	if got := details[0].Subcategories; !slices.Equal(got, []string{"backend", "api"}) {
+		t.Errorf("the definition shrank to %v; editing one note must not change it", got)
 	}
 }
 

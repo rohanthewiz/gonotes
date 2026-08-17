@@ -49,6 +49,12 @@ func (localStore) GetCategoryNotes(categoryID int64, userGUID string) ([]models.
 	return models.GetCategoryNotes(categoryID, userGUID)
 }
 
+func (localStore) GetCategorySubcategoryNotes(categoryName string, subcategories []string, userGUID string) ([]models.Note, error) {
+	// The models function already special-cases an empty subcategory list as
+	// "the whole category", so no branch is needed here.
+	return models.GetNotesByCategoryAndSubcategories(categoryName, subcategories, userGUID)
+}
+
 func (localStore) GetNoteByID(id int64, userGUID string) (*models.Note, error) {
 	return models.GetNoteByID(id, userGUID)
 }
@@ -83,6 +89,19 @@ func (localStore) DeleteCategory(id int64, userGUID string) error {
 	return models.DeleteCategory(id, userGUID)
 }
 
+// SetCategorySubcategories carries the category's existing name and description
+// into the update. models.UpdateCategory writes all three columns from the
+// input, so omitting the description here would silently erase it — the one
+// place in this file where a pass-through needs more than the arguments given.
+func (localStore) SetCategorySubcategories(cat models.Category, subcategories []string, userGUID string) (*models.Category, error) {
+	input := models.CategoryInput{Name: cat.Name, Subcategories: subcategories}
+	if cat.Description.Valid {
+		desc := cat.Description.String
+		input.Description = &desc
+	}
+	return models.UpdateCategory(cat.ID, input, userGUID)
+}
+
 func (localStore) GetCategoryByName(name, userGUID string) (*models.Category, error) {
 	return models.GetCategoryByName(name, userGUID)
 }
@@ -91,8 +110,20 @@ func (localStore) GetNoteCategories(noteID int64, userGUID string) ([]models.Cat
 	return models.GetNoteCategories(noteID, userGUID)
 }
 
+func (localStore) GetNoteCategoryDetails(noteID int64, userGUID string) ([]models.NoteCategoryDetailOutput, error) {
+	return models.GetNoteCategoryDetails(noteID, userGUID)
+}
+
 func (localStore) AddCategoryToNote(noteID, categoryID int64, userGUID string) error {
 	return models.AddCategoryToNote(noteID, categoryID, userGUID)
+}
+
+func (localStore) AddCategoryToNoteWithSubcategories(noteID, categoryID int64, subcategories []string, userGUID string) error {
+	return models.AddCategoryToNoteWithSubcategories(noteID, categoryID, subcategories, userGUID)
+}
+
+func (localStore) SetNoteCategorySubcategories(noteID, categoryID int64, subcategories []string) error {
+	return models.UpdateNoteCategorySubcategories(noteID, categoryID, subcategories)
 }
 
 func (localStore) RemoveCategoryFromNote(noteID, categoryID int64) error {

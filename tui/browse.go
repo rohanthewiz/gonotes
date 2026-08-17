@@ -40,6 +40,11 @@ type browseScreen struct {
 
 	// catFilter is the active category filter; nil means "all notes".
 	catFilter *models.Category
+	// subFilter narrows catFilter to the notes carrying ALL of these
+	// subcategories. Only ever non-empty alongside catFilter, and cleared one
+	// step before it by esc — a subcategory is a refinement of a category, so
+	// backing out of it should land on the category rather than on everything.
+	subFilter []string
 
 	// listWidth is the list's width under the current layout: the full
 	// terminal when narrow, a fraction of it when the preview pane is showing.
@@ -294,7 +299,9 @@ func (s *browseScreen) Init() tea.Cmd {
 func (s *browseScreen) title() string {
 	t := "GoNotes"
 	if s.catFilter != nil {
-		t += " — " + s.catFilter.Name
+		// The same notation the form field takes, so "Work/backend" in the title
+		// is a string the user could type back into a note to file it here.
+		t += " — " + models.FormatCategorySpec(s.catFilter.Name, s.subFilter)
 	}
 	if b := s.sess.mode.Badge; b != "" {
 		t += " · " + b
@@ -334,6 +341,12 @@ func (s *browseScreen) takingText() bool {
 // by the root when a pushed screen (form/detail/confirm) pops with changes.
 func (s *browseScreen) refresh() tea.Cmd {
 	if s.catFilter != nil {
+		if len(s.subFilter) > 0 {
+			// The subcategory filter is name-keyed rather than id-keyed; see
+			// Store.GetCategorySubcategoryNotes for why that is the only door.
+			return loadCategorySubNotesCmd(s.sess.store,
+				s.catFilter.Name, s.subFilter, s.sess.user.GUID)
+		}
 		return loadCategoryNotesCmd(s.sess.store, s.catFilter.ID, s.sess.user.GUID)
 	}
 	return loadNotesCmd(s.sess.store, s.sess.user.GUID)
@@ -366,6 +379,14 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 
 	case categoryPickedMsg:
 		s.catFilter = msg.cat
+		// Both filters are set from the one message: a pick either replaces the
+		// pair or clears it, and a subcategory left over from a previous pick
+		// would silently narrow the new category (or, with no category, narrow
+		// nothing while claiming to).
+		s.subFilter = msg.subs
+		if msg.cat == nil {
+			s.subFilter = nil
+		}
 		return s, s.refresh()
 
 	case flagToggledMsg:
@@ -421,10 +442,17 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			return s, tea.Quit
 
 		case key.Matches(msg, keys.Back):
-			// esc peels back UI state in order: applied fuzzy filter first,
-			// then the category filter, and does nothing at the home state.
+			// esc peels back UI state one layer at a time, narrowest first:
+			// applied fuzzy filter, then the subcategory, then the category, and
+			// nothing at the home state. Dropping the subcategory and the category
+			// together would make "Work/backend" one esc away from every note the
+			// user owns, which is a longer fall than the key implies.
 			if s.list.FilterState() == list.FilterApplied {
 				break // let the list clear its own filter
+			}
+			if len(s.subFilter) > 0 {
+				s.subFilter = nil
+				return s, s.refresh()
 			}
 			if s.catFilter != nil {
 				s.catFilter = nil

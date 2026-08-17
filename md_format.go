@@ -2,9 +2,10 @@ package main
 
 import (
 	"bytes"
-	"slices"
 	"strings"
 	"time"
+
+	"gonotes/models"
 
 	"github.com/rohanthewiz/serr"
 	"gopkg.in/yaml.v3"
@@ -138,26 +139,13 @@ func sanitizeFileName(s string) string {
 
 // parseCategorySpecs groups "Name" / "Name/Sub" entries by category name,
 // preserving first-seen order and deduplicating subcategories.
+//
+// The grammar itself now lives in models (models.ParseCategorySpecs): the TUI's
+// single-line category field speaks the same notation, and two copies of the
+// parser would be two chances for the two front ends to disagree about what
+// "Work/backend" means. This wrapper stays so the Markdown code reads as before.
 func parseCategorySpecs(specs []string) (names []string, subsByName map[string][]string) {
-	subsByName = map[string][]string{}
-	for _, spec := range specs {
-		parts := strings.Split(spec, "/")
-		name := strings.TrimSpace(parts[0])
-		if name == "" {
-			continue
-		}
-		if _, seen := subsByName[name]; !seen {
-			names = append(names, name)
-			subsByName[name] = nil
-		}
-		for _, sub := range parts[1:] {
-			sub = strings.TrimSpace(sub)
-			if sub != "" && !slices.Contains(subsByName[name], sub) {
-				subsByName[name] = append(subsByName[name], sub)
-			}
-		}
-	}
-	return names, subsByName
+	return models.ParseCategorySpecs(specs)
 }
 
 // normalizeTags canonicalizes a comma-separated tag string for storage

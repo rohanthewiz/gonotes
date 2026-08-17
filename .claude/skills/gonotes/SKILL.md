@@ -111,8 +111,11 @@ gonotes import-md -i ~/notes-vault -u <user>
 Private notes export **decrypted** by default; `--skip-private` omits them.
 
 **Terminal UI**: `gonotes tui` (or `-d <dir>`). Keys: `/` search, `n`/`e`
-new/edit, `c` category filter, `f` flag, `d` delete, `ctrl+e` edit body in
-`$EDITOR`, `ctrl+s` save.
+new/edit, `c` category filter (then `s` for that category's subcategories,
+`space` to toggle several, `enter` to filter), `f` flag, `d` delete, `ctrl+e`
+edit body in `$EDITOR`, `ctrl+s` save. The note form's Categories field takes
+the same `Name/Sub` notation as the frontmatter and `gn-clip -c`, creating
+unknown categories and subcategories on save.
 
 **Build & test**: `go build -o gonotes .` (cgo — DuckDB needs a C compiler);
 `go test ./...`. Tests that touch models open their own DB, so stop the server

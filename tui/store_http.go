@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -501,6 +502,30 @@ func (s *httpStore) GetCategoryNotes(categoryID int64, _ string) ([]models.Note,
 	return notesFromOutputs(out), nil
 }
 
+// GetCategorySubcategoryNotes is the one read that has to go through
+// /notes?cat=<name>, because the subcategory filter exists nowhere else in the
+// API: /categories/:id/notes takes no parameters. The web UI reaches the same
+// filter through this endpoint (see the subcats[] parsing in web/api/notes.go),
+// so this is the shape the server is already exercised with.
+//
+// subcats[] is repeated once per subcategory rather than sent as a
+// comma-joined value — the handler reads url.Values["subcats[]"], so a comma
+// would arrive as one subcategory whose name happens to contain a comma, and
+// the filter (which requires ALL of them) would then match nothing.
+func (s *httpStore) GetCategorySubcategoryNotes(categoryName string, subcategories []string, _ string) ([]models.Note, error) {
+	q := url.Values{}
+	q.Set("cat", categoryName)
+	for _, sub := range subcategories {
+		q.Add("subcats[]", sub)
+	}
+
+	var out []models.NoteOutput
+	if err := s.request(http.MethodGet, "/api/v1/notes?"+q.Encode(), nil, &out); err != nil {
+		return nil, serr.Wrap(err, "failed to list category notes by subcategory")
+	}
+	return notesFromOutputs(out), nil
+}
+
 func (s *httpStore) GetNoteByID(id int64, _ string) (*models.Note, error) {
 	var out models.NoteOutput
 	err := s.request(http.MethodGet, "/api/v1/notes/"+strconv.FormatInt(id, 10), nil, &out)
@@ -598,6 +623,26 @@ func (s *httpStore) DeleteCategory(id int64, _ string) error {
 	return nil
 }
 
+// SetCategorySubcategories sends the whole category, not a patch: PUT
+// /api/v1/categories/:id rewrites name, description and subcategories from the
+// body (and rejects an empty name outright), so the two fields this call is not
+// about travel along to keep from being blanked.
+func (s *httpStore) SetCategorySubcategories(cat models.Category, subcategories []string, _ string) (*models.Category, error) {
+	body := models.CategoryInput{Name: cat.Name, Subcategories: subcategories}
+	if cat.Description.Valid {
+		desc := cat.Description.String
+		body.Description = &desc
+	}
+
+	var out models.CategoryOutput
+	if err := s.request(http.MethodPut,
+		"/api/v1/categories/"+strconv.FormatInt(cat.ID, 10), body, &out); err != nil {
+		return nil, serr.Wrap(err, "failed to update category subcategories")
+	}
+	updated := categoryFromOutput(out)
+	return &updated, nil
+}
+
 // GetCategoryByName is resolved client-side. The API has no lookup-by-name
 // endpoint, and adding one for this would be the wrong trade: category lists
 // are short, the call already happens once per save, and a client-side scan
@@ -633,6 +678,18 @@ func (s *httpStore) GetNoteCategories(noteID int64, _ string) ([]models.Category
 	return cats, nil
 }
 
+// GetNoteCategoryDetails hands back the endpoint's own shape untouched. The
+// detail struct is what the API returns and what the screens want, so unlike
+// GetNoteCategories there is nothing to map — and nothing to lose in mapping.
+func (s *httpStore) GetNoteCategoryDetails(noteID int64, _ string) ([]models.NoteCategoryDetailOutput, error) {
+	var out []models.NoteCategoryDetailOutput
+	path := "/api/v1/notes/" + strconv.FormatInt(noteID, 10) + "/categories"
+	if err := s.request(http.MethodGet, path, nil, &out); err != nil {
+		return nil, serr.Wrap(err, "failed to load note category details")
+	}
+	return out, nil
+}
+
 func (s *httpStore) AddCategoryToNote(noteID, categoryID int64, _ string) error {
 	path := "/api/v1/notes/" + strconv.FormatInt(noteID, 10) +
 		"/categories/" + strconv.FormatInt(categoryID, 10)
@@ -641,6 +698,32 @@ func (s *httpStore) AddCategoryToNote(noteID, categoryID int64, _ string) error 
 	// gn-clip.sh's, which is the shape the endpoint is exercised with daily.
 	if err := s.request(http.MethodPost, path, map[string]any{}, nil); err != nil {
 		return serr.Wrap(err, "failed to attach category")
+	}
+	return nil
+}
+
+func (s *httpStore) AddCategoryToNoteWithSubcategories(noteID, categoryID int64, subcategories []string, _ string) error {
+	path := "/api/v1/notes/" + strconv.FormatInt(noteID, 10) +
+		"/categories/" + strconv.FormatInt(categoryID, 10)
+	body := map[string]any{"subcategories": subcategories}
+	if err := s.request(http.MethodPost, path, body, nil); err != nil {
+		return serr.Wrap(err, "failed to attach category with subcategories")
+	}
+	return nil
+}
+
+// SetNoteCategorySubcategories uses PUT on the link, which exists for exactly
+// this — changing the selection without detaching and re-attaching the category
+// (which would lose the link's created_at and write two sync records).
+func (s *httpStore) SetNoteCategorySubcategories(noteID, categoryID int64, subcategories []string) error {
+	path := "/api/v1/notes/" + strconv.FormatInt(noteID, 10) +
+		"/categories/" + strconv.FormatInt(categoryID, 10)
+	// Always a body, even to clear: the handler treats an empty body as an
+	// empty selection, but sending the field explicitly says which of the two
+	// we meant.
+	body := map[string]any{"subcategories": subcategories}
+	if err := s.request(http.MethodPut, path, body, nil); err != nil {
+		return serr.Wrap(err, "failed to update note subcategories")
 	}
 	return nil
 }

@@ -20,7 +20,9 @@ import (
 type detailScreen struct {
 	sess *session
 	note models.Note
-	cats []models.Category
+	// cats carries each category with this note's subcategory selection, so the
+	// header can say "Work/backend" rather than the less true "Work".
+	cats []models.NoteCategoryDetailOutput
 
 	vp    viewport.Model
 	ready bool // viewport must not render before it has real dimensions
@@ -64,11 +66,7 @@ func (s *detailScreen) headerView() string {
 		meta = append(meta, "#"+tags)
 	}
 	if len(s.cats) > 0 {
-		names := make([]string, len(s.cats))
-		for i, c := range s.cats {
-			names[i] = c.Name
-		}
-		meta = append(meta, "in "+strings.Join(names, ", "))
+		meta = append(meta, "in "+strings.Join(noteCatSpecs(s.cats), ", "))
 	}
 	if desc := s.note.Description.String; desc != "" {
 		meta = append(meta, desc)
