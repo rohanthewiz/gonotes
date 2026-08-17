@@ -75,6 +75,14 @@ type keyMap struct {
 	// ---- Confirm dialog ---------------------------------------------------
 	Yes key.Binding
 	No  key.Binding
+
+	// ---- Unsaved-changes dialog -------------------------------------------
+	// Leaving a dirty form is a three-way question, not a yes/no one, so it
+	// cannot reuse Yes/No: those are two answers, and No already claims esc —
+	// which here has to mean the third thing, "I did not mean to leave at all".
+	SaveExit    key.Binding
+	DiscardExit key.Binding
+	CancelExit  key.Binding
 }
 
 // keys is the active keymap. A package var rather than a field on session
@@ -213,6 +221,29 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("n", "N", "esc", "q"),
 			key.WithHelp("n/esc", "cancel"),
 		),
+
+		// enter is bound to the *safe* answer here, the mirror image of the
+		// delete dialog where enter confirms the destructive one. A dialog the
+		// user did not ask for is one they may dismiss on reflex, and the reflex
+		// key should be the one that loses nothing.
+		SaveExit: key.NewBinding(
+			key.WithKeys("s", "y", "Y", "enter"),
+			key.WithHelp("s/enter", "save & exit"),
+		),
+		// No "n": on this dialog "no" is genuinely ambiguous — no, don't save?
+		// no, don't leave? The two answers get unambiguous letters instead.
+		DiscardExit: key.NewBinding(
+			key.WithKeys("d", "D"),
+			key.WithHelp("d", "discard"),
+		),
+		// esc keeps editing rather than discarding. The user arrived here BY
+		// pressing esc, so a second esc is as likely to be the tail of a
+		// double-tap as a decision — and this is the reading where that costs
+		// nothing.
+		CancelExit: key.NewBinding(
+			key.WithKeys("esc", "c"),
+			key.WithHelp("esc", "keep editing"),
+		),
 	}
 }
 
@@ -254,4 +285,8 @@ func (k keyMap) loginHelp() []key.Binding {
 
 func (k keyMap) promptHelp() []key.Binding {
 	return []key.Binding{k.Submit, k.Back}
+}
+
+func (k keyMap) unsavedHelp() []key.Binding {
+	return []key.Binding{k.SaveExit, k.DiscardExit, k.CancelExit}
 }

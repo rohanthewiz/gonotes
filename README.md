@@ -225,7 +225,7 @@ notes list ──"c"──► categories ──"s"──► subcategories
         (filter applied; esc peels it back off)
 ```
 
-The active filter appears in the list title — `GoNotes — Work/backend` — and `esc` backs out one layer at a time: the search first, then the subcategory, then the category.
+The active filter appears in the list title — `GoNotes — Work/backend` — and `esc` backs out one layer at a time: the search first, then the subcategory, then the category. Once there is nothing left to back out of, `esc` quits, the same as `q`. A note form with unsaved edits is never one of those layers — `esc` there stops and offers to save first.
 
 **Editing the list a category offers.** On the subcategories screen, `n` adds a name and `d` removes one. That list is a palette rather than an assignment: removing a name does not refile anything, so notes already filed under it keep it until they are next edited.
 
@@ -239,14 +239,14 @@ The active filter appears in the list title — `GoNotes — Work/backend` — a
 | | `f` | Toggle the follow-up flag |
 | | `d` | Delete (with confirmation) |
 | | `c` | Category picker — filter the list by category |
-| | `esc` | Clear search, then subcategory filter, then category filter |
+| | `esc` | Clear search, then subcategory filter, then category filter — then quit |
 | | `q` | Quit |
 | Note view | `↑/↓` | Scroll |
 | | `e` / `f` / `d` | Edit / flag / delete |
 | Note form | `tab` | Next field |
 | | `ctrl+e` | Edit the body in `$VISUAL`/`$EDITOR` |
 | | `ctrl+s` | Save |
-| | `esc` | Cancel |
+| | `esc` | Cancel — with unsaved changes, asks first: `s` save & exit, `d` discard, `esc` keep editing |
 | Categories | `enter` | Filter notes by the selected category |
 | | `s` | Open that category's subcategories |
 | | `n` / `d` | New / delete category |

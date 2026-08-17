@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -52,6 +53,85 @@ func (s *confirmScreen) View() string {
 		errorTextStyle.Bold(true).Render(yes.Key) + helpStyle.Render(" "+yes.Desc+"   ") +
 		lipgloss.NewStyle().Bold(true).Render(no.Key) + helpStyle.Render(" "+no.Desc)
 	box := dialogBoxStyle.Render(body)
+	return lipgloss.Place(s.sess.width, s.sess.height, lipgloss.Center, lipgloss.Center, box)
+}
+
+// unsavedScreen is the modal that stands between an edit in progress and the
+// key that would throw it away. Its three answers are the reason it is not a
+// confirmScreen: "are you sure?" has no place to put the outcome the user
+// actually wants, which is to keep the work AND leave.
+//
+//	   esc on a dirty form
+//	           │
+//	     ┌─────▼─────┐
+//	     │ unsaved?  │
+//	     └──┬──┬──┬──┘
+//	save ───┘  │  └─── esc: pop this dialog only, form resumes untouched
+//	           └────── discard: pop dialog, then pop form
+//
+// Both actions are funcs rather than the plain tea.Cmds confirmScreen takes,
+// because save has to be *decided* at press time: formScreen.save validates the
+// title, sets the busy flag and reads the fields as they stand now, none of
+// which can be baked in when the dialog is constructed.
+type unsavedScreen struct {
+	sess    *session
+	prompt  string
+	onSave  func() tea.Cmd
+	discard func() tea.Cmd
+}
+
+func newUnsavedScreen(sess *session, prompt string, onSave, discard func() tea.Cmd) *unsavedScreen {
+	return &unsavedScreen{sess: sess, prompt: prompt, onSave: onSave, discard: discard}
+}
+
+func (s *unsavedScreen) Init() tea.Cmd { return nil }
+
+// takingText is deliberately NOT implemented, exactly as on confirmScreen: the
+// answers here are single-letter commands, so a ⌘ chord with no twin should be
+// swallowed rather than typed. See metakeys.go.
+
+func (s *unsavedScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
+	if k, ok := msg.(tea.KeyPressMsg); ok {
+		switch {
+		// The dialog pops itself first in both action arms, for the same reason
+		// confirmScreen does: the command's eventual result message
+		// (noteSavedMsg, and the pop it carries) has to land on the form, which
+		// is only the top of the stack once this screen is off it.
+		case key.Matches(k, keys.SaveExit):
+			return s, tea.Sequence(pop(false), s.onSave())
+		case key.Matches(k, keys.DiscardExit):
+			return s, tea.Sequence(pop(false), s.discard())
+		case key.Matches(k, keys.CancelExit):
+			return s, pop(false)
+		}
+	}
+	return s, nil
+}
+
+func (s *unsavedScreen) View() string {
+	// The three answers are read from the help set rather than written out, so
+	// this row and the switch above cannot list different keys — the same
+	// guarantee every footer gets from renderHelp, which this cannot use because
+	// one of the rows is colored.
+	//
+	// Discard takes the error color the delete dialog gives its "yes": the same
+	// asymmetry, pointed at whichever answer is the one that loses something.
+	var row strings.Builder
+	for i, b := range keys.unsavedHelp() {
+		if i > 0 {
+			row.WriteString(helpStyle.Render("   "))
+		}
+		h := b.Help()
+		keyStyle := lipgloss.NewStyle().Bold(true)
+		// key.Binding holds a slice, so it is not comparable with ==; its key
+		// set is the identity that matters anyway, since that is what dispatch
+		// compares on.
+		if slices.Equal(b.Keys(), keys.DiscardExit.Keys()) {
+			keyStyle = errorTextStyle.Bold(true)
+		}
+		row.WriteString(keyStyle.Render(h.Key) + helpStyle.Render(" "+h.Desc))
+	}
+	box := dialogBoxStyle.Render(s.prompt + "\n\n" + row.String())
 	return lipgloss.Place(s.sess.width, s.sess.height, lipgloss.Center, lipgloss.Center, box)
 }
 
@@ -114,8 +194,9 @@ func (s *promptScreen) View() string {
 }
 
 var _ screen = (*confirmScreen)(nil)
+var _ screen = (*unsavedScreen)(nil)
 var _ screen = (*promptScreen)(nil)
 
-// confirmScreen needs no restyle: it holds no widget and renders entirely from
-// the package styles, which are read fresh on every frame.
+// confirmScreen and unsavedScreen need no restyle: they hold no widget and
+// render entirely from the package styles, which are read fresh on every frame.
 var _ restyler = (*promptScreen)(nil)

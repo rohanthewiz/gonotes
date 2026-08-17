@@ -49,6 +49,27 @@ type formScreen struct {
 
 	focus int // 0 title, 1 desc, 2 tags, 3 categories, 4 private toggle, 5 body
 	busy  bool
+
+	// baseline is what the form held the last time its contents matched what is
+	// stored — at construction, and again after the async category load fills a
+	// field the user never touched. Everything since is unsaved work, and esc
+	// asks before dropping it. See dirty().
+	baseline formValues
+}
+
+// formValues is a comparable snapshot of every editable field. A struct rather
+// than a bool flag flipped on keypress because the flag would be wrong in the
+// common case that matters most: type a character, delete it, and a flag says
+// dirty while the note is byte-for-byte what it was. Comparing values means
+// only a real difference can raise the dialog, which is what keeps the dialog
+// worth reading.
+type formValues struct {
+	title      string
+	desc       string
+	tags       string
+	categories string
+	body       string
+	isPrivate  bool
 }
 
 const (
@@ -96,8 +117,28 @@ func newFormScreen(sess *session, editing *models.Note) *formScreen {
 	}
 
 	f.title.Focus()
+	// Read the baseline back OUT of the widgets rather than off the note that
+	// seeded them: a widget is free to normalize what it is given (the textarea
+	// does its own line-ending handling), and a baseline that skipped the round
+	// trip would report a form as dirty the instant it opened.
+	f.baseline = f.values()
 	return f
 }
+
+// values snapshots the fields as they stand right now.
+func (s *formScreen) values() formValues {
+	return formValues{
+		title:      s.title.Value(),
+		desc:       s.desc.Value(),
+		tags:       s.tags.Value(),
+		categories: s.categories.Value(),
+		body:       s.body.Value(),
+		isPrivate:  s.isPrivate,
+	}
+}
+
+// dirty reports whether there is unsaved work in this form.
+func (s *formScreen) dirty() bool { return s.values() != s.baseline }
 
 // prefill seeds a NEW note's fields from something other than the user typing —
 // today, a capture from a sibling agent pane (capture.go).
@@ -108,6 +149,12 @@ func newFormScreen(sess *session, editing *models.Note) *formScreen {
 // from the `editing` path in newFormScreen: this note does not exist yet, so it
 // must save as a create (noteID 0) and must not try to load categories for an
 // id that was never assigned.
+//
+// It also deliberately does NOT move the dirty baseline. Captured text is
+// unsaved work that exists nowhere else — losing a pane capture to a stray esc
+// is precisely the loss the unsaved-changes dialog is for — so a prefilled form
+// counts as dirty from the moment it opens, even though the user typed none of
+// it.
 func (s *formScreen) prefill(title, tags, body string) {
 	s.title.SetValue(title)
 	s.tags.SetValue(tags)
@@ -226,6 +273,10 @@ func (s *formScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		// subcategory the user never touched.
 		if msg.err == nil && len(msg.cats) > 0 {
 			s.categories.SetValue(models.FormatCategorySpecCSV(noteCatSpecs(msg.cats)))
+			// This field just came from storage, so it is not an edit — move the
+			// baseline with it. Without this, every edit form would be dirty the
+			// moment this message landed, and esc would always stop to ask.
+			s.baseline.categories = s.categories.Value()
 		}
 		return s, nil
 
@@ -262,7 +313,13 @@ func (s *formScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			return s, openEditorCmd(s.sess.cats, s.body.Value(), s.title.Value())
 
 		case key.Matches(msg, keys.Back):
-			return s, tea.Sequence(pop(false), status("Edit canceled"))
+			// The guard, and the only place esc is not immediate. A clean form
+			// leaves exactly as it always did; a dirty one stops to offer the
+			// third answer. See unsavedScreen.
+			if s.dirty() {
+				return s, push(newUnsavedScreen(s.sess, s.unsavedPrompt(), s.save, s.abandon))
+			}
+			return s, s.abandon()
 
 		case key.Matches(msg, keys.NextField):
 			return s, s.setFocus(s.focus + 1)
@@ -307,6 +364,33 @@ func (s *formScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		s.body, cmd = s.body.Update(msg)
 	}
 	return s, cmd
+}
+
+// abandon leaves the form without saving. It is the plain esc path and also
+// the dialog's discard arm, which is why it is a method and not two copies of
+// a tea.Sequence: the wording of the departure should not depend on how many
+// keys it took to get there.
+//
+// pop(false) — no refresh. Nothing was written, so there is nothing behind this
+// screen that has gone stale.
+func (s *formScreen) abandon() tea.Cmd {
+	if s.dirty() {
+		return tea.Sequence(pop(false), status("Discarded unsaved changes"))
+	}
+	return tea.Sequence(pop(false), status("Edit canceled"))
+}
+
+// unsavedPrompt names the thing at risk. A new note has no title of its own to
+// quote yet — and may have no title at all — so it is described rather than
+// named.
+func (s *formScreen) unsavedPrompt() string {
+	if s.editing != nil {
+		return "Unsaved changes to \"" + s.editing.Title + "\"."
+	}
+	if t := strings.TrimSpace(s.title.Value()); t != "" {
+		return "\"" + t + "\" has not been saved."
+	}
+	return "This new note has not been saved."
 }
 
 func (s *formScreen) save() tea.Cmd {

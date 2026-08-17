@@ -66,6 +66,14 @@ func TestBindingKeys(t *testing.T) {
 
 		{"confirm yes", keys.Yes, []string{"y", "Y", "enter"}},
 		{"confirm no", keys.No, []string{"n", "N", "esc", "q"}},
+
+		// The unsaved-changes dialog. Its three answers are pinned as carefully
+		// as the two-way ones because the cost of a drifted binding is asymmetric
+		// here: the key that stops matching is the key whose work gets thrown
+		// away.
+		{"save and exit", keys.SaveExit, []string{"s", "y", "Y", "enter"}},
+		{"discard unsaved changes", keys.DiscardExit, []string{"d", "D"}},
+		{"keep editing", keys.CancelExit, []string{"esc", "c"}},
 	}
 
 	for _, tc := range cases {
@@ -169,6 +177,11 @@ func TestHelpSetsAreHandled(t *testing.T) {
 			help:    keys.promptHelp(),
 			handled: []key.Binding{keys.Submit, keys.Back},
 		},
+		{
+			screen:  "unsaved changes",
+			help:    keys.unsavedHelp(),
+			handled: []key.Binding{keys.SaveExit, keys.DiscardExit, keys.CancelExit},
+		},
 	}
 
 	for _, tc := range cases {
@@ -204,6 +217,7 @@ func TestHelpSetsHaveText(t *testing.T) {
 		"form":          keys.formHelp(),
 		"login":         keys.loginHelp(),
 		"prompt":        keys.promptHelp(),
+		"unsaved":       keys.unsavedHelp(),
 	}
 	for name, set := range sets {
 		for i, b := range set {

@@ -458,7 +458,15 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				s.catFilter = nil
 				return s, s.refresh()
 			}
-			return s, nil
+			// Nothing left to peel: esc has reached the bottom of the stack and
+			// the bottom of the filter state, so it means what it means on the
+			// login screen — leave. Every layer above still pops one at a time,
+			// so this can only be reached from the home view, and only after the
+			// keypress that would have undone something has already found it.
+			//
+			// A dirty form can never be one of those layers: it raises the
+			// unsaved-changes dialog before it lets esc past. See formScreen.
+			return s, tea.Quit
 
 		case key.Matches(msg, keys.Open):
 			if n := s.selectedNote(); n != nil {
