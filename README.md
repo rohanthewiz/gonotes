@@ -180,6 +180,55 @@ Browse and edit notes right in the terminal — no web server needed:
 
 On first run (empty database) the TUI walks you through creating an account; afterwards it signs you in with just your password (the username is prefilled when there's a single user).
 
+### Categories and subcategories
+
+A note can sit in several categories, and each category can carry subcategories — `Work` with `backend`, `api`, `ops`. The TUI writes both from one field and reads both back in the same notation, so there is no separate setup step and nothing that only the web UI can do.
+
+**Entering them.** On the note form (`n` for a new note, `e` to edit one), the Categories field is comma-separated and a `/` adds subcategories:
+
+```
+Title       Rate limiter design
+Description
+Tags        infra,api
+Categories  Work/backend, Personal
+Private     [ ]
+```
+
+That files the note under Work's `backend` subcategory and under Personal plainly. `Work/backend/api` selects two subcategories of Work at once; `Work/backend, Work/api` means exactly the same thing (the second form is what a Markdown export writes). `ctrl+s` saves — and anything that does not exist yet is created right there, categories and subcategories alike. It is the same notation as the Markdown frontmatter and `gn-clip.sh -c "Work/backend"`.
+
+**Seeing them.** The note view (`enter` on a row) names the filing in its header:
+
+```
+On-call runbook
+updated 2026-08-17 10:07  •  #infra,api  •  in Reading, Work/ops
+```
+
+The form prefills the field with precisely what is stored, so opening a note and saving it unchanged leaves its filing alone.
+
+**Browsing by them.** `c` from the notes list opens the categories screen, where every row shows what that category offers:
+
+```
+│ Work
+│ ▸ backend, api, ops
+
+  Reading
+  created 2026-08-17
+```
+
+- `enter` filters the note list to the whole category.
+- `s` drills into that category's subcategories. `space` toggles rows into the filter and `enter` applies it; the heading shows what is about to be applied (`filter: Work/backend/api`). Toggling more than one narrows to the notes carrying **all** of them — the same rule as the web UI's chips. With nothing toggled, `enter` filters by the highlighted row alone.
+
+```
+notes list ──"c"──► categories ──"s"──► subcategories
+     ▲                   │                     │
+     └───── enter ◄───────┴────── enter ◄───────┘
+        (filter applied; esc peels it back off)
+```
+
+The active filter appears in the list title — `GoNotes — Work/backend` — and `esc` backs out one layer at a time: the search first, then the subcategory, then the category.
+
+**Editing the list a category offers.** On the subcategories screen, `n` adds a name and `d` removes one. That list is a palette rather than an assignment: removing a name does not refile anything, so notes already filed under it keep it until they are next edited.
+
 ### Keys
 
 | Screen | Key | Action |
@@ -206,8 +255,7 @@ On first run (empty database) the TUI walks you through creating an account; aft
 | | `n` / `d` | Add / remove a subcategory of this category |
 
 Notes:
-- Categories on the note form are comma-separated, and a `/` adds subcategories: `Work/backend, Personal` files the note under Work's `backend` subcategory and under Personal. Unknown categories *and* unknown subcategories are created automatically on save — the same notation the Markdown frontmatter and `gn-clip.sh -c` use.
-- Adding or removing a subcategory on the Categories screen edits what that category *offers*; notes already filed under a removed subcategory keep it until they are edited.
+- Category and subcategory entry is covered above, under [Categories and subcategories](#categories-and-subcategories).
 - The TUI shares the databases with the web server. Avoid running both against the same directory at the same time (bytdb allows a single writer process per database).
 - With `GONOTES_ENCRYPTION_KEY` set (env or `config/cfg_files/.env`), private notes are encrypted at rest, same as the web app.
 
