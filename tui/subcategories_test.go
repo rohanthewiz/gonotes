@@ -614,6 +614,26 @@ func TestBrowseEscPeelsSubcategoryBeforeCategory(t *testing.T) {
 
 // browseTitlesAfterPick applies a pick to the browse screen and returns the
 // titles the list ends up holding.
+// findNotesLoaded resolves a command to the notesLoadedMsg inside it, whether
+// it is one directly or one arm of a tea.Batch. Batches do not nest in this
+// codebase, so a single level is enough.
+func findNotesLoaded(cmd tea.Cmd) (notesLoadedMsg, bool) {
+	switch msg := cmd().(type) {
+	case notesLoadedMsg:
+		return msg, true
+	case tea.BatchMsg:
+		for _, sub := range msg {
+			if sub == nil {
+				continue
+			}
+			if loaded, ok := sub().(notesLoadedMsg); ok {
+				return loaded, true
+			}
+		}
+	}
+	return notesLoadedMsg{}, false
+}
+
 func browseTitlesAfterPick(t *testing.T, s *browseScreen, pick categoryPickedMsg) []string {
 	t.Helper()
 	updated, cmd := s.Update(pick)
@@ -628,7 +648,11 @@ func browseTitles(t *testing.T, s *browseScreen, cmd tea.Cmd) []string {
 	if cmd == nil {
 		t.Fatal("a filter change returned no load command")
 	}
-	loaded, ok := cmd().(notesLoadedMsg)
+	// A refresh is a BATCH now — the notes and the lock badges reload together,
+	// since a stale "nobody is editing this" badge is worse than none. Dig the
+	// notes out of whichever arm carries them rather than assuming a bare Cmd,
+	// so this helper survives another arm being added later.
+	loaded, ok := findNotesLoaded(cmd)
 	if !ok {
 		t.Fatalf("a filter change resolved to %T, want notesLoadedMsg", cmd())
 	}

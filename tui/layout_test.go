@@ -59,10 +59,16 @@ func fixtureNote(id int64, title, body string) models.Note {
 // with no database behind it. newBrowseScreen reads sess.width at construction
 // and Init() would hit the DB, so the sequence here is deliberate: construct,
 // layout, then set items directly.
+//
+// The store is a fakeStore rather than nil. It stays unused by the layout tests
+// this fixture was built for, but "e" now takes a note lock before opening the
+// form, so a screen with no store behind it can no longer be driven through its
+// key handling at all.
 func fixtureBrowse(t *testing.T, width, height int) *browseScreen {
 	t.Helper()
 
 	sess := &session{
+		store:  newFakeStore(),
 		user:   &models.User{GUID: "fixture-user"},
 		width:  width,
 		height: height,

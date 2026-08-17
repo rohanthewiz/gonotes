@@ -139,6 +139,53 @@ type Store interface {
 	// the junction table only ever holds rows whose ownership was verified
 	// when the link was created.
 	RemoveCategoryFromNote(noteID, categoryID int64) error
+
+	// ---- Note locks --------------------------------------------------------
+	//
+	// The mutual-exclusion protocol between editing sessions. A screen about to
+	// edit acquires; a keeper goroutine renews; leaving releases. See
+	// models/lock.go for what a lease is and tui/lock.go for how the TUI holds
+	// one.
+	//
+	// NOTE THE MISSING PARAMETER: none of these take a token, and UpdateNote
+	// does not take one either. The store that acquired a lease keeps its
+	// token and attaches it to the right request by note id — the impedance
+	// this seam exists to absorb. A token in these signatures would be a
+	// secret threaded through five screens, one forgotten argument away from a
+	// save that 409s against its own lock.
+
+	// AcquireNoteLock claims a note for this session, or reports who has it as
+	// a *models.NoteLockedError (test with lockedBy). Re-acquiring a note this
+	// session already holds succeeds and extends the lease.
+	//
+	// steal takes the note by force from a live holder. It is never something
+	// a client should retry into on its own — see models.AcquireNoteLock.
+	AcquireNoteLock(noteID int64, userGUID string, holder models.LockHolder, steal bool) (*models.NoteLock, error)
+
+	// RenewNoteLock is the heartbeat. It returns models.ErrLockNotHeld when
+	// the lease is gone, which is the signal the holder needs most: the note
+	// belongs to somebody else now and the form on screen can no longer save.
+	RenewNoteLock(noteID int64) (*models.NoteLock, error)
+
+	// ReleaseNoteLock gives the note back. Releasing a lease this session does
+	// not hold is not an error — by then the goal is met either way.
+	ReleaseNoteLock(noteID int64) error
+
+	// ReleaseAllNoteLocks gives back every lease this session holds. It is the
+	// shutdown path (see Run): the exits that bypass a form's own release — q
+	// from the list, ctrl+c, a program loop that failed — must not leave a note
+	// locked by a process that has stopped existing.
+	ReleaseAllNoteLocks() error
+
+	// GetNoteLock returns the live lease on a note, or (nil, nil) when it is
+	// unlocked. Never returns the token: a lease is only ever handed to a
+	// non-holder redacted.
+	GetNoteLock(noteID int64) (*models.NoteLock, error)
+
+	// ListNoteLocks returns every live lease belonging to the user, for the
+	// list screen's badges. One call rather than one per row — a hundred-row
+	// refresh must not become a hundred round trips.
+	ListNoteLocks(userGUID string) ([]models.NoteLock, error)
 }
 
 // ErrNoUserList reports that a store cannot enumerate accounts.

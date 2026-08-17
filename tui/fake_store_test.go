@@ -55,6 +55,11 @@ type fakeStore struct {
 	// failWith, when set, is returned by every read method. Injecting a
 	// storage failure any other way means corrupting a real database.
 	failWith error
+
+	// tokens mirrors what the real stores keep: the lease tokens this "session"
+	// holds. Same type, same bookkeeping — so a test exercises the same
+	// token-by-note-id plumbing production uses.
+	tokens *lockTokens
 }
 
 // fakeLink is one row of the note_categories junction.
@@ -64,12 +69,18 @@ type fakeLink struct {
 }
 
 func newFakeStore() *fakeStore {
+	// The lock registry is process-global (see models/lock.go), so a lease left
+	// behind by one test would arrive in the next one as a note mysteriously
+	// held by a session that no longer exists. Clearing it here rather than in
+	// each test's cleanup means no test can forget.
+	models.ResetNoteLocksForTest()
 	return &fakeStore{
 		users:      map[string]*models.User{},
 		passwd:     map[string]string{},
 		links:      map[int64][]fakeLink{},
 		nextNoteID: 1,
 		nextCatID:  1,
+		tokens:     newLockTokens(),
 	}
 }
 
@@ -268,6 +279,11 @@ func (f *fakeStore) CreateNote(input models.NoteInput, userGUID string) (*models
 		CreatedBy:   sql.NullString{String: userGUID, Valid: true},
 		CreatedAt:   now,
 		UpdatedAt:   now,
+		// Version 1, matching models.CreateNote. A double that left this at
+		// zero would silently disable the version guard for every note it made
+		// — zero means "unchecked" — so conflict tests would pass by never
+		// having a conflict to detect.
+		Version: 1,
 	}
 	f.nextNoteID++
 	f.notes = append(f.notes, n)
@@ -284,6 +300,19 @@ func (f *fakeStore) UpdateNote(id int64, input models.NoteInput, userGUID string
 		if f.notes[i].ID != id || f.notes[i].CreatedBy.String != userGUID {
 			continue
 		}
+		// The lock gate and the version guard, in the same order and with the
+		// same meanings the real stores use — and BEFORE any field is touched.
+		// A double that skipped them would let every conflict test pass by not
+		// having any conflicts; one that ran them after the assignments would
+		// report a refusal while having already applied the write.
+		if err := models.AuthorizeNoteWrite(id, f.tokens.get(id)); err != nil {
+			return nil, err
+		}
+		if input.ExpectedVersion != 0 && f.notes[i].Version != input.ExpectedVersion {
+			current := f.notes[i]
+			return nil, &models.StaleWriteError{Current: &current, ExpectedVersion: input.ExpectedVersion}
+		}
+
 		f.notes[i].Title = input.Title
 		f.notes[i].Description = ptrToNull(input.Description)
 		f.notes[i].Body = ptrToNull(input.Body)
@@ -291,10 +320,74 @@ func (f *fakeStore) UpdateNote(id int64, input models.NoteInput, userGUID string
 		f.notes[i].IsPrivate = input.IsPrivate
 		f.notes[i].IsFlagged = input.IsFlagged
 		f.notes[i].UpdatedAt = time.Now()
+		f.notes[i].Version++
 		n := f.notes[i]
 		return &n, nil
 	}
 	return nil, nil
+}
+
+// ---- Note locks --------------------------------------------------------------
+//
+// These delegate to the REAL registry rather than faking one. models/lock.go is
+// pure in-memory state with no database behind it, so there is nothing to stub —
+// and a hand-rolled second implementation of leases inside a test double is
+// exactly the kind of thing that drifts from the real one and then certifies it.
+//
+// The registry is process-global, so newFakeStore resets it; see there.
+
+func (f *fakeStore) AcquireNoteLock(noteID int64, userGUID string, holder models.LockHolder, steal bool) (*models.NoteLock, error) {
+	lock, err := models.AcquireNoteLock(noteID, userGUID, holder, steal)
+	if err != nil {
+		return nil, err
+	}
+	f.tokens.set(noteID, lock.Token)
+	return lock, nil
+}
+
+func (f *fakeStore) RenewNoteLock(noteID int64) (*models.NoteLock, error) {
+	lock, err := models.RenewNoteLock(noteID, f.tokens.get(noteID))
+	if err != nil {
+		f.tokens.clear(noteID)
+		return nil, err
+	}
+	return lock, nil
+}
+
+func (f *fakeStore) ReleaseNoteLock(noteID int64) error {
+	models.ReleaseNoteLock(noteID, f.tokens.get(noteID))
+	f.tokens.clear(noteID)
+	return nil
+}
+
+func (f *fakeStore) ReleaseAllNoteLocks() error {
+	for noteID, token := range f.tokens.drain() {
+		models.ReleaseNoteLock(noteID, token)
+	}
+	return nil
+}
+
+func (f *fakeStore) GetNoteLock(noteID int64) (*models.NoteLock, error) {
+	return models.GetNoteLock(noteID), nil
+}
+
+func (f *fakeStore) ListNoteLocks(userGUID string) ([]models.NoteLock, error) {
+	return models.ListNoteLocks(userGUID), nil
+}
+
+// lockAsOther takes a note's lock as some OTHER session — how a test sets up
+// contention, since there is no second process to run, only a second identity.
+func (f *fakeStore) lockAsOther(noteID int64, label string) *models.NoteLock {
+	lock, err := models.AcquireNoteLock(noteID, "", models.LockHolder{
+		SessionID:  "session-" + label,
+		Label:      label,
+		PaneHandle: "w9:p9",
+		Client:     "tui",
+	}, false)
+	if err != nil {
+		return nil
+	}
+	return lock
 }
 
 func (f *fakeStore) DeleteNote(id int64, userGUID string) (bool, error) {

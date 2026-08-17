@@ -103,7 +103,8 @@ GoNotes uses two DuckDB databases running simultaneously:
 users              (id, guid, username, password_hash, email, display_name, ...)
 notes              (id, guid, title, description, body, tags, is_private,
                     encryption_iv, created_by, updated_by, created_at, updated_at,
-                    authored_at*, synced_at, deleted_at)    -- *disk only
+                    authored_at*, synced_at, deleted_at,
+                    version)    -- *disk only; version = concurrency counter
 categories         (id, guid, name, description, subcategories, created_at, updated_at)
 note_categories    (note_id, category_id, subcategories, created_at)
 
@@ -174,6 +175,69 @@ Applied in order on every request:
 3. **JWTAuthMiddleware** — validates Bearer tokens, sets user context
 4. **SecurityHeadersMiddleware** — adds security headers (CSP, X-Frame-Options, etc.)
 5. **LoggingMiddleware** — structured request logging
+
+## Concurrent Editing
+
+Several GoNotes sessions can be pointed at the same notes at once — two TUIs in
+cats panes, a browser tab, the MacApp. Because bytdb is single-process, all but
+one of them reach the data over HTTP against the process that holds it, which
+means there is exactly one place able to arbitrate between them.
+
+Two independent mechanisms, layered:
+
+```
+  lock  (models/lock.go, web/api/locks.go)   stops the second EDITOR starting
+  ────────────────────────────────────────────────────────────────────────────
+  version guard (notes.version)              stops the second WRITE landing
+```
+
+### Note locks
+
+In-memory leases keyed by note id, held in the server process:
+
+| | |
+|---|---|
+| TTL | `models.LockTTL` (90s) without a renewal |
+| Heartbeat | `models.LockHeartbeat` (30s), from a plain goroutine in the client so it survives `tea.ExecProcess` while the user is in `$EDITOR` |
+| Identity | one UUID per client process (`SessionID`), plus a human label, host, and cats pane handle for the message a blocked session shows |
+| Authority | a `crypto/rand` bearer token, returned only to the acquiring session and presented as `X-GoNotes-Lock` on writes |
+| Endpoints | `POST/PUT/DELETE/GET /api/v1/notes/:id/lock`, `GET /api/v1/note-locks` |
+
+Deliberately NOT persisted: a lease describes a process that is running now, so
+restoring one after a server restart would wedge a note held by something that
+died with it. Restart drops every lease; the version guard is what makes that
+safe.
+
+An unlocked note is writable by anyone who owns it. The lock is a
+mutual-exclusion protocol between participating sessions, not a permission
+system — requiring a lease for every write would have broken the web form,
+`gn-clip.sh`, the Markdown importer, and sync apply on the day it shipped.
+
+`?steal=true` forces a takeover. It is always an explicit request, never a
+client-side retry, and the displaced session learns of it on its next
+heartbeat.
+
+### The version guard
+
+`notes.version` starts at 1 and advances on every change — update, flag,
+delete, privacy flip, and sync apply. A writer that names the version it loaded
+(`NoteInput.ExpectedVersion`, `expected_version` on the wire) has its write
+refused with `models.ErrStaleWrite` / HTTP 409 if the stored version has moved,
+and the refusal carries the winning note so the loser can be shown what it lost
+to.
+
+`ExpectedVersion == 0` means "do not check", and that is the default: bulk
+import, sync apply (which resolves conflicts by its own rules), and any client
+predating the field all write unguarded, exactly as before.
+
+A counter rather than `updated_at`, for two reasons that both bite here
+specifically: timestamp resolution can collapse two writes in the same tick,
+and peer-to-peer sync means the writes being compared did not come from one
+clock.
+
+Both refusals surface as HTTP 409 with a `data.reason` of `locked`, `lost`, or
+`stale`; `tui/store_http.go` translates them back into the same Go error types
+the local store raises, so screens handle contention once regardless of mode.
 
 ## Sync Architecture
 

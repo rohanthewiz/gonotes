@@ -282,7 +282,18 @@
           window.location.href = '/login';
           return null;
         }
-        throw new Error(data.error || 'Request failed');
+        const err = new Error(data.error || 'Request failed');
+        // A 409 is a conflict, not a failure: either another session has the
+        // note open (a GoNotes TUI in a cats pane, say) or somebody saved it
+        // while this form was open. Both carry a detail object explaining
+        // which, and both need the SERVER's message shown rather than a
+        // generic one — "note is locked by pane w1:p3 since 2m ago" tells the
+        // user what to do; "failed to save" does not. Callers test isConflict.
+        if (response.status === 409) {
+          err.isConflict = true;
+          err.conflict = data.data || {};
+        }
+        throw err;
       }
 
       // Transform msgpack-encoded responses back to standard format
@@ -468,6 +479,14 @@
     try {
       let response;
       if (state.currentNote && state.currentNote.id) {
+        // Name the version this form was opened on, so a save built on a note
+        // somebody else has since changed is refused rather than silently
+        // overwriting them. Omitted when the note predates the field (an older
+        // server), where the server reads a missing version as "do not check"
+        // and behaves exactly as it did before.
+        if (state.currentNote.version) {
+          noteData.expected_version = state.currentNote.version;
+        }
         // Update existing note
         response = await apiRequest(`/notes/${state.currentNote.id}`, {
           method: 'PUT',
@@ -504,7 +523,19 @@
         showPreviewMode();
       }
     } catch (error) {
-      showToast('Failed to save note', 'error');
+      if (error.isConflict) {
+        // Say what actually happened, and leave the form exactly as it is: the
+        // user's text is the only copy of their edit, and a refused save must
+        // never be the reason they lose it. A stale conflict also reloads the
+        // list, so the winning version is visible alongside the form.
+        showToast(error.message, 'error');
+        if (error.conflict && error.conflict.reason === 'stale') {
+          await loadNotes();
+          renderNoteList();
+        }
+      } else {
+        showToast('Failed to save note', 'error');
+      }
     } finally {
       saveBtn.disabled = false;
       saveBtn.textContent = 'Save';

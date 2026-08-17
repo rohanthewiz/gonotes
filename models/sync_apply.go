@@ -35,10 +35,15 @@ func ApplySyncNoteCreate(noteGUID, title string, fragment NoteFragment, authored
 	en := noteEngine(isPrivate)
 	createdBy := sql.NullString{String: userGUID, Valid: userGUID != ""}
 
+	// version starts at 1, stated rather than defaulted. Every INSERT into
+	// notes names it explicitly for the same reason: on a database that
+	// predates the column, the value comes from the ALTER's default, and a
+	// note that arrived by sync with a NULL version would sit outside the
+	// optimistic-concurrency guard entirely (0 means "unchecked").
 	query := `
 		INSERT INTO notes (id, guid, title, description, body, tags, is_private, created_by, updated_by,
-		                   authored_at, synced_at)
-		VALUES (nextval('notes_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		                   authored_at, synced_at, version)
+		VALUES (nextval('notes_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 1)
 		RETURNING ` + noteCols
 
 	note := &Note{}
@@ -122,10 +127,16 @@ func ApplySyncNoteUpdate(noteGUID string, fragment NoteFragment, authoredAt time
 	dst := noteEngine(resolved.IsPrivate)
 	now := time.Now().UTC()
 
+	// Sync bumps the version but never GUARDS on it. That asymmetry is the
+	// point: sync has already resolved this conflict by its own rules (see
+	// sync_conflict.go) and its job is to land the result, not to ask again.
+	// Bumping still matters — a local form that had the pre-sync note open must
+	// be told its base moved, which is exactly what the counter is for.
 	if src == dst {
 		_, err = src.Exec(`
 			UPDATE notes SET title = ?, description = ?, body = ?, tags = ?, is_private = ?,
-			    authored_at = ?, synced_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+			    authored_at = ?, synced_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP,
+			    version = version + 1
 			WHERE guid = ? AND deleted_at IS NULL`,
 			resolved.Title, resolved.Description, resolved.Body, resolved.Tags, resolved.IsPrivate,
 			authoredAt, noteGUID,
@@ -138,12 +149,12 @@ func ApplySyncNoteUpdate(noteGUID string, fragment NoteFragment, authoredAt time
 		// preserving id/guid/created_at.
 		insertQuery := `
 			INSERT INTO notes (id, guid, title, description, body, tags, is_private, is_flagged,
-			                   created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`
+			                   created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)`
 		if _, err = dst.Exec(insertQuery,
 			existing.ID, existing.GUID, resolved.Title, resolved.Description, resolved.Body, resolved.Tags,
 			resolved.IsPrivate, existing.IsFlagged, existing.CreatedBy, existing.UpdatedBy,
-			existing.CreatedAt, now, authoredAt, existing.DeletedAt,
+			existing.CreatedAt, now, authoredAt, existing.DeletedAt, existing.Version+1,
 		); err != nil {
 			return serr.Wrap(err, "failed to insert moved note during sync privacy flip")
 		}
@@ -180,7 +191,7 @@ func ApplySyncNoteDelete(noteGUID string) error {
 	en := noteEngine(existing.IsPrivate)
 
 	result, err := en.Exec(
-		`UPDATE notes SET deleted_at = CURRENT_TIMESTAMP, synced_at = CURRENT_TIMESTAMP WHERE guid = ? AND deleted_at IS NULL`,
+		`UPDATE notes SET deleted_at = CURRENT_TIMESTAMP, synced_at = CURRENT_TIMESTAMP, version = version + 1 WHERE guid = ? AND deleted_at IS NULL`,
 		noteGUID,
 	)
 	if err != nil {

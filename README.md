@@ -229,6 +229,48 @@ The active filter appears in the list title — `GoNotes — Work/backend` — a
 
 **Editing the list a category offers.** On the subcategories screen, `n` adds a name and `d` removes one. That list is a palette rather than an assignment: removing a name does not refile anything, so notes already filed under it keep it until they are next edited.
 
+### Editing the same note from two places
+
+Run GoNotes in two cats panes, or in a pane and a browser tab, and both are talking to the same notes through the same server. Without something in the way, both could open note 42, both could type for ten minutes, and the second save would overwrite the first silently. Two mechanisms prevent that.
+
+**A note is claimed while it is being edited.** Pressing `e` takes a short lease on the note before the form opens. If another session already has it, you get a dialog instead of a form:
+
+```
+Note is being edited elsewhere
+
+On-call runbook
+held by pane w1:p3 on studio.local  •  for 2m
+
+r/enter open read-only   t take over   g go to their pane   esc back
+```
+
+- **`r`** opens the note read-only — the whole thing, just not editable.
+- **`t`** takes it over, after a confirmation. The other session keeps whatever it has typed but can no longer save; it finds out within 30 seconds, while its user is presumably still typing, not when they press `ctrl+s`.
+- **`g`** focuses the pane that has it open (inside cats, when the holder reported one).
+
+A list row being edited elsewhere carries a `✎` badge, so it is usually visible before you press anything.
+
+The lease is renewed in the background for as long as the form is open — including while you are away in `$EDITOR` — and released the moment you save, cancel, or quit. If GoNotes dies without releasing it, the lease expires on its own after 90 seconds; a note can never be locked permanently by a process that no longer exists.
+
+Leases live in the running server's memory, so they cover exactly what they should: the sessions talking to it right now. They do not survive a server restart, and they are not a permission system — ownership already is one.
+
+**A save built on a stale copy is refused.** Every note carries a version that advances on each change, and an edit form saves against the version it opened. If the note moved in the meantime — the lease expired, somebody took it over, a sync landed, or another client wrote without asking for a lease at all — the save stops and asks:
+
+```
+This note changed while you were editing
+
+On-call runbook
+saved by another session 4m ago
+
+Your text is still in the form either way you go.
+
+l load theirs (drops your edits)   o overwrite theirs   esc decide later
+```
+
+Nothing is lost while that dialog is up: your text stays in the form, and `esc` leaves it there.
+
+The same rules apply to the web UI and to anything else writing through the API — the server, not the client, is what enforces them. `X-GoNotes-Lock: <token>` carries a lease on a write; `expected_version` in the body opts a write into the version check. A write that names neither still works, which is what keeps `gn-clip.sh`, the Markdown importer, and sync running unchanged.
+
 ### Keys
 
 | Screen | Key | Action |
@@ -246,7 +288,15 @@ The active filter appears in the list title — `GoNotes — Work/backend` — a
 | Note form | `tab` | Next field |
 | | `ctrl+e` | Edit the body in `$VISUAL`/`$EDITOR` |
 | | `ctrl+s` | Save |
+| | `ctrl+l` | Retake the lock, after it was lost or taken |
 | | `esc` | Cancel — with unsaved changes, asks first: `s` save & exit, `d` discard, `esc` keep editing |
+| Locked note | `r` | Open read-only |
+| | `t` | Take it over (asks first) |
+| | `g` | Go to the pane that has it open (inside cats) |
+| | `esc` | Back |
+| Changed underneath | `l` | Load their version (drops your edits) |
+| | `o` | Overwrite their version |
+| | `esc` | Decide later — your text stays in the form |
 | Categories | `enter` | Filter notes by the selected category |
 | | `s` | Open that category's subcategories |
 | | `n` / `d` | New / delete category |
@@ -256,6 +306,7 @@ The active filter appears in the list title — `GoNotes — Work/backend` — a
 
 Notes:
 - Category and subcategory entry is covered above, under [Categories and subcategories](#categories-and-subcategories).
+- Editing the same note from two sessions is covered above, under [Editing the same note from two places](#editing-the-same-note-from-two-places).
 - The TUI shares the databases with the web server. Avoid running both against the same directory at the same time (bytdb allows a single writer process per database).
 - With `GONOTES_ENCRYPTION_KEY` set (env or `config/cfg_files/.env`), private notes are encrypted at rest, same as the web app.
 

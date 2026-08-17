@@ -66,10 +66,12 @@ func MigrateInsertNote(guid, title string, description, body, tags sql.NullStrin
 	createdAt, updatedAt time.Time, authoredAt, syncedAt, deletedAt sql.NullTime) (int64, error) {
 
 	en := noteEngine(isPrivate)
+	// version starts at 1: a migrated note has no edit history in the new
+	// database, so the counter starts where a freshly created note's does.
 	query := `INSERT INTO notes
 		(id, guid, title, description, body, tags, is_private, is_flagged,
-		 created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at)
-		VALUES (nextval('notes_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at, version)
+		VALUES (nextval('notes_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
 		RETURNING id`
 	var id int64
 	err := en.QueryRow(query, guid, title, description, body, tags, isPrivate, isFlagged,

@@ -3,6 +3,7 @@ package models
 import (
 	"database/sql"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/rohanthewiz/logger"
@@ -40,13 +41,19 @@ type Note struct {
 	AuthoredAt   sql.NullTime   `json:"authored_at"`   // Last human authoring timestamp (for peer-to-peer sync)
 	SyncedAt     sql.NullTime   `json:"synced_at"`     // Last sync timestamp for distributed scenarios
 	DeletedAt    sql.NullTime   `json:"deleted_at"`    // Soft delete timestamp, null if not deleted
+
+	// Version is the optimistic-concurrency counter, bumped by every write
+	// that changes the note. An editor carries the version it loaded back into
+	// its update (NoteInput.ExpectedVersion) so a write built on a stale read
+	// is rejected rather than applied. See UpdateNote / ErrStaleWrite.
+	Version int64 `json:"version"`
 }
 
 // noteCols is the canonical notes column list (encryption_iv dropped),
 // shared by every notes SELECT so the projection and scanNoteRow stay in
 // lockstep.
 const noteCols = `id, guid, title, description, body, tags, is_private, is_flagged,
-	created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at`
+	created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at, version`
 
 // scanner is satisfied by both *shimRow and *shimRows.
 type scanner interface {
@@ -59,6 +66,7 @@ func scanNoteRow(s scanner, n *Note) error {
 		&n.ID, &n.GUID, &n.Title, &n.Description, &n.Body, &n.Tags,
 		&n.IsPrivate, &n.IsFlagged, &n.CreatedBy, &n.UpdatedBy,
 		&n.CreatedAt, &n.UpdatedAt, &n.AuthoredAt, &n.SyncedAt, &n.DeletedAt,
+		&n.Version,
 	)
 }
 
@@ -74,6 +82,18 @@ type NoteInput struct {
 	EncryptionIV *string `json:"encryption_iv,omitempty"` // Deprecated: ignored (whole-DB encryption)
 	CreatedBy    *string `json:"created_by,omitempty"`
 	UpdatedBy    *string `json:"updated_by,omitempty"`
+
+	// ExpectedVersion is the note version the editor loaded. When non-zero,
+	// UpdateNote refuses the write if the stored version has moved on —
+	// somebody else saved in the meantime — and returns ErrStaleWrite.
+	//
+	// Zero means "do not check", and that is the default on purpose. Three
+	// classes of writer legitimately have no version to name: the Markdown
+	// importer and other bulk paths, sync apply (which resolves conflicts by
+	// its own rules, not by refusing them), and any older client that predates
+	// this field. Making the guard opt-in keeps those working unchanged while
+	// every interactive editor — the TUI form, the web form — opts in.
+	ExpectedVersion int64 `json:"expected_version,omitempty"`
 }
 
 // NoteOutput provides a JSON-friendly representation of a Note.
@@ -94,6 +114,7 @@ type NoteOutput struct {
 	AuthoredAt   *string `json:"authored_at,omitempty"`
 	SyncedAt     *string `json:"synced_at,omitempty"`
 	DeletedAt    *string `json:"deleted_at,omitempty"`
+	Version      int64   `json:"version"`
 }
 
 // ToOutput converts a Note to NoteOutput for JSON serialization.
@@ -106,6 +127,7 @@ func (n *Note) ToOutput() NoteOutput {
 		IsFlagged: n.IsFlagged,
 		CreatedAt: n.CreatedAt.Format(time.RFC3339),
 		UpdatedAt: n.UpdatedAt.Format(time.RFC3339),
+		Version:   n.Version,
 	}
 
 	if n.Description.Valid {
@@ -157,9 +179,13 @@ func CreateNote(input NoteInput, userGUID string) (*Note, error) {
 	// id is drawn via nextval() in the INSERT — bytdb rejects DEFAULT
 	// nextval(...). authored_at/created_at/updated_at take their column
 	// defaults (CURRENT_TIMESTAMP).
+	// version starts at 1 explicitly rather than leaning on the column
+	// DEFAULT, so a note's counter is set by the same statement that creates
+	// it and does not depend on which schema generation the database was
+	// built under.
 	query := `
-		INSERT INTO notes (id, guid, title, description, body, tags, is_private, is_flagged, created_by, updated_by)
-		VALUES (nextval('notes_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO notes (id, guid, title, description, body, tags, is_private, is_flagged, created_by, updated_by, version)
+		VALUES (nextval('notes_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
 		RETURNING ` + noteCols
 
 	note := &Note{}
@@ -205,8 +231,8 @@ func CreateNoteWithTimestamps(input NoteInput, userGUID string,
 
 	query := `
 		INSERT INTO notes (id, guid, title, description, body, tags, is_private, is_flagged,
-		                   created_by, updated_by, created_at, updated_at, authored_at)
-		VALUES (nextval('notes_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                   created_by, updated_by, created_at, updated_at, authored_at, version)
+		VALUES (nextval('notes_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
 		RETURNING ` + noteCols
 
 	note := &Note{}
@@ -331,10 +357,57 @@ func paginate(notes []Note, limit, offset int) []Note {
 	return notes
 }
 
+// ErrStaleWrite reports that an update was built on a note that has since
+// changed: the caller named an ExpectedVersion and the stored version had
+// already moved past it.
+//
+// It is a distinct error rather than a nil return because the two mean
+// opposite things to a UI. A nil note is "there is nothing here to edit" and
+// ends in a message. A stale write is "your text is still good, but so is
+// somebody else's" — the one case where the right answer is to keep the
+// user's work on screen and let them choose. Callers reach the loser's copy
+// through StaleWriteError.Current.
+var ErrStaleWrite = serr.New("note changed since it was loaded")
+
+// StaleWriteError carries the note as it now stands, so a caller that lost a
+// race can show what it lost to without a second round trip. Errors.Is
+// against ErrStaleWrite identifies it; the API layer turns it into a 409.
+type StaleWriteError struct {
+	// Current is the stored note at the moment the write was refused.
+	Current *Note
+	// ExpectedVersion is the version the writer thought it was updating.
+	ExpectedVersion int64
+}
+
+func (e *StaleWriteError) Error() string {
+	var have int64
+	if e.Current != nil {
+		have = e.Current.Version
+	}
+	return "note changed since it was loaded (expected version " +
+		strconv.FormatInt(e.ExpectedVersion, 10) + ", stored version " +
+		strconv.FormatInt(have, 10) + ")"
+}
+
+// Unwrap makes errors.Is(err, ErrStaleWrite) true for this type, so callers
+// can test the class without type-asserting when they do not need the note.
+func (e *StaleWriteError) Unwrap() error { return ErrStaleWrite }
+
 // UpdateNote modifies an existing note owned by userGUID. When the note's
 // privacy flips it must move between the two databases (the note keeps its
 // id); otherwise it is updated in place. Returns the updated note, or nil
 // if not found.
+//
+// Concurrency: when input.ExpectedVersion is non-zero the write is guarded —
+// it applies only if the stored version still matches, and otherwise returns
+// a *StaleWriteError without touching the row. This is the layer that makes a
+// lost update impossible rather than merely unlikely: the note lock (lock.go)
+// keeps two editors from starting on the same note, but a lock can expire, be
+// stolen, or never be taken by a client that does not speak the protocol, and
+// none of those may be allowed to end in one person's text vanishing.
+//
+//	lock (lock.go) ── keeps the second editor from starting  ── advisory-ish, TTL'd
+//	version guard  ── keeps the second WRITE from landing    ── absolute
 func UpdateNote(id int64, input NoteInput, userGUID string) (*Note, error) {
 	existing, err := GetNoteByID(id, userGUID)
 	if err != nil {
@@ -342,6 +415,14 @@ func UpdateNote(id int64, input NoteInput, userGUID string) (*Note, error) {
 	}
 	if existing == nil {
 		return nil, nil // Not found or not owned by user
+	}
+
+	// The version check happens here, before any write, and is repeated inside
+	// the in-place UPDATE's WHERE clause. Checking twice is not redundant: this
+	// one produces the good error (it still has `existing` to hand back), and
+	// the one in the WHERE closes the window between this read and that write.
+	if input.ExpectedVersion != 0 && existing.Version != input.ExpectedVersion {
+		return nil, &StaleWriteError{Current: existing, ExpectedVersion: input.ExpectedVersion}
 	}
 
 	srcEngine := noteEngine(existing.IsPrivate)
@@ -354,13 +435,14 @@ func UpdateNote(id int64, input NoteInput, userGUID string) (*Note, error) {
 	bitmask := computeChangeBitmask(existing, input)
 
 	if srcEngine == dstEngine {
-		updateQuery := `
-			UPDATE notes
-			SET title = ?, description = ?, body = ?, tags = ?, is_private = ?, is_flagged = ?,
-			    updated_by = ?, updated_at = CURRENT_TIMESTAMP, authored_at = CURRENT_TIMESTAMP
-			WHERE id = ? AND created_by = ? AND deleted_at IS NULL`
-
-		result, err := dstEngine.Exec(updateQuery,
+		// version = version + 1 on every in-place update, and the guard rides in
+		// the WHERE clause. Building the version predicate into the statement
+		// rather than trusting the check above is what makes this atomic: bytdb
+		// serializes writers per engine, so a concurrent update either lands
+		// before this one (and this WHERE finds nothing) or after (and its own
+		// WHERE finds nothing). There is no interleaving in which both apply.
+		versionPred := ""
+		args := []any{
 			input.Title,
 			toNullString(input.Description),
 			toNullString(input.Body),
@@ -370,11 +452,34 @@ func UpdateNote(id int64, input NoteInput, userGUID string) (*Note, error) {
 			updatedBy,
 			id,
 			userGUID,
-		)
+		}
+		if input.ExpectedVersion != 0 {
+			versionPred = " AND version = ?"
+			args = append(args, input.ExpectedVersion)
+		}
+
+		updateQuery := `
+			UPDATE notes
+			SET title = ?, description = ?, body = ?, tags = ?, is_private = ?, is_flagged = ?,
+			    updated_by = ?, updated_at = CURRENT_TIMESTAMP, authored_at = CURRENT_TIMESTAMP,
+			    version = version + 1
+			WHERE id = ? AND created_by = ? AND deleted_at IS NULL` + versionPred
+
+		result, err := dstEngine.Exec(updateQuery, args...)
 		if err != nil {
 			return nil, err
 		}
 		if n, _ := result.RowsAffected(); n == 0 {
+			// Zero rows with a guard in play means the race was lost in the
+			// window between the read above and this write — rare, but the whole
+			// reason the predicate is here. Re-read to report what won; if the
+			// note is simply gone, fall back to the not-found answer.
+			if input.ExpectedVersion != 0 {
+				current, rerr := GetNoteByID(id, userGUID)
+				if rerr == nil && current != nil {
+					return nil, &StaleWriteError{Current: current, ExpectedVersion: input.ExpectedVersion}
+				}
+			}
 			return nil, nil
 		}
 	} else {
@@ -408,10 +513,14 @@ func UpdateNote(id int64, input NoteInput, userGUID string) (*Note, error) {
 func moveNoteBetweenEngines(src, dst *dbEngine, existing *Note, input NoteInput, updatedBy sql.NullString) error {
 	now := time.Now().UTC()
 
+	// The version follows the note across the move and advances by one, exactly
+	// as an in-place update would. A privacy flip is an edit like any other, and
+	// an editor holding the pre-flip version must not be able to save over it
+	// just because the row changed which file it lives in.
 	insertQuery := `
 		INSERT INTO notes (id, guid, title, description, body, tags, is_private, is_flagged,
-		                   created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		                   created_by, updated_by, created_at, updated_at, authored_at, synced_at, deleted_at, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := dst.Exec(insertQuery,
 		existing.ID,
@@ -429,6 +538,7 @@ func moveNoteBetweenEngines(src, dst *dbEngine, existing *Note, input NoteInput,
 		now,
 		existing.SyncedAt,
 		existing.DeletedAt,
+		existing.Version+1,
 	)
 	if err != nil {
 		return serr.Wrap(err, "failed to insert note into destination database")
@@ -500,8 +610,11 @@ func DeleteNote(id int64, userGUID string) (bool, error) {
 	}
 	en := noteEngine(existing.IsPrivate)
 
+	// The version advances on delete too. A soft delete is a change to the note
+	// like any other, and an editor that has the note open must not be able to
+	// resurrect it by saving a version that predates the deletion.
 	result, err := en.Exec(`
-		UPDATE notes SET deleted_at = CURRENT_TIMESTAMP
+		UPDATE notes SET deleted_at = CURRENT_TIMESTAMP, version = version + 1
 		WHERE id = ? AND created_by = ? AND deleted_at IS NULL`, id, userGUID)
 	if err != nil {
 		return false, err
@@ -574,8 +687,13 @@ func ToggleNoteFlag(id int64, userGUID string) (*Note, error) {
 	}
 	en := noteEngine(existing.IsPrivate)
 
+	// Flagging bumps the version, which means an open edit form goes stale when
+	// someone flags the note underneath it. That is the correct trade and not
+	// an oversight: the form carries is_flagged through its save unchanged (it
+	// has no flag control of its own), so a save that ignored the flag change
+	// would silently revert it. Better to stop and let the editor merge.
 	result, err := en.Exec(`
-		UPDATE notes SET is_flagged = NOT is_flagged
+		UPDATE notes SET is_flagged = NOT is_flagged, version = version + 1
 		WHERE id = ? AND created_by = ? AND deleted_at IS NULL`, id, userGUID)
 	if err != nil {
 		return nil, err

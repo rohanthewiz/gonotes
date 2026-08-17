@@ -62,13 +62,23 @@ func setupRoutes(s *rweb.Server) {
 	// This allows handlers to return proper 401 errors with JSON responses
 
 	// Notes CRUD endpoints following RESTful conventions
-	s.Post("/api/v1/notes", api.CreateNote)        // Create a new note
-	s.Get("/api/v1/notes", api.ListNotes)          // List all notes (with pagination)
-	s.Get("/api/v1/notes/search", api.SearchNotes) // Search notes by title (for note linking autocomplete)
-	s.Get("/api/v1/notes/:id", api.GetNote)        // Get a single note by ID
-	s.Put("/api/v1/notes/:id", api.UpdateNote)     // Update a note by ID
-	s.Delete("/api/v1/notes/:id", api.DeleteNote)  // Soft delete a note by ID
+	s.Post("/api/v1/notes", api.CreateNote)             // Create a new note
+	s.Get("/api/v1/notes", api.ListNotes)               // List all notes (with pagination)
+	s.Get("/api/v1/notes/search", api.SearchNotes)      // Search notes by title (for note linking autocomplete)
+	s.Get("/api/v1/notes/:id", api.GetNote)             // Get a single note by ID
+	s.Put("/api/v1/notes/:id", api.UpdateNote)          // Update a note by ID
+	s.Delete("/api/v1/notes/:id", api.DeleteNote)       // Soft delete a note by ID
 	s.Put("/api/v1/notes/:id/flag", api.ToggleNoteFlag) // Toggle flag on a note
+
+	// Note locks — the mutual-exclusion protocol between editing sessions.
+	// One note's lease is acquired, renewed, and released on the same path
+	// with three different verbs; the collection read is separate because a
+	// list screen wants every lease in one call. See web/api/locks.go.
+	s.Post("/api/v1/notes/:id/lock", api.AcquireNoteLock)   // Claim a note for editing (?steal=true to force)
+	s.Put("/api/v1/notes/:id/lock", api.RenewNoteLock)      // Heartbeat: extend the lease
+	s.Delete("/api/v1/notes/:id/lock", api.ReleaseNoteLock) // Give the note back
+	s.Get("/api/v1/notes/:id/lock", api.GetNoteLock)        // Who holds this note (404 = nobody)
+	s.Get("/api/v1/note-locks", api.ListNoteLocks)          // Bulk: every live lease, for list badges
 
 	// Categories CRUD endpoints following RESTful conventions
 	s.Post("/api/v1/categories", api.CreateCategory)       // Create a new category
@@ -88,9 +98,9 @@ func setupRoutes(s *rweb.Server) {
 	// =========================================
 	// Admin endpoints — require admin role
 	// =========================================
-	s.Post("/api/v1/admin/invites", api.CreateInviteToken)              // Create invite token
-	s.Get("/api/v1/admin/invites", api.ListInviteTokens)                // List invite tokens
-	s.Post("/api/v1/admin/export-spoke-config", api.ExportSpokeConfig)  // Export spoke config file
+	s.Post("/api/v1/admin/invites", api.CreateInviteToken)             // Create invite token
+	s.Get("/api/v1/admin/invites", api.ListInviteTokens)               // List invite tokens
+	s.Post("/api/v1/admin/export-spoke-config", api.ExportSpokeConfig) // Export spoke config file
 
 	// =========================================
 	// Spoke setup endpoints — no auth (first-run)

@@ -235,18 +235,37 @@ func TestMetaChordOpensTheFilter(t *testing.T) {
 
 // TestMetaChordOpensTheForm covers the other command-mode shape: a twin that is
 // a bare letter our own keymap matches.
+//
+// The observable is the LOCK request, not the form. Editing now claims the note
+// before opening it, so the first thing ⌘E produces is an acquire; the form is
+// pushed from the reply. That indirection is exactly what this test has to
+// tolerate — it is about the chord reaching keys.Edit, not about what keys.Edit
+// does once it gets there — so the second half drives the reply through and
+// checks the form still arrives.
 func TestMetaChordOpensTheForm(t *testing.T) {
 	browse := fixtureBrowse(t, 80, 24)
 	m := appWith(browse.sess, browse)
 
 	_, cmd := m.Update(superKey('e'))
 	if cmd == nil {
-		t.Fatal("⌘E produced no command; the form was not pushed")
+		t.Fatal("⌘E produced no command; the edit path was never reached")
 	}
-	msg := cmd()
-	push, ok := msg.(pushMsg)
+	acquired, ok := cmd().(lockAcquiredMsg)
 	if !ok {
-		t.Fatalf("⌘E produced %T, want a pushMsg", msg)
+		t.Fatalf("⌘E produced %T, want a lockAcquiredMsg", cmd())
+	}
+	if acquired.err != nil || acquired.blockedBy != nil {
+		t.Fatalf("the lock on an unheld note was refused: err=%v blocked=%v",
+			acquired.err, acquired.blockedBy)
+	}
+
+	_, cmd = m.Update(acquired)
+	if cmd == nil {
+		t.Fatal("a granted lock pushed nothing; the form never opened")
+	}
+	push, ok := cmd().(pushMsg)
+	if !ok {
+		t.Fatalf("a granted lock produced %T, want a pushMsg", cmd())
 	}
 	if _, ok := push.s.(*formScreen); !ok {
 		t.Fatalf("⌘E pushed %T, want *formScreen", push.s)

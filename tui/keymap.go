@@ -83,6 +83,21 @@ type keyMap struct {
 	SaveExit    key.Binding
 	DiscardExit key.Binding
 	CancelExit  key.Binding
+
+	// ---- Locked-note dialog -----------------------------------------------
+	// Shown when another session already has the note open. Like the unsaved
+	// dialog, this is a fork rather than a yes/no, so it gets its own letters
+	// instead of reusing Yes/No.
+	ReadOnly key.Binding
+	Steal    key.Binding
+	JumpPane key.Binding
+	// Retake re-claims a lease that was lost or stolen while the form stayed
+	// open. It lives on the form, not this dialog — see the lock banner.
+	Retake key.Binding
+	// Reload discards the form's text in favour of the version that won a
+	// stale-write conflict. Its partner Overwrite forces the save through.
+	Reload    key.Binding
+	Overwrite key.Binding
 }
 
 // keys is the active keymap. A package var rather than a field on session
@@ -244,6 +259,47 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("esc", "c"),
 			key.WithHelp("esc", "keep editing"),
 		),
+
+		// "r" for read — the safe answer, and the one enter is bound to for the
+		// same reason it is bound to "save & exit" on the unsaved dialog: a
+		// dialog the user did not ask for gets dismissed on reflex, so the
+		// reflex key must be the one that takes nothing from anyone.
+		ReadOnly: key.NewBinding(
+			key.WithKeys("r", "R", "enter"),
+			key.WithHelp("r/enter", "open read-only"),
+		),
+		// "t" for take. Deliberately NOT "s" (which reads as save) and not "y"
+		// — there is no question here phrased so that "yes" answers it, and a
+		// letter that means "the destructive one" on other dialogs should not
+		// mean it on this one by accident.
+		Steal: key.NewBinding(
+			key.WithKeys("t", "T"),
+			key.WithHelp("t", "take over"),
+		),
+		JumpPane: key.NewBinding(
+			key.WithKeys("g", "G"),
+			key.WithHelp("g", "go to their pane"),
+		),
+
+		// ctrl+l, on the form, where every bare letter is a character the user
+		// is trying to type into a field. "l" for lock.
+		Retake: key.NewBinding(
+			key.WithKeys("ctrl+l"),
+			key.WithHelp("ctrl+l", "retake lock"),
+		),
+
+		// The stale-write fork. Both are destructive in opposite directions —
+		// one drops your text, the other drops theirs — so neither gets enter,
+		// and esc means "leave the form as it is and decide later", which is
+		// always available and never loses anything.
+		Reload: key.NewBinding(
+			key.WithKeys("l", "L"),
+			key.WithHelp("l", "load theirs (drops your edits)"),
+		),
+		Overwrite: key.NewBinding(
+			key.WithKeys("o", "O"),
+			key.WithHelp("o", "overwrite theirs"),
+		),
 	}
 }
 
@@ -289,4 +345,17 @@ func (k keyMap) promptHelp() []key.Binding {
 
 func (k keyMap) unsavedHelp() []key.Binding {
 	return []key.Binding{k.SaveExit, k.DiscardExit, k.CancelExit}
+}
+
+// lockedHelp is the contention dialog's answer set. JumpPane is absent because
+// it is conditional — it appears only at Tier 1 with a holder that named its
+// pane, so lockedScreen.View appends it itself rather than advertising a key
+// that would do nothing outside cats.
+func (k keyMap) lockedHelp() []key.Binding {
+	return []key.Binding{k.ReadOnly, k.Steal, k.Back}
+}
+
+// staleHelp is the fork a save loses on.
+func (k keyMap) staleHelp() []key.Binding {
+	return []key.Binding{k.Reload, k.Overwrite, k.CancelExit}
 }

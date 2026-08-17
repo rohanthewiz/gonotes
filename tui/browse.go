@@ -57,6 +57,12 @@ type browseScreen struct {
 
 	// clicks turns two clicks on one row into "open that note". See mouse.go.
 	clicks clickTracker
+
+	// locks is who is editing what right now, keyed by note id, refreshed
+	// alongside the notes. It drives the ✎ badge and nothing else — pressing
+	// "e" always asks the server rather than trusting this map, because it is a
+	// snapshot and the answer that matters is the one at the moment of asking.
+	locks map[int64]models.NoteLock
 }
 
 // widePaneMin is the terminal width at which the preview pane appears. Below
@@ -70,7 +76,16 @@ const widePaneMin = 100
 const listWidthFraction = 0.4
 
 // noteItem adapts a models.Note to the list.Item interface.
-type noteItem struct{ note models.Note }
+//
+// heldBy is the label of the session editing this note right now, or "" — the
+// list's one piece of state that is not the note itself. It rides on the item
+// rather than being looked up at render time because Title() is called once per
+// visible row per frame, and a map lookup per row per frame for a badge that
+// changes every few minutes is work spent for nothing.
+type noteItem struct {
+	note   models.Note
+	heldBy string
+}
 
 func (i noteItem) Title() string {
 	var prefix strings.Builder
@@ -79,6 +94,12 @@ func (i noteItem) Title() string {
 	}
 	if i.note.IsPrivate {
 		prefix.WriteString(privateStyle.Render("🔒 "))
+	}
+	// A pencil, not a padlock: 🔒 already means "private" on this row and would
+	// say two different things in the same column. The badge answers "can I
+	// edit this right now", which is a different question from "is this secret".
+	if i.heldBy != "" {
+		prefix.WriteString(errorTextStyle.Render("✎ "))
 	}
 	return prefix.String() + i.note.Title
 }
@@ -339,7 +360,47 @@ func (s *browseScreen) takingText() bool {
 
 // refresh reloads the list honoring the active category filter. Also called
 // by the root when a pushed screen (form/detail/confirm) pops with changes.
+// refresh reloads the notes AND the lock badges. The two travel together
+// because a stale badge is worse than no badge: "nobody is editing this" is a
+// claim, and one held over from a minute ago is a claim that walks the user
+// into a contention dialog they were told not to expect.
 func (s *browseScreen) refresh() tea.Cmd {
+	return tea.Batch(s.reloadNotes(), loadLocksCmd(s.sess.store, s.sess.user.GUID))
+}
+
+// heldBy names the session editing a note, or "" when nobody is.
+//
+// This session's OWN lease reads as unheld. A form that is open right now holds
+// a lock on the note behind it, and badging that row would tell the user
+// somebody is editing a note they are editing themselves.
+func (s *browseScreen) heldBy(noteID int64) string {
+	l, ok := s.locks[noteID]
+	if !ok || l.Holder.SessionID == sessionIdentity().SessionID {
+		return ""
+	}
+	return holderLabelOf(&l)
+}
+
+// applyLockBadges re-stamps the badge on every row without reloading the notes.
+// Locks change on their own schedule — somebody else opens a note, somebody
+// else saves — so the badges have to be able to move independently of the list
+// they sit on.
+func (s *browseScreen) applyLockBadges() tea.Cmd {
+	items := s.list.Items()
+	updated := make([]list.Item, 0, len(items))
+	for _, it := range items {
+		ni, ok := it.(noteItem)
+		if !ok {
+			updated = append(updated, it)
+			continue
+		}
+		ni.heldBy = s.heldBy(ni.note.ID)
+		updated = append(updated, ni)
+	}
+	return s.list.SetItems(updated)
+}
+
+func (s *browseScreen) reloadNotes() tea.Cmd {
 	if s.catFilter != nil {
 		if len(s.subFilter) > 0 {
 			// The subcategory filter is name-keyed rather than id-keyed; see
@@ -372,10 +433,37 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		}
 		items := make([]list.Item, 0, len(msg.notes))
 		for _, n := range msg.notes {
-			items = append(items, noteItem{note: n})
+			items = append(items, noteItem{note: n, heldBy: s.heldBy(n.ID)})
 		}
 		s.list.Title = s.title()
 		return s, s.list.SetItems(items)
+
+	case locksLoadedMsg:
+		// A failure here is deliberately silent. The badge is a convenience;
+		// the lock itself is enforced at acquire time and again at write time,
+		// so a missing badge costs the user one extra dialog and nothing else.
+		// A red status line for it would train them to ignore red status lines.
+		if msg.err != nil {
+			return s, nil
+		}
+		s.locks = msg.locks
+		return s, s.applyLockBadges()
+
+	case lockAcquiredMsg:
+		// The reply to pressing "e". Three outcomes, and only one of them opens
+		// a form — which is the entire point of asking before opening.
+		switch {
+		case msg.err != nil:
+			return s, statusErr(msg.err, "Could not open for editing")
+		case msg.blockedBy != nil:
+			// Read-only from here means the ordinary detail view: it shows the
+			// whole note and has never been able to write.
+			note := *msg.note
+			return s, push(newLockedScreen(s.sess, msg.note, msg.blockedBy,
+				func() tea.Cmd { return push(newDetailScreen(s.sess, note)) }))
+		default:
+			return s, push(newFormScreen(s.sess, msg.note))
+		}
 
 	case categoryPickedMsg:
 		s.catFilter = msg.cat
@@ -478,7 +566,12 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 
 		case key.Matches(msg, keys.Edit):
 			if n := s.selectedNote(); n != nil {
-				return s, push(newFormScreen(s.sess, n))
+				// Claim the note BEFORE the form opens, not on save. Discovering
+				// contention at save time would mean the user typed for ten
+				// minutes into a form that was never going to be allowed to
+				// write — the exact failure this whole mechanism exists to
+				// prevent. The form is pushed from the reply.
+				return s, acquireLockCmd(s.sess.store, n, s.sess.user.GUID, false)
 			}
 
 		case key.Matches(msg, keys.Flag):

@@ -35,8 +35,13 @@ func scanCategory(s scanner, c *Category) error {
 }
 
 // noteColsN is the notes projection with an `n.` alias, for JOIN queries.
+//
+// It must stay column-for-column identical to noteCols in note.go — both feed
+// the same scanNoteRow, so a column added to one and not the other produces a
+// scan whose destinations outnumber its columns, at runtime, on whichever
+// screen happens to use the JOIN.
 const noteColsN = `n.id, n.guid, n.title, n.description, n.body, n.tags, n.is_private, n.is_flagged,
-	n.created_by, n.updated_by, n.created_at, n.updated_at, n.authored_at, n.synced_at, n.deleted_at`
+	n.created_by, n.updated_by, n.created_at, n.updated_at, n.authored_at, n.synced_at, n.deleted_at, n.version`
 
 // Category represents a category that can be assigned to notes. GUID
 // provides cross-machine identity for peer-to-peer sync.
@@ -714,10 +719,20 @@ func GetNotesByCategoryAndSubcategories(categoryName string, subcategories []str
 				note     Note
 				subsJSON sql.NullString
 			)
+			// This is the ONE note scan that cannot go through scanNoteRow: the
+			// projection carries an extra trailing column (nc.subcategories),
+			// and the row cursor is positional, so the note's fields and that
+			// column have to be read in a single Scan call.
+			//
+			// That makes it the one place where a column added to noteColsN has
+			// to be mirrored BY HAND, in order, before subsJSON. Getting it
+			// wrong does not fail to compile — it fails at runtime, on this
+			// screen only, with a scan-type error.
 			if err := rows.Scan(
 				&note.ID, &note.GUID, &note.Title, &note.Description, &note.Body, &note.Tags,
 				&note.IsPrivate, &note.IsFlagged, &note.CreatedBy, &note.UpdatedBy,
 				&note.CreatedAt, &note.UpdatedAt, &note.AuthoredAt, &note.SyncedAt, &note.DeletedAt,
+				&note.Version,
 				&subsJSON,
 			); err != nil {
 				return nil, err

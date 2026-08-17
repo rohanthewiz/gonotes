@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -312,6 +313,15 @@ func UpdateNote(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusBadRequest, "invalid note id")
 	}
 
+	// The lock gate, before the body is even decoded: a write into a note
+	// another session has open is refused on the strength of one map lookup,
+	// and nothing downstream needs to know locks exist. An unlocked note passes
+	// straight through — see models.AuthorizeNoteWrite for why the lock is a
+	// protocol between participating sessions rather than a permission check.
+	if errResp, ok := authorizeNoteWrite(ctx, id); !ok {
+		return errResp
+	}
+
 	var input models.NoteInput
 
 	// Check for msgpack body encoding mode via header
@@ -365,6 +375,17 @@ func UpdateNote(ctx rweb.Context) error {
 	)
 
 	if err != nil {
+		// The version guard fired: the note moved between this editor's load and
+		// its save. Distinct from every other error here in that nothing went
+		// wrong — two writers were both acting in good faith — so it gets a 409
+		// carrying the winning note rather than a 500, and the client is expected
+		// to put the choice in front of its user.
+		var stale *models.StaleWriteError
+		if errors.As(err, &stale) {
+			logger.Info("Note update refused as stale", "id", id,
+				"expected_version", stale.ExpectedVersion, "user", userGUID)
+			return writeStaleConflict(ctx, stale)
+		}
 		if note != nil {
 			// Disk write succeeded, cache failed - log warning but return success
 			logger.LogErr(err, "note updated but cache update failed", "id", note.ID)
@@ -451,6 +472,13 @@ func ToggleNoteFlag(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusBadRequest, "invalid note id")
 	}
 
+	// Flagging respects the lock too. It is a small write, but it bumps the
+	// note's version (see models.ToggleNoteFlag), so letting it through while
+	// somebody has the note open would knock their form stale from the outside.
+	if errResp, ok := authorizeNoteWrite(ctx, id); !ok {
+		return errResp
+	}
+
 	note, err := models.ToggleNoteFlag(id, userGUID)
 	if err != nil {
 		logger.LogErr(serr.Wrap(err, "failed to toggle note flag"), "database error")
@@ -479,6 +507,13 @@ func DeleteNote(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusBadRequest, "invalid note id")
 	}
 
+	// Deleting a note out from under an open editor is the most destructive
+	// thing the lock can prevent, so it is gated like any other write. The
+	// holder itself can still delete — it presents its own token.
+	if errResp, ok := authorizeNoteWrite(ctx, id); !ok {
+		return errResp
+	}
+
 	// DeleteNote verifies ownership via userGUID
 	deleted, err := models.DeleteNote(id, userGUID)
 	if err != nil {
@@ -488,6 +523,12 @@ func DeleteNote(ctx rweb.Context) error {
 	if !deleted {
 		return writeError(ctx, http.StatusNotFound, "note not found")
 	}
+
+	// The note is gone, so its lease is meaningless — drop it rather than let
+	// it sit in the registry blocking nothing until it expires. Only the
+	// holder's own token can do this, which is exactly right: a non-holder
+	// never got past the gate above.
+	models.ReleaseNoteLock(id, lockToken(ctx))
 
 	logger.Info("Note deleted", "id", id, "user", userGUID)
 	return writeSuccess(ctx, http.StatusOK, map[string]interface{}{"deleted": true, "id": id})

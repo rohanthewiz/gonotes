@@ -45,6 +45,11 @@ type httpStore struct {
 	token    string
 	username string // remembered from the last successful login, for silent re-auth
 	password string
+
+	// tokens are the note-lock bearer tokens this session holds, one per
+	// locked note. The store attaches the right one to each write by note id,
+	// which is why no Store method takes a lock token — see lockTokens.
+	tokens *lockTokens
 }
 
 // Environment variables, all shared with gn-clip.sh.
@@ -101,6 +106,7 @@ func NewHTTPStore(baseURL string) Store {
 		// work (a note save with a long body), not a liveness check.
 		hc:        &http.Client{Timeout: 15 * time.Second},
 		tokenFile: tokenFilePath(),
+		tokens:    newLockTokens(),
 	}
 }
 
@@ -195,6 +201,12 @@ type apiEnvelope struct {
 type apiError struct {
 	status  int
 	message string
+	// data is the envelope's data field on a FAILED response, kept raw. Only
+	// the 409s use it, and they need it: a conflict's whole value to the user
+	// is in the detail (who holds the lock, what the note looks like now), and
+	// discarding it here would leave the TUI with a sentence where it needs a
+	// decision. See asConflictError.
+	data json.RawMessage
 }
 
 func (e *apiError) Error() string {
@@ -211,6 +223,64 @@ func isNotFound(err error) bool {
 		return ae.status == http.StatusNotFound
 	}
 	return false
+}
+
+// ---- Conflicts -------------------------------------------------------------
+
+// conflictDetail is the shape web/api's 409 bodies share: a reason tag that
+// says which of the two conflict kinds this is, plus the fields that kind
+// carries. One struct rather than two, because the tag has to be read before
+// the rest can be interpreted and a single decode is simpler than a probe.
+type conflictDetail struct {
+	Reason          string             `json:"reason"` // "locked" | "lost" | "stale"
+	Lock            *models.NoteLock   `json:"lock,omitempty"`
+	ExpectedVersion int64              `json:"expected_version,omitempty"`
+	Current         *models.NoteOutput `json:"current,omitempty"`
+}
+
+// asConflictError converts a 409 from the API into the SAME typed error the
+// local store raises by calling the models layer directly.
+//
+// This function is the entire reason a screen can handle contention without
+// knowing which mode it is in. models.AcquireNoteLock returns a
+// *models.NoteLockedError; over HTTP that same condition arrives as a status
+// code and a JSON body, and if it stayed in that form every screen would need
+// two branches for every conflict. Translating once, here, is what makes
+// lockedBy and staleWrite (lock.go) work identically on both sides of the seam.
+//
+// Returns nil when err is not a conflict, so callers can write:
+//
+//	if c := asConflictError(err); c != nil { return nil, c }
+func asConflictError(err error) error {
+	var ae *apiError
+	if !asAPIError(err, &ae) || ae.status != http.StatusConflict {
+		return nil
+	}
+
+	var detail conflictDetail
+	if len(ae.data) > 0 {
+		// A body that will not decode is not worth failing over — the status
+		// code alone already establishes that this was a conflict, and the
+		// fallbacks below produce a usable (if vaguer) error.
+		_ = json.Unmarshal(ae.data, &detail)
+	}
+
+	switch detail.Reason {
+	case "stale":
+		stale := &models.StaleWriteError{ExpectedVersion: detail.ExpectedVersion}
+		if detail.Current != nil {
+			note := noteFromOutput(*detail.Current)
+			stale.Current = &note
+		}
+		return stale
+	default:
+		// "locked", "lost", and anything unrecognized. A conflict with no
+		// reason we know is still somebody else holding the note — that is what
+		// 409 means on these endpoints — and Lock may legitimately be nil (the
+		// holder released between the refusal and the report), which
+		// NoteLockedError already renders sensibly.
+		return &models.NoteLockedError{Lock: detail.Lock}
+	}
 }
 
 // asAPIError unwraps err looking for an *apiError. serr wraps errors, so a
@@ -239,7 +309,16 @@ func asAPIError(err error, target **apiError) bool {
 // once. If that fails the error propagates and the user sees it — there is no
 // retry loop, because a wrong password would otherwise be re-sent forever.
 func (s *httpStore) request(method, path string, body, out any) error {
-	err := s.requestOnce(method, path, body, out)
+	return s.requestH(method, path, body, out, nil)
+}
+
+// requestH is request with extra headers — today, only the lock token.
+//
+// A separate entry point rather than a variadic on request, so that the
+// hundred existing call sites keep reading as they did and the handful that
+// carry a lock are visibly the ones that do.
+func (s *httpStore) requestH(method, path string, body, out any, headers map[string]string) error {
+	err := s.requestOnce(method, path, body, out, headers)
 	var ae *apiError
 	if !asAPIError(err, &ae) || ae.status != http.StatusUnauthorized {
 		return err
@@ -250,10 +329,10 @@ func (s *httpStore) request(method, path string, body, out any) error {
 		// is the accurate description of what happened to the user's action.
 		return err
 	}
-	return s.requestOnce(method, path, body, out)
+	return s.requestOnce(method, path, body, out, headers)
 }
 
-func (s *httpStore) requestOnce(method, path string, body, out any) error {
+func (s *httpStore) requestOnce(method, path string, body, out any, headers map[string]string) error {
 	var rdr io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
@@ -268,6 +347,11 @@ func (s *httpStore) requestOnce(method, path string, body, out any) error {
 		return serr.Wrap(err, "failed to build request", "path", path)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		if v != "" {
+			req.Header.Set(k, v)
+		}
+	}
 
 	s.mu.Lock()
 	tok := s.token
@@ -294,7 +378,7 @@ func (s *httpStore) requestOnce(method, path string, body, out any) error {
 		return &apiError{status: resp.StatusCode, message: "unexpected response from " + s.baseURL + path}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || !env.Success {
-		return &apiError{status: resp.StatusCode, message: env.Error}
+		return &apiError{status: resp.StatusCode, message: env.Error, data: env.Data}
 	}
 	if out == nil || len(env.Data) == 0 {
 		return nil
@@ -324,7 +408,7 @@ type authResponse struct {
 func (s *httpStore) login(username, password string) (*models.User, error) {
 	var out authResponse
 	err := s.requestOnce(http.MethodPost, "/api/v1/auth/login",
-		map[string]string{"username": username, "password": password}, &out)
+		map[string]string{"username": username, "password": password}, &out, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -423,7 +507,7 @@ func (s *httpStore) ResumeSession() (*models.User, error) {
 		// requestOnce, not request: a 401 here means the cached token is stale,
 		// which is exactly what the credential fallback below handles. Going
 		// through the retry path would just duplicate it.
-		if err := s.requestOnce(http.MethodGet, "/api/v1/auth/me", nil, &out); err == nil {
+		if err := s.requestOnce(http.MethodGet, "/api/v1/auth/me", nil, &out, nil); err == nil {
 			return userFromOutput(out), nil
 		}
 
@@ -461,7 +545,7 @@ func (s *httpStore) CreateUser(username, password string) (*models.User, error) 
 	}
 
 	var out authResponse
-	if err := s.requestOnce(http.MethodPost, "/api/v1/auth/register", payload, &out); err != nil {
+	if err := s.requestOnce(http.MethodPost, "/api/v1/auth/register", payload, &out, nil); err != nil {
 		return nil, err
 	}
 
@@ -554,11 +638,39 @@ func (s *httpStore) CreateNote(input models.NoteInput, _ string) (*models.Note, 
 	return &note, nil
 }
 
+// lockHeaders returns the lock token header for a note, or nil when this
+// session holds no lease on it. nil is the right answer for an unlocked note:
+// the server only demands a token when somebody actually holds the note.
+func (s *httpStore) lockHeaders(noteID int64) map[string]string {
+	tok := s.tokens.get(noteID)
+	if tok == "" {
+		return nil
+	}
+	return map[string]string{lockHeaderName: tok}
+}
+
+// lockHeaderName mirrors api.LockHeaderName. Duplicated as a constant rather
+// than imported because the TUI must not depend on the web package — a TUI
+// built against a server it talks to only over HTTP has no business linking
+// that server's handlers.
+const lockHeaderName = "X-GoNotes-Lock"
+
+// UpdateNote carries two things the plain PUT does not: this session's lock
+// token, and (via input.ExpectedVersion, set by the caller) the version it
+// loaded. The first says "I am the session that claimed this note", the second
+// says "and it had not changed when I started". Either can independently
+// refuse the write with a 409, which arrives here as a typed error.
 func (s *httpStore) UpdateNote(id int64, input models.NoteInput, _ string) (*models.Note, error) {
 	var out models.NoteOutput
-	err := s.request(http.MethodPut, "/api/v1/notes/"+strconv.FormatInt(id, 10), input, &out)
+	err := s.requestH(http.MethodPut, "/api/v1/notes/"+strconv.FormatInt(id, 10),
+		input, &out, s.lockHeaders(id))
 	if isNotFound(err) {
 		return nil, nil
+	}
+	if conflict := asConflictError(err); conflict != nil {
+		// Deliberately NOT wrapped: the screens test this with errors.As, and
+		// the message a conflict carries is already the one to show.
+		return nil, conflict
 	}
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to update note")
@@ -568,27 +680,151 @@ func (s *httpStore) UpdateNote(id int64, input models.NoteInput, _ string) (*mod
 }
 
 func (s *httpStore) DeleteNote(id int64, _ string) (bool, error) {
-	err := s.request(http.MethodDelete, "/api/v1/notes/"+strconv.FormatInt(id, 10), nil, nil)
+	err := s.requestH(http.MethodDelete, "/api/v1/notes/"+strconv.FormatInt(id, 10),
+		nil, nil, s.lockHeaders(id))
 	if isNotFound(err) {
 		return false, nil
+	}
+	if conflict := asConflictError(err); conflict != nil {
+		return false, conflict
 	}
 	if err != nil {
 		return false, serr.Wrap(err, "failed to delete note")
 	}
+	// The server drops the lease on a successful delete; drop our side of the
+	// bookkeeping to match, so a stale token never rides along on a later id.
+	s.tokens.clear(id)
 	return true, nil
 }
 
 func (s *httpStore) ToggleNoteFlag(id int64, _ string) (*models.Note, error) {
 	var out models.NoteOutput
-	err := s.request(http.MethodPut, "/api/v1/notes/"+strconv.FormatInt(id, 10)+"/flag", nil, &out)
+	err := s.requestH(http.MethodPut, "/api/v1/notes/"+strconv.FormatInt(id, 10)+"/flag",
+		nil, &out, s.lockHeaders(id))
 	if isNotFound(err) {
 		return nil, nil
+	}
+	if conflict := asConflictError(err); conflict != nil {
+		return nil, conflict
 	}
 	if err != nil {
 		return nil, serr.Wrap(err, "failed to toggle flag")
 	}
 	note := noteFromOutput(out)
 	return &note, nil
+}
+
+// ---- Store: note locks -------------------------------------------------------
+
+// lockAcquireBody mirrors api.lockAcquireRequest.
+type lockAcquireBody struct {
+	SessionID  string `json:"session_id"`
+	Label      string `json:"label,omitempty"`
+	Host       string `json:"host,omitempty"`
+	PaneHandle string `json:"pane_handle,omitempty"`
+	Client     string `json:"client,omitempty"`
+}
+
+func (s *httpStore) AcquireNoteLock(noteID int64, _ string, holder models.LockHolder, steal bool) (*models.NoteLock, error) {
+	path := "/api/v1/notes/" + strconv.FormatInt(noteID, 10) + "/lock"
+	if steal {
+		path += "?steal=true"
+	}
+
+	var lock models.NoteLock
+	err := s.request(http.MethodPost, path, lockAcquireBody{
+		SessionID:  holder.SessionID,
+		Label:      holder.Label,
+		Host:       holder.Host,
+		PaneHandle: holder.PaneHandle,
+		Client:     holder.Client,
+	}, &lock)
+	if conflict := asConflictError(err); conflict != nil {
+		return nil, conflict
+	}
+	if err != nil {
+		return nil, serr.Wrap(err, "failed to lock note")
+	}
+
+	s.tokens.set(noteID, lock.Token)
+	return &lock, nil
+}
+
+func (s *httpStore) RenewNoteLock(noteID int64) (*models.NoteLock, error) {
+	tok := s.tokens.get(noteID)
+	if tok == "" {
+		// Nothing to renew, and asking would be a round trip guaranteed to fail.
+		// Report it as the loss it is — the caller's heartbeat should stop.
+		return nil, models.ErrLockNotHeld
+	}
+
+	var lock models.NoteLock
+	err := s.requestH(http.MethodPut, "/api/v1/notes/"+strconv.FormatInt(noteID, 10)+"/lock",
+		nil, &lock, map[string]string{lockHeaderName: tok})
+	if err != nil {
+		// Any failure to renew invalidates our token as far as this store is
+		// concerned. Keeping it would mean a later write presents a credential
+		// the registry has already forgotten — which the server would refuse
+		// anyway, but with a confusing message about somebody else's lock.
+		s.tokens.clear(noteID)
+		if conflict := asConflictError(err); conflict != nil {
+			return nil, models.ErrLockNotHeld
+		}
+		return nil, serr.Wrap(err, "failed to renew note lock")
+	}
+	return &lock, nil
+}
+
+// ReleaseNoteLock always reports success, matching the local store and the
+// API: by the time a client releases, the outcome it cared about has already
+// happened, and the lease expires on its own regardless.
+func (s *httpStore) ReleaseNoteLock(noteID int64) error {
+	tok := s.tokens.get(noteID)
+	s.tokens.clear(noteID)
+	if tok == "" {
+		return nil
+	}
+	_ = s.requestH(http.MethodDelete, "/api/v1/notes/"+strconv.FormatInt(noteID, 10)+"/lock",
+		nil, nil, map[string]string{lockHeaderName: tok})
+	return nil
+}
+
+// ReleaseAllNoteLocks tells the server about every lease this session still
+// holds, in one pass, on the way out.
+//
+// Sequential rather than concurrent: this runs during shutdown with the
+// terminal already handed back, the count is the number of notes one user had
+// open at once (one, in practice), and a goroutine fan-out here would trade
+// nothing for a race against process exit.
+func (s *httpStore) ReleaseAllNoteLocks() error {
+	for noteID, token := range s.tokens.drain() {
+		_ = s.requestH(http.MethodDelete, "/api/v1/notes/"+strconv.FormatInt(noteID, 10)+"/lock",
+			nil, nil, map[string]string{lockHeaderName: token})
+	}
+	return nil
+}
+
+// GetNoteLock reads the lease on a note. The API answers 404 for an unlocked
+// note, which becomes (nil, nil) here — the same "missing is not an error"
+// contract GetNoteByID follows.
+func (s *httpStore) GetNoteLock(noteID int64) (*models.NoteLock, error) {
+	var lock models.NoteLock
+	err := s.request(http.MethodGet, "/api/v1/notes/"+strconv.FormatInt(noteID, 10)+"/lock", nil, &lock)
+	if isNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, serr.Wrap(err, "failed to read note lock")
+	}
+	return &lock, nil
+}
+
+func (s *httpStore) ListNoteLocks(_ string) ([]models.NoteLock, error) {
+	var locks []models.NoteLock
+	if err := s.request(http.MethodGet, "/api/v1/note-locks", nil, &locks); err != nil {
+		return nil, serr.Wrap(err, "failed to list note locks")
+	}
+	return locks, nil
 }
 
 // ---- Store: categories -----------------------------------------------------
@@ -773,6 +1009,10 @@ func noteFromOutput(o models.NoteOutput) models.Note {
 		AuthoredAt:  nullTime(o.AuthoredAt),
 		SyncedAt:    nullTime(o.SyncedAt),
 		DeletedAt:   nullTime(o.DeletedAt),
+		// Carrying the version across the wire is what lets an HTTP-mode form
+		// participate in the optimistic-concurrency guard at all: it saves with
+		// the version it loaded, and a server that has moved on refuses.
+		Version: o.Version,
 	}
 }
 

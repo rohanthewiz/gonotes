@@ -163,6 +163,21 @@ func (s *detailScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		}
 		return s, nil
 
+	case lockAcquiredMsg:
+		switch {
+		case msg.err != nil:
+			return s, statusErr(msg.err, "Could not open for editing")
+		case msg.blockedBy != nil:
+			// "Open read-only" from here is a no-op beyond closing the dialog:
+			// this screen already IS the read-only view of the note. Pushing a
+			// second detail screen would stack two identical views and make esc
+			// take two presses to do what it looks like it does once.
+			return s, push(newLockedScreen(s.sess, msg.note, msg.blockedBy,
+				func() tea.Cmd { return nil }))
+		default:
+			return s, push(newFormScreen(s.sess, msg.note))
+		}
+
 	case noteDeletedMsg:
 		if msg.err != nil {
 			return s, statusErr(msg.err, "Delete failed")
@@ -176,7 +191,9 @@ func (s *detailScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			// Pop with refresh: a flag toggle here should show in the list.
 			return s, pop(true)
 		case key.Matches(msg, keys.Edit):
-			return s, push(newFormScreen(s.sess, &s.note))
+			// Claim first, open second — the same order browse uses. The form
+			// is pushed from the reply (see lockAcquiredMsg below).
+			return s, acquireLockCmd(s.sess.store, &s.note, s.sess.user.GUID, false)
 		case key.Matches(msg, keys.Flag):
 			return s, toggleFlagCmd(s.sess.store, s.note.ID, s.sess.user.GUID)
 		case key.Matches(msg, keys.Delete):

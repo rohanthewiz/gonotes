@@ -51,6 +51,65 @@ func (en *dbEngine) createSequence(name string, start int64) error {
 	return nil
 }
 
+// hasColumn reports whether a table already carries a column. bytdb keeps
+// the column list on the table descriptor, so this is an in-memory lookup
+// with no query behind it.
+//
+// A missing table answers false rather than erroring: the only caller is
+// ensureColumn, which runs after ensureTable, so "no table" cannot happen —
+// and if the ordering were ever broken, skipping the ALTER is the safe
+// direction (the CREATE will have included the column already).
+func (en *dbEngine) hasColumn(table, column string) bool {
+	desc := en.eng.Table(table)
+	if desc == nil {
+		return false
+	}
+	for _, c := range desc.Columns {
+		if c.Name == column {
+			return true
+		}
+	}
+	return false
+}
+
+// ensureColumn adds a column to an existing table once, then backfills it.
+//
+// This is the whole migration story for a table that predates a column.
+// ensureTable cannot help: it skips a table that already exists, so a column
+// added to its CREATE statement reaches new databases only. Every database
+// created before the column needs the ALTER.
+//
+// The backfill is not optional. bytdb stores rows tagged by column ID, so
+// rows written before the ALTER simply have no value for it and read back as
+// NULL — not as the column's DEFAULT, which the SQL layer applies at INSERT
+// time and cannot retroactively apply to rows already on disk. A NULL where
+// the code expects a number is the kind of difference that shows up as
+// `version = 1` matching nothing, so the rows are given the value the default
+// would have produced. backfillSQL runs on every startup but touches rows
+// only on the first (its WHERE finds none afterwards).
+func (en *dbEngine) ensureColumn(table, column, colType, backfillSQL string) error {
+	if en.hasColumn(table, column) {
+		// Still run the backfill: an ALTER that succeeded on a previous startup
+		// followed by a crash before the UPDATE would otherwise leave NULLs
+		// behind forever, and the UPDATE is free once they are gone.
+		if backfillSQL != "" {
+			if _, err := en.Exec(backfillSQL); err != nil {
+				return serr.Wrap(err, "failed to backfill column", "table", table, "column", column)
+			}
+		}
+		return nil
+	}
+	if _, err := en.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, colType)); err != nil {
+		return serr.Wrap(err, "failed to add column", "table", table, "column", column)
+	}
+	if backfillSQL != "" {
+		if _, err := en.Exec(backfillSQL); err != nil {
+			return serr.Wrap(err, "failed to backfill column", "table", table, "column", column)
+		}
+	}
+	return nil
+}
+
 // ensureTable creates a table (and its indexes) once. If the table
 // already exists it is left untouched — this is how schema creation stays
 // idempotent without CREATE TABLE IF NOT EXISTS.
@@ -92,8 +151,32 @@ func (en *dbEngine) createNoteSchema(offset int64) error {
 		updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		authored_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		synced_at   TIMESTAMP,
-		deleted_at  TIMESTAMP
+		deleted_at  TIMESTAMP,
+		version     BIGINT DEFAULT 1
 	)`); err != nil {
+		return err
+	}
+
+	// version is the note's optimistic-concurrency counter: every write that
+	// changes the note bumps it by one, and a writer that loaded version N can
+	// name N in its UPDATE to be told "someone got here first" instead of
+	// silently overwriting them. See UpdateNote and ErrStaleWrite.
+	//
+	// A counter rather than updated_at, deliberately. The timestamp is the
+	// obvious candidate and is wrong for the job in two ways that both bite in
+	// this system specifically: its resolution can round two writes inside the
+	// same tick into one value, and peer-to-peer sync means the writes being
+	// compared did not come from one clock. A counter has neither problem — it
+	// only ever has to be equal or not.
+	// The ALTER carries the DEFAULT as well as the backfill, and both are
+	// needed. The backfill fixes rows already on disk; the default covers any
+	// INSERT that forgets the column on a database that took this migration
+	// path. (Every INSERT in the models layer names version explicitly, so the
+	// default is a backstop for a future one that does not — a NULL version
+	// reads back as 0, which the guard treats as "unchecked", so a note could
+	// silently opt itself out of the protection this column exists to give.)
+	if err := en.ensureColumn("notes", "version", "BIGINT DEFAULT 1",
+		`UPDATE notes SET version = 1 WHERE version IS NULL`); err != nil {
 		return err
 	}
 

@@ -161,6 +161,20 @@ func Run(st Store, mode Mode) error {
 	cs.send = p.Send
 
 	_, err := p.Run()
+
+	// Give back every note this session still has claimed, before anything else
+	// about shutdown. A form releases its own lease on save and on esc, but the
+	// exits that bypass a form's key handling — q from the list with a form
+	// beneath it, ctrl+c, the program loop failing outright — would otherwise
+	// leave a note locked for the rest of models.LockTTL by a process that no
+	// longer exists. This is the one place all of those converge.
+	//
+	// Best-effort by design: a server that has gone away cannot be told, and
+	// the TTL is what covers that case. There is nothing useful to report to a
+	// user who has already left, so the error is dropped rather than logged
+	// over whatever the terminal is showing next.
+	_ = st.ReleaseAllNoteLocks()
+
 	cs.close()
 	if err != nil {
 		return serr.Wrap(err, "TUI terminated abnormally")

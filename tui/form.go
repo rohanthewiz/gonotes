@@ -50,6 +50,29 @@ type formScreen struct {
 	focus int // 0 title, 1 desc, 2 tags, 3 categories, 4 private toggle, 5 body
 	busy  bool
 
+	// ---- Lock state --------------------------------------------------------
+	//
+	// The form does not TAKE the lock — whoever pushed it did, which is why a
+	// blocked edit never reaches this screen at all (see lockedScreen). What
+	// the form owns is keeping the lease alive for as long as it is open, and
+	// telling the user the moment it stops being theirs.
+
+	// keeper renews the lease in the background. nil for a new note (nothing to
+	// lock yet) and after the lease is released or lost.
+	keeper *leaseKeeper
+
+	// lostTo is set when the lease is gone: whoever holds it now, or nil if
+	// nobody does. Non-nil lostTo OR lockLost true means the banner is up and a
+	// save will be refused until the lock is retaken.
+	lockLost bool
+	lostTo   *models.NoteLock
+
+	// overrideVersion carries a decision made on the stale-write dialog: save
+	// again, but against THIS version rather than the one the form loaded. Zero
+	// means the ordinary guarded save. It is cleared after one use, so an
+	// override never silently applies to a later save.
+	overrideVersion int64
+
 	// baseline is what the form held the last time its contents matched what is
 	// stored — at construction, and again after the async category load fills a
 	// field the user never touched. Everything since is unsaved work, and esc
@@ -167,6 +190,12 @@ func (s *formScreen) Init() tea.Cmd {
 	if s.editing != nil {
 		// Prefill the categories field with the note's current assignments.
 		cmds = append(cmds, loadNoteCategoriesCmd(s.sess.store, s.editing.ID, s.sess.user.GUID))
+
+		// Start the heartbeat. The lease was acquired by whoever pushed this
+		// screen — a form that opened at all is a form that holds the note —
+		// and from here the only job is keeping it, until save or esc.
+		s.keeper = startLeaseKeeper(s.sess.store, s.editing.ID)
+		cmds = append(cmds, s.keeper.watch())
 	}
 	return tea.Batch(cmds...)
 }
@@ -293,12 +322,66 @@ func (s *formScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		s.body.SetValue(strings.TrimRight(msg.body, "\n"))
 		return s, status("Body updated from editor — ctrl+s to save")
 
+	case lockLostMsg:
+		// The heartbeat stopped succeeding. Raise the banner NOW rather than at
+		// save time: the user is presumably still typing, and the difference
+		// between finding out here and finding out on ctrl+s is the difference
+		// between a decision and a nasty surprise.
+		if s.editing == nil || msg.noteID != s.editing.ID {
+			return s, nil
+		}
+		s.keeper = nil
+		s.lockLost, s.lostTo = true, msg.lock
+		return s, status("Lock lost — ctrl+l to retake before saving")
+
+	case lockAcquiredMsg:
+		// The answer to a retake (ctrl+l). Only a success clears the banner; a
+		// refusal leaves it up with the current holder's name refreshed, since
+		// nothing about the situation improved.
+		if s.editing == nil || msg.noteID != s.editing.ID {
+			return s, nil
+		}
+		s.busy = false
+		switch {
+		case msg.err != nil:
+			return s, statusErr(msg.err, "Could not retake the lock")
+		case msg.blockedBy != nil:
+			s.lostTo = msg.blockedBy
+			return s, status("Still held by " + holderLabelOf(msg.blockedBy))
+		}
+		s.lockLost, s.lostTo = false, nil
+		s.keeper = startLeaseKeeper(s.sess.store, s.editing.ID)
+		return s, tea.Batch(s.keeper.watch(), status("Lock retaken"))
+
 	case noteSavedMsg:
 		s.busy = false
 		if msg.err != nil {
+			// Two refusals are not failures and must not be reported as one.
+			//
+			// A LOCKED refusal means the lease moved while the form was open —
+			// the banner goes up and the text stays exactly where it is, because
+			// the user's next move (retake, or copy the text out) needs it.
+			if blocking, ok := lockedBy(msg.err); ok {
+				s.lockLost, s.lostTo = true, blocking
+				return s, status("Save refused — " + holderLabelOf(blocking) + " holds this note (ctrl+l to retake)")
+			}
+			// A STALE refusal means both writers were right, so it gets a dialog
+			// rather than a message: this is a decision, and the only person who
+			// can make it is looking at both versions.
+			if stale, ok := staleWrite(msg.err); ok {
+				return s, push(newStaleScreen(s.sess, stale, s.adoptTheirs, s.overwriteTheirs))
+			}
 			return s, statusErr(msg.err, "Save failed")
 		}
-		return s, tea.Sequence(pop(true), status("Saved \""+msg.note.Title+"\""))
+		// Saved: the lease has done its job, so give the note back rather than
+		// making the next session wait out the TTL for a note nobody has open.
+		noteID := s.editingID() // 0 for a create, which took no lease
+		s.releaseLease()
+		return s, tea.Sequence(
+			releaseLockCmd(s.sess.store, noteID),
+			pop(true),
+			status("Saved \""+msg.note.Title+"\""),
+		)
 
 	case tea.KeyPressMsg:
 		if s.busy {
@@ -308,6 +391,16 @@ func (s *formScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		switch {
 		case key.Matches(msg, keys.Save):
 			return s, s.save()
+
+		case key.Matches(msg, keys.Retake):
+			// Only meaningful while the banner is up. Off the banner it is a
+			// no-op rather than a second acquire, since a lease this session
+			// already holds needs nothing done to it.
+			if !s.lockLost || s.editing == nil {
+				return s, nil
+			}
+			s.busy = true
+			return s, acquireLockCmd(s.sess.store, s.editing, s.sess.user.GUID, true)
 
 		case key.Matches(msg, keys.Editor):
 			return s, openEditorCmd(s.sess.cats, s.body.Value(), s.title.Value())
@@ -373,11 +466,84 @@ func (s *formScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 //
 // pop(false) — no refresh. Nothing was written, so there is nothing behind this
 // screen that has gone stale.
+//
+// It also gives the lease back, which is the difference between a note that is
+// editable again the instant you press esc and one that stays locked for up to
+// models.LockTTL because a colleague changed their mind. Both arms release —
+// discarding work is still leaving.
 func (s *formScreen) abandon() tea.Cmd {
+	noteID := s.editingID()
+	s.releaseLease()
+
+	msg := "Edit canceled"
 	if s.dirty() {
-		return tea.Sequence(pop(false), status("Discarded unsaved changes"))
+		msg = "Discarded unsaved changes"
 	}
-	return tea.Sequence(pop(false), status("Edit canceled"))
+	return tea.Sequence(releaseLockCmd(s.sess.store, noteID), pop(false), status(msg))
+}
+
+// releaseLease stops the heartbeat and forgets the lock state. It is the local
+// half of letting go; releaseLockCmd is the half that tells the server, and the
+// two are always used together.
+//
+// Safe on a form that never held a lease (a new note), so no caller needs to
+// check first.
+func (s *formScreen) releaseLease() {
+	s.keeper.Stop()
+	s.keeper = nil
+	s.lockLost, s.lostTo = false, nil
+}
+
+// editingID is the note's id, or 0 for a new note — the value releaseLockCmd
+// and the lock commands read as "nothing to do".
+func (s *formScreen) editingID() int64 {
+	if s.editing == nil {
+		return 0
+	}
+	return s.editing.ID
+}
+
+// adoptTheirs replaces the form's contents with the note that won a stale-write
+// conflict: their text, their version. The user's edits are gone, which is why
+// this is never automatic and never the enter key.
+//
+// The baseline moves with the fields, so the form is immediately clean — what
+// is on screen now IS what is stored, and pressing esc should not stop to ask
+// about changes the user just chose to abandon.
+func (s *formScreen) adoptTheirs(current *models.Note) tea.Cmd {
+	if current == nil {
+		return status("Nothing to reload")
+	}
+	s.editing = current
+	s.title.SetValue(current.Title)
+	s.desc.SetValue(current.Description.String)
+	s.tags.SetValue(current.Tags.String)
+	s.body.SetValue(current.Body.String)
+	s.isPrivate = current.IsPrivate
+	s.baseline = s.values()
+	s.overrideVersion = 0
+	return status("Loaded the other session's version")
+}
+
+// overwriteTheirs re-runs the save against the version that beat it, which is
+// what makes the second attempt land. The user has seen the other version and
+// decided their own text should win.
+//
+// It re-reads the fields rather than replaying the earlier attempt, so anything
+// typed while the dialog was up is included — the alternative would silently
+// save a snapshot older than what is on screen.
+func (s *formScreen) overwriteTheirs(current *models.Note) tea.Cmd {
+	if current == nil {
+		return status("Nothing to overwrite")
+	}
+	// Adopt their version number ONLY — not their text. The guard is satisfied
+	// because the form now names the version it is overwriting, which is the
+	// honest description of what the user just asked for.
+	s.overrideVersion = current.Version
+	if s.editing != nil {
+		s.editing.Version = current.Version
+	}
+	return s.save()
 }
 
 // unsavedPrompt names the thing at risk. A new note has no title of its own to
@@ -425,6 +591,22 @@ func (s *formScreen) save() tea.Cmd {
 		// unchanged — the form intentionally has no flag control (flagging
 		// is a one-key action on the list/detail screens).
 		input.IsFlagged = s.editing.IsFlagged
+
+		// Name the version this edit was built on. This is the backstop the
+		// lock cannot be: a lease can expire, be stolen, or never have been
+		// taken by whatever else writes to these notes, and none of those may
+		// end in the user's text overwriting somebody else's without anyone
+		// noticing. If the stored version has moved, the save is refused and
+		// the stale dialog puts the choice where it belongs.
+		//
+		// overrideVersion is the one-shot exception, set by that dialog's
+		// "overwrite" arm. It is consumed here so it can never leak into a
+		// later save.
+		input.ExpectedVersion = s.editing.Version
+		if s.overrideVersion != 0 {
+			input.ExpectedVersion = s.overrideVersion
+			s.overrideVersion = 0
+		}
 	}
 
 	// Deliberately NOT reported to the cats host as a working span, unlike the
@@ -490,7 +672,27 @@ func (s *formScreen) chrome() (above, below string) {
 	} else {
 		below = renderHelp(keys.formHelp()...)
 	}
+
+	// The lock banner goes BELOW, next to the help line, rather than above with
+	// the heading. It is a warning about what the next ctrl+s will do, so it
+	// belongs where the eye goes when reaching for ctrl+s — and putting it above
+	// would reflow every field on screen the moment it appeared, moving the
+	// cursor's surroundings out from under someone mid-sentence.
+	if s.lockLost {
+		below = s.lockBanner() + "\n" + below
+	}
 	return b.String(), below
+}
+
+// lockBanner is the one line that says this form can no longer save.
+func (s *formScreen) lockBanner() string {
+	who := "another session"
+	if s.lostTo != nil {
+		who = holderLabelOf(s.lostTo)
+	}
+	h := keys.Retake.Help()
+	return errorTextStyle.Render("⚠ lock lost to "+who+" — your text is safe, but saving is blocked") +
+		helpStyle.Render("  "+h.Key+" "+h.Desc)
 }
 
 func (s *formScreen) View() string {
