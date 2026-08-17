@@ -1,38 +1,91 @@
 ---
 name: gonotes
-description: Work with the GoNotes app — capture notes (especially from the clipboard), query/export/import them, and navigate the codebase. Use whenever the task mentions gonotes, "save this as a note", "add a note from my clipboard", note capture, the notes DB, or the GoNotes web/TUI/sync layers.
+description: Work with the GoNotes app — capture notes (especially from the clipboard), query/export/import them, run the TUI inside a cats pane, and navigate the codebase. Use whenever the task mentions gonotes, "save this as a note", "add a note from my clipboard", note capture, the notes DB, note locks, the GoNotes web/TUI/sync layers, or running GoNotes as a cats plugin / cats-native client.
 ---
 
 # GoNotes
 
 GoNotes is a self-hosted note app: a Go binary that serves a web UI (`gonotes`),
-a terminal UI (`gonotes tui`), and Markdown/gob import-export commands. Data
-lives in DuckDB at `<dir>/data/notes.ddb`, where `<dir>` defaults to `~/.gonotes`.
+a terminal UI (`gonotes tui`), and Markdown/gob import-export commands. It is
+also a **cats-native client** — inside a cats pane the TUI reports its state to
+the host, follows the host theme, takes ⌘ accelerators, and can capture a
+sibling agent pane's output straight into a note (see [Inside cats](#inside-cats)).
 
-## The one rule that breaks everything
+## Storage: two bytdb files, one process
 
-**DuckDB is single-writer.** The server (or `GoNotes.app`) holds an exclusive
-lock on `data/notes.ddb`. Any CLI command that touches the DB — `tui`,
-`import-md`, `export-md`, `import-gob` — will fail to open the database while
-the server runs, and vice-versa.
+Data lives in **two [bytdb](https://github.com/rohanthewiz/bytdb) databases**
+under `<dir>/data`, where `<dir>` defaults to `~/.gonotes`:
 
-So before doing anything, find out which mode is live:
+| File | Holds |
+|---|---|
+| `notes_public.bytdb` | Non-private notes plus all shared/system tables (users, sync state, locks) |
+| `notes_private.bytdb` | Private notes only — the **whole database** is encrypted at rest when `GONOTES_ENCRYPTION_KEY` (exactly 32 chars) is set |
+
+DuckDB is **gone** (replaced 2026-08-14, gonotes `bdc0796`). A leftover
+`~/.gonotes/data/notes.ddb` is a dead pre-migration artifact — never read it and
+never assume it reflects current data. There is no in-memory cache layer either;
+bytdb is the read path.
+
+Because encryption is now whole-database rather than per-note, a server that
+opened the private DB with the key serves **plaintext** over the API. There is
+no per-note ciphertext to worry about (`Note.EncryptionIV` survives only for
+transport compatibility).
+
+**bytdb is single-process.** Whoever opens the two files owns them. That still
+governs the CLI:
+
+- `import-md`, `export-md`, `import-gob` open the databases directly → the
+  server (or `GoNotes.app`) must be **stopped**.
+- `gonotes tui` no longer has that problem — it decides for itself (below).
 
 ```bash
 curl -s -m 2 http://localhost:8444/api/v1/health   # {"success":true,...} => server is up
-pgrep -fl gonotes                                   # what's actually running
+pgrep -fl gonotes                                  # what's actually running
 ```
 
-- **Server up** → use the HTTP API. Do not run the CLI DB commands.
-- **Server down** → use the CLI (`tui`, `import-md`, …). Never start a second
-  writer alongside a running one.
-
 Default port is `8444` (`web.WebPort`, override with `--port` / `$GONOTES_PORT`).
+
+### Which notes is the TUI attached to?
+
+`runTui` (`main.go`) probes `/api/v1/health` and picks a mode. "A server
+answered" is deliberately *not* the deciding question — deferring is only correct
+when that server holds *these* files, so `/api/v1/health` reports `data_dir`
+(absolute, symlink-resolved) and the launch compares it:
+
+| Situation | Mode |
+|---|---|
+| `GONOTES_URL` set explicitly | **HTTP**, honored as named, no identity check (it may be another machine) |
+| `GONOTES_URL` set but not answering | local, with a notice naming the URL |
+| Unset, server reports the **same** `data_dir` | **HTTP** |
+| Unset, server reports a **different** `data_dir` | **local** — the server is ignored and says so |
+| Unset, server too old to report `data_dir` | HTTP, with a notice |
+| No server | local |
+
+Every outcome is labelled on screen (`tui.Mode`), so the TUI always says which
+notes these are. In HTTP mode `models.InitDB` is skipped entirely — no file lock,
+no conflict with the running server or MacApp.
+
+### CLI traps worth knowing before you type
+
+- **`gonotes serve` is not a subcommand.** Serving is the default action, so
+  `gonotes serve -d <dir>` silently ignores `-d`. Use `gonotes -d <dir> -p <port>`.
+- **`gonotes -d <dir> tui` silently ignores `-d`.** The `tui` command declares its
+  own `--dir` with the same default and command-level flags win. Use
+  `gonotes tui -d <dir>`.
+- **`<dir>/config/cfg_files/.env` overrides the shell environment.** The loader
+  calls `os.Setenv` unconditionally, truncates an unquoted value at `#`, and
+  strips surrounding quotes. Both `serve` and `runTui` chdir into `<dir>` before
+  loading, so one file covers both.
+- `GONOTES_JWT_SECRET` lives in that `.env` (0600). Unset, `InitJWT` falls back to
+  a publicly known development constant — fine locally, not fine once hooks and
+  phone push carry auth off the machine. It is shared hub↔spoke, so on a
+  configured spoke it must match the hub.
 
 ## Adding a note from the clipboard
 
 This is the most common ask. Use the bundled script — it handles clipboard
-reading, title extraction, JSON escaping, auth, and categories:
+reading, title extraction, JSON escaping, auth, and categories. Paths below are
+relative to the **gonotes checkout**:
 
 ```bash
 .claude/skills/gonotes/scripts/gn-clip.sh                       # title = first line of clipboard
@@ -46,7 +99,7 @@ reading, title extraction, JSON escaping, auth, and categories:
 | `-k` | Keep that first line in the body too (no removal). |
 | `-c <cat[/sub]>` | Category, created if it doesn't exist. `Work/backend` = category `Work`, subcategory `backend`. Repeatable. |
 | `-g <tags>` | Comma-separated tags. |
-| `-p` | Mark private (encrypted at rest when `GONOTES_ENCRYPTION_KEY` is set). |
+| `-p` | Mark private (stored in the encrypted database). |
 | `-f` | Set the follow-up flag. |
 | `-u <user>` | Username for login (else `$GONOTES_USER`, else prompt). |
 | `-U <url>` | Base URL (default `http://localhost:8444`, or `$GONOTES_URL`). |
@@ -97,7 +150,7 @@ gonotes import-md -i /tmp/gnclip -u <username>
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" 'http://localhost:8444/api/v1/notes?limit=20' | jq '.data[].title'
-curl -s -H "Authorization: Bearer $TOKEN" 'http://localhost:8444/api/v1/notes/search?q=duckdb' | jq
+curl -s -H "Authorization: Bearer $TOKEN" 'http://localhost:8444/api/v1/notes/search?q=bytdb' | jq
 ```
 
 **Markdown round-trip** (server stopped) — export is Obsidian-compatible and
@@ -110,34 +163,167 @@ gonotes import-md -i ~/notes-vault -u <user>
 
 Private notes export **decrypted** by default; `--skip-private` omits them.
 
-**Terminal UI**: `gonotes tui` (or `-d <dir>`). Keys: `/` search, `n`/`e`
-new/edit, `c` category filter (then `s` for that category's subcategories,
-`space` to toggle several, `enter` to filter), `f` flag, `d` delete, `ctrl+e`
-edit body in `$EDITOR`, `ctrl+s` save. The note form's Categories field takes
-the same `Name/Sub` notation as the frontmatter and `gn-clip -c`, creating
-unknown categories and subcategories on save.
+**`import-md` is an excellent witness and a poor migrator.** It requires the user
+to already exist, routes private notes through `CreateNote` (so their
+`created`/`updated` reset to import time), and trims trailing whitespace. Use
+`scripts/migrate` for anything that has to preserve identity; use `import-md` to
+re-export and byte-diff as an independent check.
 
-**Build & test**: `go build -o gonotes .` (cgo — DuckDB needs a C compiler);
-`go test ./...`. Tests that touch models open their own DB, so stop the server
-before running the full suite.
+**Terminal UI**: `gonotes tui` (or `gonotes tui -d <dir>`). Keys: `/` search,
+`n`/`e` new/edit, `c` category filter (then `s` for that category's
+subcategories, `space` to toggle several, `enter` to filter), `f` flag, `d`
+delete, `ctrl+e` edit body in `$EDITOR`, `ctrl+s` save, `ctrl+g` capture an agent
+pane, `q`/`esc` quit. Leaving a dirty form raises a three-way dialog —
+`s`/`enter` save & exit, `d` discard, `esc` keep editing. The note form's
+Categories field takes the same `Name/Sub` notation as the frontmatter and
+`gn-clip -c`, creating unknown categories and subcategories on save.
+
+**Build & test**: `go build -o gonotes .` (pure Go now — bytdb needs no cgo);
+`go vet && go test -race ./...`. Tests that touch models open their own
+databases (`models.InitTestDB`), so stop the server before the full suite.
+
+**Charm stack**: Bubble Tea **v2**. Canonical import paths are `charm.land/*/v2`
+(bubbletea v2.0.8, bubbles v2.1.1, lipgloss v2.0.6, glamour v2.0.1) — the
+`github.com/charmbracelet/*` paths fail with a module-path mismatch. The one
+exception is teatest, still `github.com/charmbracelet/x/exp/teatest/v2`. In v2:
+space stringifies as `"space"` not `" "`, the root model returns `tea.View`
+(AltScreen and WindowTitle are fields on it), and key messages are
+`KeyPressMsg` — matching the `KeyMsg` *interface* would double-fire once release
+reporting is on.
+
+## Inside cats
+
+GoNotes is both a **cats plugin** (how a pane gets opened) and a **cats-native
+client** (what the TUI does once running). They are orthogonal — the native side
+works identically whether the pane came from the ⌘K palette, from `gonotes tui`
+typed into a shell, or from nothing at all.
+
+### Capability ladder
+
+Everything is gated on `cats.Caps` and degrades silently. Tier 0 (any terminal)
+loses nothing.
+
+- **Tier 0** — not in a cats pane, or the control socket is not answering.
+- **Tier 1** — `CATS_ENV=1` + `CATS_PANE_ID` present *and* the control socket
+  (`CATS_CONTROL_SOCKET`) answered `ping`. The hook socket is `CATS_SOCKET_PATH`,
+  checked separately with a `stat`.
+
+`cats.DetectEnv()` is pure environment reads (no IO); `.Probe()` adds the dial.
+A Tier-0 verdict carries a one-phrase `Reason` — degradation is silent but not
+invisible when someone goes looking.
+
+The `cats/` package (`detect.go`, `client.go`, `hooks.go`, `events.go`) is
+**hand-copied, stdlib-only, and must never import the cats module**. Verbs:
+`ping`, `pane.list` / `ResolvePane`, `pane.focus`, `pane.send_input`,
+`chat.send`, `config.get`, `events.subscribe`, `capture`.
+
+### What the integration actually does
+
+| Feature | Where | Behavior |
+|---|---|---|
+| **Hook reporting** | `tui/cats_glue.go` | Source/agent `"gonotes"` (unprefixed — `cats:` is reserved). The **`$EDITOR` session is the one reported span**: `working` + `custom_status = "editing: <title>"` around `tea.ExecProcess`, so quitting a long edit fires the cats "finished" badge/toast/phone push. Saves and captures are deliberately *not* spans — they finish faster than the badge renders. `Release()` runs after `p.Run()` returns even when the TUI failed to start (no stale badges). |
+| **Host theme sync** | `tui/catstheme.go` | Synchronous `config.get` before the first frame (bounded by `ProbeTimeout`), then live `theme_changed` frames. Host colors → `Palette` (hex strings; `Sel` = accent blended over bg at 0.30). `hostThemed` makes the host outrank the terminal's own OSC 11 background report, which would otherwise undo the sync on first repaint. |
+| **Host identity** | `tui/cats_glue.go` | `v.WindowTitle` is a pure function of model state each frame — `GoNotes`, `<n> notes — GoNotes`, `editing: <title> — GoNotes`. OSC 7 once at startup. |
+| **Capture-to-note** | `tui/capture.go` | `ctrl+g` in browse → modal picker of sibling agent panes (cached `pane.list`, 2s rate limit, blocked > working > idle, own pane excluded) → `Capture(pane, CaptureRecent, 200)` → note form prefilled with title `Capture: <agent> — <timestamp>`, tag `capture`, **unsaved**. `ansi` and `unwrap` are off (a note stores markdown); `stripEscapeSequences` removes sequences whole as a second line of defense. At Tier 0 the door answers with one status line. |
+| **⌘ accelerators** | `tui/metakeys.go` | ⌘S save, ⌘E edit (`e` in lists / `ctrl+e` on the form), ⌘F flag, ⌘D delete, ⌘G capture, ⌘/ filter. Every other armed chord is **swallowed** — "⌘S didn't work" must never type an `s`. Each row has a command-mode twin and a typing-mode twin (may be empty); which applies comes from the `texter` interface. Bubble Tea v2 engages the kitty keyboard protocol unconditionally, so every gonotes pane passes cats' `cmdGoesToPane` with no enabling work. |
+| **Lock jump-to-pane** | `tui/locked.go` | The contention dialog offers `g` — go to the pane holding the note — via `pane.focus`. Offered only at Tier 1, when the holder recorded a pane handle, and when it is not our own. |
+
+The goroutine rule, stated at the top of `tui/cats_glue.go`: *cats-layer
+goroutines may touch only the transport objects and `p.Send`; every model/screen/
+style mutation happens in `Update` on a typed message* (`catsReadyMsg`,
+`catsThemeMsg`, `catsEventMsg`, `catsPanesMsg`, `captureDoneMsg`). The initial
+probe is a `tea.Cmd`, not a goroutine — `Program.Send` blocks before the program
+starts, which would deadlock shutdown on a TUI that failed to launch.
+
+### Plugin
+
+`cats-plugin.toml` at the repo root, id `rohanthewiz.gonotes`.
+
+```bash
+catctl plugin link .                              # from the gonotes checkout; fires [[build]]
+catctl plugin run rohanthewiz.gonotes             # bare run takes the first action: tui
+catctl plugin run rohanthewiz.gonotes serve       # the web server
+```
+
+`plugin link` installs a **symlink**, and the link is what runs
+`mkdir -p bin && go build -o bin/gonotes .` — so `bin/gonotes` only refreshes on
+relink. The `tui` action carries **no `-d` flag on purpose**: the argv is exec'd
+directly with no shell, so `~/.gonotes` would create a directory literally named
+`~`; `gonotes tui` already defaults `--dir` to `$HOME/.gonotes` via
+`os.UserHomeDir` and chdirs in. Confirmed live: a plugin-launched pane has cwd
+`/Users/<you>/.gonotes`, not the project.
+
+cats-side, gonotes holds seat **4** in `AGENT_HUE` (`cmd/catway/web/index.html`)
+— its FNV fallback collides with claude's slot 1, which is exactly the pane it
+sits beside most.
+
+### Testing against a host
+
+`catctl capture` **cannot** observe an alt-screen TUI — it returns a stale or
+primary-buffer snapshot, and `pane.send_input` reports `ok` with nothing
+observable coming back. Capture-to-note, theme repaint, ⌘ chords and the
+`modes.kitty` set-form question all need a human at the keyboard. For automated
+smoke runs, use a pty harness (`pty.fork` + `TIOCSWINSZ`, answering the OSC 11
+query) plus a scripted control/hook socket; `script -q /dev/null` inherits a 0x0
+winsize and renders nothing. Keep the fake socket directory **short** — macOS
+caps `sun_path` at 104 bytes and `AF_UNIX path too long` reads like a
+permissions error.
+
+## Note locks
+
+Two sessions cannot edit one note. The server arbitrates (`models/lock.go`,
+`web/api/locks.go`); `tui/lock.go` holds the client half — a per-process
+`SessionID` (fresh UUID; two GoNotes in the *same* pane are two sessions), a
+human-recognizable label (cats pane handle → hostname → truncated id), and a
+heartbeat that renews leases and reports when one is lost.
+
+- `GET /api/v1/note-locks` — every live lease in one call, for list badges.
+- Contention dialog (`tui/locked.go`): `r`/`enter` open read-only, `t` take over,
+  `g` go to their pane, `esc` never mind. Waiting is deliberately not offered — a
+  renewed lease never lapses.
+- On the form: `ctrl+l` retake a lease lost or stolen while the form stayed open.
+  A stale-write conflict forks to `l` load theirs (drops your edits) / `o`
+  overwrite theirs / `esc` decide later.
 
 ## Codebase map
 
 | Path | What lives there |
 |---|---|
-| `main.go` | urfave/cli wiring: default action serves; subcommands `tui`, `import-gob`, `export-md`, `import-md`. |
-| `models/` | Data layer + business logic: `note.go`, `category.go`, `user.go`, `db.go` (DuckDB + cache), `encryption.go`, `sync_*.go`. |
+| `main.go` | urfave/cli wiring: default action serves; subcommands `tui`, `import-gob`, `export-md`, `import-md`. `runTui` holds the local-vs-HTTP mode decision. |
+| `models/` | Data layer + business logic: `note.go`, `category.go`, `user.go`, `db.go` (two bytdb engines), `encryption.go`, `lock.go`, `sync_*.go`. |
 | `web/routes.go` | Every route in one file — read it first when looking for an endpoint. |
 | `web/api/` | JSON handlers. All responses use the `APIResponse` envelope: `{success, data?, error?}`. |
-| `web/pages/` | Server-rendered HTML built with `rohanthewiz/element`. |
-| `tui/` | Bubble Tea screens: `browse`, `detail`, `form`, `categories`, `login`. |
+| `web/pages/` | Server-rendered HTML built with `rohanthewiz/element` (+ Monaco editor). |
+| `cats/` | The cats transport: `detect.go`, `client.go`, `hooks.go`, `events.go`. Stdlib only; never imports cats. |
+| `tui/` | Bubble Tea v2 screens (`browse`, `detail`, `form`, `categories`, `subcategories`, `login`, `confirm`, `locked`) + the seams: `store.go` / `store_local.go` / `store_http.go`, `keymap.go`, `palette.go`, `styles.go`, `markdown.go`, `mouse.go`, `lock.go`, and the cats glue (`cats_glue.go`, `catstheme.go`, `capture.go`, `metakeys.go`). |
 | `md_*.go`, `import_gob.go` | Markdown frontmatter format, import/export, legacy gob import. |
+| `scripts/migrate` | The identity-preserving DuckDB → bytdb migrator (historical, but the reference for "move data without changing who you are"). |
+| `cats-plugin.toml` | Plugin manifest — build command and the `tui` / `serve` actions. |
 | `ai_docs/claude_sessions/` | Session logs — check for prior context via `/sess-list`, `/sess-load`. |
+| `../cats/ai_docs/cats-gonotes-intg.md` | The integration plan **and** running status record: every phase, every decision, and what each one cost. |
 
 Conventions in this repo: errors are wrapped with `serr` and logged once at the
 top with `logger.LogErr`; handlers authenticate via
 `api.GetCurrentUserGUID(ctx)` and return 401 themselves rather than relying on
 route-level middleware; every query is user-scoped by GUID.
+
+### The `Store` seam
+
+`tui/store.go` is an 18-method interface every screen goes through;
+`store_local.go` is one-line pass-throughs to `models.*` and `store_http.go`
+talks to the API (gn-clip conventions: `GONOTES_USER` / `GONOTES_PASSWORD` /
+`GONOTES_SYNC_PASSWORD_B64`, token cached at `~/.gonotes/.api_token`, validated
+via `/auth/me`). Two methods have no models analog:
+
+- `ResumeSession()` — get past the login screen without a password. Local always
+  declines.
+- `ListUsernames()` — `httpStore` always returns `ErrNoUserList`, because "list
+  every account" is an endpoint a shared hub must not have. The distinction from
+  an *empty* list is load-bearing: empty is what puts the login screen into
+  first-run registration mode.
+
+On 401 the HTTP store does **one** silent re-login then retries; on failure it
+reports the original 401, never the re-login error.
 
 ## Note model
 
@@ -167,3 +353,10 @@ last-writer-wins on `authored_at`; conflicts land in the `sync_conflicts`
 table. Runtime control: `GET /api/v1/sync/control/status`,
 `POST /api/v1/sync/control/toggle`, `POST /api/v1/sync/control/sync-now`.
 Full setup walkthrough is in `README.md`.
+
+## Privacy
+
+**Never echo note bodies into chat, docs, commits, or session logs.** Verify
+work with metadata instead — counts, titles, GUIDs, status codes, `jq` on
+envelope fields. This holds for every note, and doubly for `is_private` ones,
+whose whole point is that they live in the encrypted database.
