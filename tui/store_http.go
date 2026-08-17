@@ -63,10 +63,29 @@ const DefaultServerURL = "http://localhost:8444"
 // ServerURL returns the base URL the TUI should probe and, if the probe
 // succeeds, talk to.
 func ServerURL() string {
+	url, _ := serverURL()
+	return url
+}
+
+// ServerURLIsExplicit reports whether the URL came from GONOTES_URL rather than
+// from the built-in default.
+//
+// The distinction decides how much the launch is allowed to second-guess a
+// server that answers. A URL the user set is an instruction — possibly to a
+// server on another machine, whose data directory is a path in someone else's
+// filesystem and means nothing here — so it is honored as given. The default
+// URL is a GUESS that a local server is holding these files, and a guess is
+// exactly what deserves to be checked. See runTui.
+func ServerURLIsExplicit() bool {
+	_, explicit := serverURL()
+	return explicit
+}
+
+func serverURL() (url string, explicit bool) {
 	if u := strings.TrimRight(strings.TrimSpace(os.Getenv(envURL)), "/"); u != "" {
-		return u
+		return u, true
 	}
-	return DefaultServerURL
+	return DefaultServerURL, false
 }
 
 // NewHTTPStore returns a Store that reaches the server at baseURL.
@@ -100,41 +119,63 @@ func tokenFilePath() string {
 
 // ---- Health probe ----------------------------------------------------------
 
-// ProbeServer reports whether a GoNotes server is answering at baseURL.
+// ServerInfo is what a successful probe learned about the server that answered.
+type ServerInfo struct {
+	// DataDir is the absolute, symlink-resolved directory whose databases that
+	// server owns, as it reported them — or "" when it did not say, which is
+	// what every GoNotes server before this field did. Empty means UNKNOWN and
+	// must never be compared as if it were a path: two servers that both keep
+	// quiet are not thereby serving the same notes.
+	DataDir string
+}
+
+// ProbeServer reports whether a GoNotes server is answering at baseURL, and
+// what it says about itself.
 //
 // The check is deliberately stricter than "something returned 200": port 8444
 // could be held by anything, and guessing wrong means the TUI starts in HTTP
 // mode against a stranger. The response must be the GoNotes envelope with
 // success true and data.status == "ok", which no unrelated service will
 // produce by accident.
-func ProbeServer(baseURL string, timeout time.Duration) bool {
+//
+// Answering is only half of what the caller needs, which is why this returns
+// ServerInfo rather than a bare bool — see the identity check in runTui.
+func ProbeServer(baseURL string, timeout time.Duration) (ServerInfo, bool) {
 	hc := &http.Client{Timeout: timeout}
 	resp, err := hc.Get(strings.TrimRight(baseURL, "/") + "/api/v1/health")
 	if err != nil {
-		return false
+		return ServerInfo{}, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return false
+		return ServerInfo{}, false
 	}
 
 	// Cap the read: a hostile or merely confused endpoint must not be able to
 	// stall startup by streaming forever.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if err != nil {
-		return false
+		return ServerInfo{}, false
 	}
 
 	var env struct {
 		Success bool `json:"success"`
 		Data    struct {
-			Status string `json:"status"`
+			Status  string `json:"status"`
+			DataDir string `json:"data_dir"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &env); err != nil {
-		return false
+		return ServerInfo{}, false
 	}
-	return env.Success && env.Data.Status == "ok"
+	if !env.Success || env.Data.Status != "ok" {
+		return ServerInfo{}, false
+	}
+	// A missing data_dir is not a failed probe: every server built before the
+	// field omits it, and refusing those would break the launch this whole path
+	// exists to make work. It travels as an empty string, and the caller decides
+	// what to do knowing nothing.
+	return ServerInfo{DataDir: env.Data.DataDir}, true
 }
 
 // ---- Transport -------------------------------------------------------------

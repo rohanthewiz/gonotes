@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -139,6 +140,21 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 	if status, ok := data["status"].(string); !ok || status != "ok" {
 		t.Errorf("expected status 'ok', got %v", data["status"])
+	}
+
+	// data_dir is what lets a TUI launch tell the server guarding ITS notes from
+	// an unrelated one on the same port. Absent, the TUI cannot check and falls
+	// back to trusting whatever answered — which is how an explicit -d used to
+	// get silently overridden.
+	dir, ok := data["data_dir"].(string)
+	if !ok {
+		t.Fatalf("health response carries no data_dir: %v", data)
+	}
+	if dir == "" {
+		t.Error("data_dir is empty; the TUI reads that as 'unknown' and cannot verify identity")
+	}
+	if !filepath.IsAbs(dir) {
+		t.Errorf("data_dir = %q, which is not absolute — it cannot be compared across processes", dir)
 	}
 }
 

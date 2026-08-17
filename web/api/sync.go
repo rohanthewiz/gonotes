@@ -254,6 +254,24 @@ func GetSyncStatus(ctx rweb.Context) error {
 // HealthCheck handles GET /api/v1/health
 // A lightweight, unauthenticated endpoint that returns 200 OK if the
 // server is running. Used by peers and monitoring systems.
+//
+// data_dir says WHICH dataset this server owns, and it is the reason the
+// endpoint returns anything beyond "ok". The TUI probes this URL to decide
+// whether to talk HTTP or open the bytdb files itself, and "a server answered"
+// is not the question it needs answered — bytdb is single-process, so deferring
+// to a server is only correct when that server holds the very files this launch
+// would otherwise open. Without this field the probe cannot tell a server
+// guarding those files from an unrelated one on the same port, and answers the
+// second as if it were the first.
+//
+// Unauthenticated on purpose, like the rest of the response: it is the absolute
+// path of a directory, which anyone who can reach this port can already infer
+// from the notes it will serve them. It is deliberately NOT a promise about
+// content — two machines can hold the same path and mean different notes, which
+// is why the TUI only trusts it for a server it did not have to be told about.
 func HealthCheck(ctx rweb.Context) error {
-	return writeSuccess(ctx, http.StatusOK, map[string]string{"status": "ok"})
+	return writeSuccess(ctx, http.StatusOK, map[string]string{
+		"status":   "ok",
+		"data_dir": models.ResolvedDataDir(),
+	})
 }

@@ -49,6 +49,9 @@ type browseScreen struct {
 	// gutter, or 0 when the layout is narrow — which is also the "is the
 	// preview showing" test.
 	previewWidth int
+
+	// clicks turns two clicks on one row into "open that note". See mouse.go.
+	clicks clickTracker
 }
 
 // widePaneMin is the terminal width at which the preview pane appears. Below
@@ -89,12 +92,21 @@ func (i noteItem) Description() string {
 	return dimStyle.Render(date) + "  " + desc
 }
 
-// filterBodyRunes caps how much of a note body feeds the fuzzy filter. The cap
-// keeps matching fast with hundreds of long notes while still making "/" a
-// genuine content search rather than a title search.
+// filterBodyRunes caps how much of a note body feeds the filter. The cap keeps
+// matching fast with hundreds of long notes while still making "/" a genuine
+// content search rather than a title search.
 const filterBodyRunes = 2000
 
-// FilterValue feeds the fuzzy filter.
+// filterSep divides the two halves of a FilterValue, which notesFilter searches
+// by different rules. A NUL is used because it is the one byte that cannot
+// occur in a note: titles, tags and bodies all come back from the store as Go
+// strings holding user-typed text, and no keyboard, paste or markdown import
+// produces one — so the split can never land in the middle of real content.
+const filterSep = "\x00"
+
+// FilterValue feeds the filter, in two parts: the note's short fields, then a
+// capped slice of its body, separated by filterSep. notesFilter splits them
+// back apart; nothing else reads this string.
 //
 // The cap is applied in runes, not bytes. Slicing a UTF-8 string at a byte
 // offset can land mid-rune, and the resulting invalid byte would flow into
@@ -104,7 +116,84 @@ const filterBodyRunes = 2000
 // is precisely why it is worth not having.
 func (i noteItem) FilterValue() string {
 	body := truncateRunes(i.note.Body.String, filterBodyRunes)
-	return i.note.Title + " " + i.note.Tags.String + " " + i.note.Description.String + " " + body
+	return i.note.Title + " " + i.note.Tags.String + " " + i.note.Description.String +
+		filterSep + body
+}
+
+// notesFilter is the note list's filter, replacing bubbles' DefaultFilter.
+//
+// WHY THE DEFAULT DOES NOT WORK HERE. DefaultFilter is sahilm/fuzzy, which
+// matches a SUBSEQUENCE: "apm" matches any haystack containing an a, later a p,
+// later an m. That is a good rule for a list of short titles and a useless one
+// the moment 2000 characters of prose are in the haystack, because a few
+// hundred words of English contain nearly every short query as a subsequence.
+// Measured on five realistic notes, "apm", "cats" and "meal" each matched all
+// five, and "disk" matched four — a filter that filters nothing, which is
+// exactly what "the filter doesn't work" looks like from the outside.
+//
+// THE SPLIT RULE. Fuzzy stays where it earns its keep (title, tags,
+// description — short strings where typo tolerance and abbreviations like
+// "dtflw" are the point), and the body is searched as a plain case-insensitive
+// substring, every whitespace-separated token having to appear. So "/duck"
+// still finds a note that merely mentions DuckDB in passing, while "/apm" no
+// longer drags in every note that happens to contain those three letters in
+// that order.
+//
+// MATCHED INDEXES COME FROM THE HEAD ONLY, and that is a fix in itself. The
+// list delegate applies them to the item's TITLE to underline the matched
+// characters; DefaultFilter returned offsets into the whole FilterValue, so a
+// match deep in a body underlined arbitrary letters of an unrelated title. A
+// body hit now reports no indexes, which renders as no underline.
+func notesFilter(term string, targets []string) []list.Rank {
+	heads := make([]string, len(targets))
+	bodies := make([]string, len(targets))
+	for i, t := range targets {
+		head, body, _ := strings.Cut(t, filterSep)
+		heads[i], bodies[i] = head, body
+	}
+
+	// The head pass is the default behavior, unchanged — including whatever it
+	// does with an empty term, which is why this is delegated rather than
+	// reimplemented.
+	ranks := list.DefaultFilter(term, heads)
+
+	fields := strings.Fields(term)
+	if len(fields) == 0 {
+		return ranks
+	}
+
+	matched := make(map[int]bool, len(ranks))
+	for _, r := range ranks {
+		matched[r.Index] = true
+	}
+
+	// Body hits are appended after the fuzzy ones rather than merged into the
+	// ranking: a title match is a stronger signal than a mention buried in a
+	// body, and DefaultFilter's scores are not on a scale this could join.
+	for i, body := range bodies {
+		if matched[i] || !containsAllFold(body, fields) {
+			continue
+		}
+		ranks = append(ranks, list.Rank{Index: i})
+	}
+	return ranks
+}
+
+// containsAllFold reports whether every token appears in s, case-insensitively.
+//
+// All tokens rather than any: multi-word queries narrow, which is what a second
+// word is typed for. Order is not required — "release checklist" finds a note
+// that says "checklist for the release" — a search box is not a phrase query.
+func containsAllFold(s string, tokens []string) bool {
+	// Lowered once per note, not once per token: the body is the long side, and
+	// this runs for every note on every keystroke of the filter prompt.
+	lower := strings.ToLower(s)
+	for _, tok := range tokens {
+		if !strings.Contains(lower, strings.ToLower(tok)) {
+			return false
+		}
+	}
+	return true
 }
 
 // truncateRunes returns at most n runes of s, cutting on a character boundary.
@@ -170,6 +259,10 @@ func applyListStyles(l *list.Model) {
 func newBrowseScreen(sess *session) *browseScreen {
 	l := list.New([]list.Item{}, newListDelegate(), sess.width, sess.height)
 	l.Title = "GoNotes"
+	// Only the note list swaps the matcher out. The category list keeps
+	// DefaultFilter, which is the right tool there: its FilterValue is a bare
+	// category name, exactly the short haystack fuzzy matching is good at.
+	l.Filter = notesFilter
 	applyListStyles(&l)
 	l.SetShowStatusBar(true)
 	l.SetStatusBarItemName("note", "notes")
@@ -185,8 +278,28 @@ func newBrowseScreen(sess *session) *browseScreen {
 }
 
 func (s *browseScreen) Init() tea.Cmd {
+	s.list.Title = s.title() // before the first paint, not on the first load
 	s.layout()
 	return s.refresh()
+}
+
+// title is the list's heading: the app name, the active category filter, and
+// the mode badge.
+//
+// The badge is here rather than in a startup message because it answers "which
+// notes are these" — a question that stays asked. It is empty for the ordinary
+// local launch, so the common case reads exactly as it always has, and an
+// unusual one (a server, a second data directory) is labelled for as long as it
+// lasts. See Mode in tui.go.
+func (s *browseScreen) title() string {
+	t := "GoNotes"
+	if s.catFilter != nil {
+		t += " — " + s.catFilter.Name
+	}
+	if b := s.sess.mode.Badge; b != "" {
+		t += " · " + b
+	}
+	return t
 }
 
 // layout splits the terminal between the list and the preview pane. Called on
@@ -248,11 +361,7 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		for _, n := range msg.notes {
 			items = append(items, noteItem{note: n})
 		}
-		title := "GoNotes"
-		if s.catFilter != nil {
-			title = "GoNotes — " + s.catFilter.Name
-		}
-		s.list.Title = title
+		s.list.Title = s.title()
 		return s, s.list.SetItems(items)
 
 	case categoryPickedMsg:
@@ -270,6 +379,36 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			return s, statusErr(msg.err, "Delete failed")
 		}
 		return s, tea.Batch(s.refresh(), status("Note deleted"))
+
+	case tea.MouseWheelMsg:
+		// Only over the list: the preview pane renders a fixed block rather than
+		// a viewport, so there is nothing on that side to scroll, and rolling
+		// the wheel there must not move the selection out from under the note
+		// the user is reading.
+		if s.overList(msg.X) && wheelList(&s.list, msg) {
+			return s, nil
+		}
+		return s, nil
+
+	case tea.MouseClickMsg:
+		if msg.Button != tea.MouseLeft || !s.overList(msg.X) {
+			return s, nil
+		}
+		idx, ok := listRowAt(&s.list, msg.Y)
+		if !ok {
+			return s, nil
+		}
+		// Select on the first click, open on the second. Selecting on every
+		// click (rather than only when the row changes) is what makes the
+		// preview follow the pointer, and it is also what a double-click's first
+		// half has to do for the second half to open the right note.
+		s.list.Select(idx)
+		if s.clicks.double(idx) {
+			if n := s.selectedNote(); n != nil {
+				return s, push(newDetailScreen(s.sess, *n))
+			}
+		}
+		return s, nil
 
 	case tea.KeyPressMsg:
 		// While the fuzzy filter prompt is active, every key belongs to it.
@@ -329,6 +468,13 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	var cmd tea.Cmd
 	s.list, cmd = s.list.Update(msg)
 	return s, cmd
+}
+
+// overList reports whether a column belongs to the note list rather than to the
+// preview pane beside it. In the narrow layout there is no preview, so every
+// column is the list's — which is why this asks previewWidth and not width.
+func (s *browseScreen) overList(x int) bool {
+	return s.previewWidth == 0 || x < s.listWidth
 }
 
 // openCapture is the ctrl+g door: pick a sibling agent pane and turn its output

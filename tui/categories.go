@@ -15,6 +15,10 @@ import (
 type categoriesScreen struct {
 	sess *session
 	list list.Model
+
+	// clicks turns two clicks on one row into "filter by this category",
+	// matching what enter does. See mouse.go.
+	clicks clickTracker
 }
 
 type catItem struct{ cat models.Category }
@@ -65,6 +69,24 @@ func (s *categoriesScreen) selected() *models.Category {
 	return nil
 }
 
+// pick narrows the note list to the highlighted category. Shared by enter and
+// by a double-click, so the two doors cannot drift apart.
+//
+// Returns nil when nothing is highlighted (an empty list), which is what lets
+// the enter case fall through to the widget instead of swallowing the key.
+func (s *categoriesScreen) pick() tea.Cmd {
+	c := s.selected()
+	if c == nil {
+		return nil
+	}
+	// Pop first, then deliver the pick to the browse screen that is now on
+	// top. tea.Sequence guarantees that ordering; tea.Batch would not.
+	picked := *c
+	return tea.Sequence(pop(false), func() tea.Msg {
+		return categoryPickedMsg{cat: &picked}
+	})
+}
+
 func (s *categoriesScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	switch msg := msg.(type) {
 
@@ -94,6 +116,24 @@ func (s *categoriesScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		}
 		return s, tea.Batch(s.refresh(), status("Category deleted"))
 
+	case tea.MouseWheelMsg:
+		wheelList(&s.list, msg)
+		return s, nil
+
+	case tea.MouseClickMsg:
+		if msg.Button != tea.MouseLeft {
+			return s, nil
+		}
+		idx, ok := listRowAt(&s.list, msg.Y)
+		if !ok {
+			return s, nil
+		}
+		s.list.Select(idx)
+		if s.clicks.double(idx) {
+			return s, s.pick()
+		}
+		return s, nil
+
 	case tea.KeyPressMsg:
 		if s.list.FilterState() == list.Filtering {
 			break
@@ -107,14 +147,8 @@ func (s *categoriesScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			return s, pop(false)
 
 		case key.Matches(msg, keys.Filter):
-			if c := s.selected(); c != nil {
-				// Pop first, then deliver the pick to the browse screen that
-				// is now on top. tea.Sequence guarantees that ordering;
-				// tea.Batch would not.
-				picked := *c
-				return s, tea.Sequence(pop(false), func() tea.Msg {
-					return categoryPickedMsg{cat: &picked}
-				})
+			if cmd := s.pick(); cmd != nil {
+				return s, cmd
 			}
 
 		case key.Matches(msg, keys.AllNotes):

@@ -38,6 +38,38 @@ const (
 	PrivateDBPath = DataDir + "/notes_private.bytdb"
 )
 
+// ResolvedDataDir returns the absolute, symlink-resolved path of DataDir — the
+// identity of a dataset, as opposed to the many ways one can be spelled.
+//
+// It exists so that two processes can agree on whether they are looking at the
+// same notes. DataDir is relative to a working directory each process chdirs
+// into at startup, so "./data" alone says nothing; a server reports this over
+// /api/v1/health and the TUI compares it with its own before deciding that the
+// server owns the files it was about to open. Getting that comparison wrong in
+// the permissive direction is not a cosmetic bug — it points the TUI at a
+// different person's notes and lets them edit it.
+//
+// Symlinks are resolved because macOS makes that a live concern: /tmp is a
+// symlink to /private/tmp, so two processes with the identical dataset can spell
+// it two ways and a plain string compare would call them different — a false
+// mismatch, which fails toward opening the files locally and colliding on the
+// single-process lock.
+//
+// Returns "" when neither form can be computed, which callers must read as "I
+// do not know" rather than as a path that matches another empty one.
+func ResolvedDataDir() string {
+	abs, err := filepath.Abs(DataDir)
+	if err != nil {
+		return ""
+	}
+	// EvalSymlinks fails when the directory does not exist yet — a first run,
+	// where abs is still the right answer and nothing is there to collide with.
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return real
+	}
+	return abs
+}
+
 // InitDB opens both databases (creating the files and schema on first
 // run) and must be called once at startup before any model operation.
 //

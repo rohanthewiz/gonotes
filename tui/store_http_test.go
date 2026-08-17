@@ -373,7 +373,7 @@ func TestProbeServerRequiresTheGoNotesEnvelope(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(tc.handler)
 			defer srv.Close()
-			if got := ProbeServer(srv.URL, 2*time.Second); got != tc.want {
+			if _, got := ProbeServer(srv.URL, 2*time.Second); got != tc.want {
 				t.Errorf("ProbeServer = %v, want %v", got, tc.want)
 			}
 		})
@@ -387,8 +387,47 @@ func TestProbeServerRejectsADeadAddress(t *testing.T) {
 	url := srv.URL
 	srv.Close() // the port is now closed; the dial will be refused
 
-	if ProbeServer(url, 500*time.Millisecond) {
+	if _, up := ProbeServer(url, 500*time.Millisecond); up {
 		t.Error("ProbeServer accepted an address with nothing listening")
+	}
+}
+
+// TestProbeServerReportsTheDataDir covers the field the identity check runs on.
+// A server that reports its directory must have it carried back intact, and one
+// that does not must come back EMPTY rather than with some stand-in — an empty
+// DataDir means "unknown", and runTui treats it very differently from a path.
+func TestProbeServerReportsTheDataDir(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload map[string]string
+		want    string
+	}{
+		{
+			name:    "a server that identifies itself",
+			payload: map[string]string{"status": "ok", "data_dir": "/Users/me/.gonotes/data"},
+			want:    "/Users/me/.gonotes/data",
+		},
+		{
+			name:    "a server predating the field",
+			payload: map[string]string{"status": "ok"},
+			want:    "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) { writeOK(w, 200, tc.payload) }))
+			defer srv.Close()
+
+			info, up := ProbeServer(srv.URL, 2*time.Second)
+			if !up {
+				t.Fatal("ProbeServer rejected a valid health response")
+			}
+			if info.DataDir != tc.want {
+				t.Errorf("DataDir = %q, want %q", info.DataDir, tc.want)
+			}
+		})
 	}
 }
 

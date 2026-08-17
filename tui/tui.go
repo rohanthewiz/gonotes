@@ -65,6 +65,28 @@ func paletteChanged() tea.Cmd {
 	return func() tea.Msg { return paletteChangedMsg{} }
 }
 
+// Mode is how this launch reached its data, said in a form a person can read.
+// It is display only — the Store is what actually does the reaching — and it
+// exists because the choice between them is made before the TUI starts and was,
+// until now, invisible afterwards.
+type Mode struct {
+	// Badge is a short label shown beside the list title for as long as the
+	// program runs, and ONLY when the data is not in the ordinary place: the
+	// server it is talking to, or a second data directory. Empty means the usual
+	// notes in the usual location, which needs no sign.
+	//
+	// Persistent rather than a startup line because "which notes am I looking
+	// at" is not a question that stops mattering after three seconds — and
+	// because the status bar is claimed by the next thing that has something to
+	// say (inside cats, the capture hint, within a second of launch).
+	Badge string
+
+	// Notice is a one-off status line explaining a decision the user did not ask
+	// for and might not expect — a server that was ignored, or one that was
+	// expected and is not there. Empty when the launch was unremarkable.
+	Notice string
+}
+
 // session carries state shared by every screen. A pointer to it is embedded
 // in each screen, so window resizes, the authenticated user, and the data
 // store are always current without message plumbing.
@@ -80,6 +102,10 @@ type session struct {
 	// connected), so screens call into it without an availability check. See
 	// cats_glue.go.
 	cats *catsState
+
+	// mode labels where the data is coming from. Read by the browse title and
+	// by the root's opening status line; nothing routes on it.
+	mode Mode
 
 	user   *models.User
 	width  int
@@ -117,12 +143,17 @@ type session struct {
 // The probe itself is NOT started here. It is a tea.Cmd issued from Init(),
 // so nothing downstream of it can run before the event loop does — see
 // probeCmd for the shutdown deadlock that ordering avoids.
-func Run(st Store) error {
+func Run(st Store, mode Mode) error {
 	// One synchronous config.get inside a cats pane, and nothing at all outside
 	// one. See catstheme.go for why it is worth blocking the launch for.
 	catsThemeAtStartup()
 
 	m := newAppModel(st)
+	// Set after construction rather than passed through newAppModel, which every
+	// test builds a model with: the mode is display state the screens read off
+	// the session, and threading it through the constructor would make each of
+	// those call sites state something they do not care about.
+	m.sess.mode = mode
 	cs := m.sess.cats
 	cs.init()
 
@@ -172,7 +203,14 @@ func (m appModel) Init() tea.Cmd {
 	//
 	// probeCmd is nil outside a cats pane, which tea.Batch drops — so at Tier
 	// 0 this is the same two-command batch it has always been.
-	return tea.Batch(tea.RequestBackgroundColor, m.sess.cats.probeCmd(), m.top().Init())
+	cmds := []tea.Cmd{tea.RequestBackgroundColor, m.sess.cats.probeCmd(), m.top().Init()}
+	// The mode notice, when the launch did something worth explaining. It is
+	// first among equals only in intent: inside cats the capture hint replaces it
+	// a moment later, which is why anything that must survive is in Mode.Badge.
+	if n := m.sess.mode.Notice; n != "" {
+		cmds = append(cmds, status(n))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -321,6 +359,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m appModel) View() tea.View {
 	v := tea.NewView("")
 	v.AltScreen = true // replaces the v1 tea.WithAltScreen() program option
+	// Mouse reporting moved onto the view in v2 for the same reason AltScreen
+	// did, and it is just as invisible when missed: without this the terminal is
+	// never asked to report clicks, so no mouse message can reach any screen.
+	// See mouse.go for the mode choice and what turning it on costs.
+	v.MouseMode = mouseMode
 
 	// The window title is a Tier-0 feature: any terminal that understands OSC
 	// 2 gets it, and cats is only the host that does the most with it. Set

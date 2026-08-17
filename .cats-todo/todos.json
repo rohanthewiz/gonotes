@@ -1,5 +1,12 @@
 [
   {
+    "id": "198d8c313038250b",
+    "title": "In TUI mode filter is not working",
+    "prompt": "In TUI mode filter and mouse click are not working",
+    "done": true,
+    "created": "2026-08-16T22:32:24.244729-05:00"
+  },
+  {
     "id": "b49f047a9300b975",
     "title": "Need icon for attaching a file",
     "prompt": "Need icon for attaching a file",
@@ -31,5 +38,26 @@
       "effort": "high",
       "permission": "auto"
     }
+  },
+  {
+    "id": "c18d223b23d56536",
+    "title": "GoNotes needs to be tagged",
+    "prompt": "GoNotes needs to be tagged",
+    "done": false,
+    "created": "2026-08-16T22:48:37.376682-05:00"
+  },
+  {
+    "id": "ad45f3f21485dd0c",
+    "title": "TUI mode needs subcategory support",
+    "prompt": "TUI mode needs subcategory support",
+    "done": false,
+    "created": "2026-08-16T22:59:06.570181-05:00"
+  },
+  {
+    "id": "c11ae5b15496e05a",
+    "title": "ESC key to quit, but warn and give oppor to save on dirty b…",
+    "prompt": "ESC key to quit, but warn and give oppor to save on dirty buffer",
+    "done": false,
+    "created": "2026-08-16T23:55:50.566748-05:00"
   }
 ]

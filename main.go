@@ -8,6 +8,7 @@ import (
 	"gonotes/web"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/rohanthewiz/logger"
@@ -156,13 +157,37 @@ const tuiProbeTimeout = 2 * time.Second
 // runTui prepares the working directory, decides how the TUI will reach its
 // data, then hands the terminal to the Bubble Tea interface.
 //
-// The decision is the part worth reading. bytdb is single-process: if a
-// GoNotes server (or the MacApp, which embeds one) is already running against
-// this data directory, opening the databases here would fail on the lock. So
-// the launch probes for a live server first:
+// The decision is the part worth reading. bytdb is single-process: if a GoNotes
+// server (or the MacApp, which embeds one) is already running against this data
+// directory, opening the databases here would fail on the lock. So the launch
+// probes for a live server first — but "a server answered" is NOT the question,
+// and treating it as the answer is how this went wrong.
 //
-//	server answering  →  HTTP store; models.InitDB is never called
-//	nothing there     →  local store over the bytdb files, as before
+// WHAT THE PROBE HAS TO ESTABLISH. Deferring to a server is only correct when
+// that server holds the very files this launch would otherwise open. A server on
+// port 8444 serving a different data directory is not a reason to abandon the
+// one the user named with -d; it is an unrelated process that happens to be
+// listening. Before /api/v1/health reported its data_dir there was no way to
+// tell the two apart, so -d was silently overridden by whatever was running —
+// which points the TUI at a different set of notes, with writes enabled and no
+// sign on screen that anything unusual happened.
+//
+// SO THE RULE DEPENDS ON WHO CHOSE THE URL:
+//
+//	GONOTES_URL set        the user named a server, possibly on another machine
+//	                       where a data directory path means nothing. Honored as
+//	                       given; no identity check. Not answering is worth a
+//	                       word, because they expected it to be there.
+//	GONOTES_URL unset      the default URL is a GUESS that a local server holds
+//	                       these files. Guesses get checked: HTTP mode only when
+//	                       the server reports the same resolved data directory,
+//	                       and local mode otherwise.
+//	server too old to say  cannot be checked, so it keeps the old behavior (HTTP)
+//	                       and says so, rather than silently changing which
+//	                       notes an existing setup shows.
+//
+// Every outcome is labelled — see tui.Mode — so that whichever way it goes, the
+// screen says which notes these are.
 //
 // The web server, JWT signing, and the sync client are skipped either way; in
 // HTTP mode the remote server owns all of that.
@@ -187,15 +212,36 @@ func runTui(dir string) error {
 		}
 	}
 
+	// The data directory is resolved AFTER the Chdir above, which is what makes
+	// it comparable with what a server reports: both sides answer "where does
+	// ./data land from where I am standing".
+	dataDir := models.ResolvedDataDir()
+	serverURL := tui.ServerURL()
+	info, up := tui.ProbeServer(serverURL, tuiProbeTimeout)
+
 	// HTTP mode. Note the early return: no InitDB, no CloseDB, no encryption
 	// setup. The server holds the key and bytdb encrypts whole databases at
 	// rest, so it decrypts private bodies on read — which is why HTTP mode
 	// shows the same note text local mode does rather than ciphertext.
-	if serverURL := tui.ServerURL(); tui.ProbeServer(serverURL, tuiProbeTimeout) {
-		return tui.Run(tui.NewHTTPStore(serverURL))
+	useHTTP, mode := decideStore(up, info, serverURL, dir, dataDir)
+	if useHTTP {
+		return tui.Run(tui.NewHTTPStore(serverURL), mode)
 	}
 
 	if err := models.InitDB(); err != nil {
+		// Insurance for the case the identity check is supposed to make
+		// impossible. Choosing local mode over a live server is a bet that the
+		// server locked a DIFFERENT directory, so these files are free; if the
+		// bet is wrong the files will not open, and refusing to start would be a
+		// worse answer than the server we just declined. Reachable only when
+		// something answered the probe, so it never turns a genuinely broken
+		// database into a silent redirect on a machine with no server at all.
+		if up {
+			return tui.Run(tui.NewHTTPStore(serverURL), tui.Mode{
+				Badge:  badgeForURL(serverURL),
+				Notice: "Local notes would not open — using the server at " + serverURL,
+			})
+		}
 		return serr.Wrap(err, "failed to initialize database")
 	}
 	defer models.CloseDB()
@@ -208,7 +254,118 @@ func runTui(dir string) error {
 		}
 	}
 
-	return tui.Run(tui.NewLocalStore())
+	// The mode carries whatever the decision had to say — including, when the
+	// probe found a server serving someone else's directory, the fact that it
+	// was deliberately passed over.
+	return tui.Run(tui.NewLocalStore(), mode)
+}
+
+// decideStore applies the rule in runTui's comment: which store to use, and how
+// to label it on screen.
+//
+// Split out from runTui so the rule can be tested without a terminal, a data
+// directory or a real server — the mistake this guards against is a decision
+// mistake, not a plumbing one, and a decision is testable when it is a function
+// of its inputs.
+//
+// BADGE AND NOTICE ARE DECIDED TOGETHER because they are not interchangeable.
+// The notice is one status line at startup and it does not survive contact with
+// a cats pane: the capture hint claims that line within a second of launch. So
+// anything the user must still know a minute later belongs in the badge, which
+// sits beside the list title for the life of the process. Every unusual outcome
+// below therefore sets BOTH — the notice to explain it once, the badge to keep
+// saying which notes these are.
+func decideStore(up bool, info tui.ServerInfo, serverURL, dir, dataDir string) (useHTTP bool, mode tui.Mode) {
+	explicit := tui.ServerURLIsExplicit()
+	server := badgeForURL(serverURL)
+
+	if !up {
+		if explicit {
+			// They pointed GONOTES_URL somewhere and it is not answering. Local
+			// mode is still the right fallback — the notes are right here — but
+			// silence would let someone edit local notes for an hour believing
+			// they were writing to the server.
+			return false, tui.Mode{
+				Badge:  localBadge(dir, true),
+				Notice: "No server at " + serverURL + " — using local notes",
+			}
+		}
+		// The ordinary local launch: nothing happened worth reporting.
+		return false, tui.Mode{Badge: localBadge(dir, false)}
+	}
+
+	if explicit {
+		return true, tui.Mode{Badge: server} // named on purpose, honored as named
+	}
+
+	switch info.DataDir {
+	case "":
+		// Too old to identify itself. Keep the long-standing behavior so an
+		// existing setup does not change under its user, and say why it could
+		// not be checked.
+		return true, tui.Mode{
+			Badge:  server,
+			Notice: "Connected to " + serverURL + " (it did not report its data directory)",
+		}
+
+	case dataDir:
+		return true, tui.Mode{Badge: server}
+
+	default:
+		return false, tui.Mode{
+			Badge: localBadge(dir, true),
+			Notice: "Ignored the server at " + serverURL +
+				" — it serves " + info.DataDir + ", not " + dataDir,
+		}
+	}
+}
+
+// badgeForURL is the persistent label for HTTP mode: the server, minus the
+// scheme, which is noise once it is the only thing on the line.
+func badgeForURL(serverURL string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(serverURL, "https://"), "http://")
+}
+
+// localBadge labels a local launch.
+//
+// A directory other than the default always earns a badge — that is the "which
+// notes am I looking at" question outright. The default directory earns one only
+// when the launch was unusual (a server was expected and missing, or found and
+// passed over), because there the useful fact is the negative one: you are on
+// local notes, NOT on the server you might reasonably assume.
+//
+// An ordinary launch gets nothing. A permanent label that is always there
+// teaches the eye to stop seeing it, which is the wrong training for a sign
+// whose whole job is to catch attention on the rare launch that is not ordinary.
+func localBadge(dir string, unusual bool) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return dir
+	}
+	if !sameDir(dir, filepath.Join(home, ".gonotes")) {
+		return "local · " + dir
+	}
+	if unusual {
+		return "local"
+	}
+	return ""
+}
+
+// sameDir compares two directory paths after resolving them the way
+// models.ResolvedDataDir does, so "~/.gonotes", "/Users/me/.gonotes" and a
+// symlinked spelling of either are one directory rather than three.
+func sameDir(a, b string) bool {
+	resolve := func(p string) string {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return p
+		}
+		if real, err := filepath.EvalSymlinks(abs); err == nil {
+			return real
+		}
+		return abs
+	}
+	return resolve(a) == resolve(b)
 }
 
 func serve(dir, port string) error {
