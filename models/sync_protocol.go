@@ -399,19 +399,24 @@ func ApplyIncomingSyncChange(change SyncChange) error {
 	}
 }
 
-// applyIncomingNoteChange handles note-type sync changes (create/update/delete).
+// applyIncomingNoteChange handles note-type sync changes.
+//
+// OperationSync shares the create arm, and that is the whole of hub-and-spoke
+// fan-out. A hub does not re-record a spoke's push as a create — it records
+// what it did, which is a sync (see ApplySyncNoteCreate). That row is the only
+// account the hub has of the edit, so it is also what a SECOND spoke pulls. If
+// this switch treated operation 9 as unknown, every change would reach the hub
+// and stop there.
+//
+// Whether it lands as a create or an update is decided by what is on disk
+// rather than by the operation code, which is the honest reading of a relayed
+// change: "this entity now says this".
 func applyIncomingNoteChange(change SyncChange) error {
 	switch change.Operation {
-	case OperationCreate:
-		// Idempotency: if the note GUID already exists, skip the create.
-		// This handles the case where the change was applied previously
-		// but recorded under a different internal change GUID.
+	case OperationCreate, OperationSync:
 		existing, err := GetNoteByGUID(change.EntityGUID)
 		if err != nil {
 			return serr.Wrap(err, "failed to check existing note for idempotency")
-		}
-		if existing != nil {
-			return nil // Already exists — idempotent skip
 		}
 
 		// Deserialize the fragment from the generic any field
@@ -420,13 +425,25 @@ func applyIncomingNoteChange(change SyncChange) error {
 			return serr.Wrap(err, "failed to deserialize note fragment for create")
 		}
 
+		if existing != nil {
+			// Idempotency: a create for a note we already have is a no-op.
+			// This handles the case where the change was applied previously
+			// but recorded under a different internal change GUID.
+			if change.Operation == OperationCreate {
+				return nil
+			}
+			// A relayed change for a note we already have is an edit made
+			// elsewhere, so it applies as one.
+			return applyIncomingNoteUpdate(change, fragment)
+		}
+
 		// Title is required — extract from fragment
 		title := ""
 		if fragment.Title.Valid {
 			title = fragment.Title.String
 		}
 
-		_, err = ApplySyncNoteCreate(change.EntityGUID, title, fragment, change.AuthoredAt, change.User)
+		_, err = ApplySyncNoteCreate(change.EntityGUID, title, fragment, change.AuthoredAt, change.User, change.GUID)
 		if err != nil {
 			return serr.Wrap(err, "failed to apply sync note create")
 		}
@@ -444,44 +461,55 @@ func applyIncomingNoteChange(change SyncChange) error {
 		if err != nil {
 			return serr.Wrap(err, "failed to deserialize note fragment for update")
 		}
-
-		err = ApplySyncNoteUpdate(change.EntityGUID, fragment, change.AuthoredAt)
-		if err != nil {
-			return serr.Wrap(err, "failed to apply sync note update")
-		}
-
-		// If the fragment includes category mappings, apply them
-		if fragment.Bitmask&FragmentCategories != 0 && fragment.Categories.Valid {
-			if err := ApplySyncNoteCategoryMapping(change.EntityGUID, fragment.Categories.String); err != nil {
-				logger.LogErr(err, "failed to apply category mappings during note update", "note_guid", change.EntityGUID)
-			}
-		}
-		return nil
+		return applyIncomingNoteUpdate(change, fragment)
 
 	case OperationDelete:
-		return ApplySyncNoteDelete(change.EntityGUID)
+		return ApplySyncNoteDelete(change.EntityGUID, change.GUID)
 
 	default:
 		return serr.New(fmt.Sprintf("unknown note operation: %d", change.Operation))
 	}
 }
 
-// applyIncomingCategoryChange handles category-type sync changes.
+// applyIncomingNoteUpdate lands an edit and, when the fragment carries them,
+// the note's category mappings. Shared by the update arm and by a relayed
+// change that turned out to be about a note this machine already has.
+func applyIncomingNoteUpdate(change SyncChange, fragment NoteFragment) error {
+	if err := ApplySyncNoteUpdate(change.EntityGUID, fragment, change.AuthoredAt, change.GUID); err != nil {
+		return serr.Wrap(err, "failed to apply sync note update")
+	}
+
+	// If the fragment includes category mappings, apply them
+	if fragment.Bitmask&FragmentCategories != 0 && fragment.Categories.Valid {
+		if err := ApplySyncNoteCategoryMapping(change.EntityGUID, fragment.Categories.String); err != nil {
+			logger.LogErr(err, "failed to apply category mappings during note update", "note_guid", change.EntityGUID)
+		}
+	}
+	return nil
+}
+
+// applyIncomingCategoryChange handles category-type sync changes. Operation 9
+// shares the create arm for the same reason it does on the note side.
 func applyIncomingCategoryChange(change SyncChange) error {
 	switch change.Operation {
-	case OperationCreate:
-		// Idempotency: if the category GUID already exists, skip the create
+	case OperationCreate, OperationSync:
 		existingCat, err := GetCategoryByGUID(change.EntityGUID)
 		if err != nil {
 			return serr.Wrap(err, "failed to check existing category for idempotency")
-		}
-		if existingCat != nil {
-			return nil // Already exists — idempotent skip
 		}
 
 		fragment, err := deserializeCategoryFragment(change.Fragment)
 		if err != nil {
 			return serr.Wrap(err, "failed to deserialize category fragment for create")
+		}
+
+		if existingCat != nil {
+			// Idempotency: a create for a category we already have is a no-op;
+			// a relayed change is an edit made elsewhere.
+			if change.Operation == OperationCreate {
+				return nil
+			}
+			return ApplySyncCategoryUpdate(change.EntityGUID, fragment, change.GUID)
 		}
 
 		name := ""
@@ -490,7 +518,7 @@ func applyIncomingCategoryChange(change SyncChange) error {
 		}
 
 		// Pass the change author's GUID as created_by for multi-user isolation
-		_, err = ApplySyncCategoryCreate(change.EntityGUID, name, fragment, change.User)
+		_, err = ApplySyncCategoryCreate(change.EntityGUID, name, fragment, change.User, change.GUID)
 		if err != nil {
 			return serr.Wrap(err, "failed to apply sync category create")
 		}
@@ -502,10 +530,10 @@ func applyIncomingCategoryChange(change SyncChange) error {
 			return serr.Wrap(err, "failed to deserialize category fragment for update")
 		}
 
-		return ApplySyncCategoryUpdate(change.EntityGUID, fragment)
+		return ApplySyncCategoryUpdate(change.EntityGUID, fragment, change.GUID)
 
 	case OperationDelete:
-		return ApplySyncCategoryDelete(change.EntityGUID)
+		return ApplySyncCategoryDelete(change.EntityGUID, change.GUID)
 
 	default:
 		return serr.New(fmt.Sprintf("unknown category operation: %d", change.Operation))
@@ -917,4 +945,45 @@ func CountUnsentChangesForPeer(peerID string, userGUID string) (int, error) {
 	}
 
 	return total + catCount, nil
+}
+
+// ============================================================================
+// MarkChangeGUIDSyncedToPeer
+// ============================================================================
+
+// MarkChangeGUIDSyncedToPeer records that the peer a change came FROM already
+// has it, so the row this machine wrote while applying it is never handed back.
+//
+// This is only possible because an applied change keeps its origin's identity
+// (see relayChangeGUID): before that, the row a hub wrote for a spoke's push
+// had a name only the hub knew, and there was nothing to look it up by. The
+// spoke would pull its own edit back on the next cycle and discard it — right
+// answer, wasted round trip.
+//
+// Best-effort: a change that cannot be found was applied as a no-op (an
+// idempotent skip), and there is nothing to mark.
+func MarkChangeGUIDSyncedToPeer(changeGUID, peerID string) {
+	if changeGUID == "" || peerID == "" {
+		return
+	}
+
+	// note_changes live in both databases; a change is in exactly one.
+	for _, en := range []*dbEngine{pubDB, privDB} {
+		var id int64
+		if err := en.QueryRow(`SELECT id FROM note_changes WHERE guid = ?`, changeGUID).Scan(&id); err == nil {
+			if err := MarkChangeSyncedToPeer(id, peerID); err != nil {
+				logger.LogErr(err, "failed to mark applied note change as synced to its origin",
+					"change_guid", changeGUID, "peer_id", peerID)
+			}
+			return
+		}
+	}
+
+	var catID int64
+	if err := pubDB.QueryRow(`SELECT id FROM category_changes WHERE guid = ?`, changeGUID).Scan(&catID); err == nil {
+		if err := MarkCategoryChangeSyncedToPeer(catID, peerID); err != nil {
+			logger.LogErr(err, "failed to mark applied category change as synced to its origin",
+				"change_guid", changeGUID, "peer_id", peerID)
+		}
+	}
 }

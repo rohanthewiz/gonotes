@@ -175,6 +175,11 @@ func PushChanges(ctx rweb.Context) error {
 			continue
 		}
 		accepted = append(accepted, change.GUID)
+
+		// The pusher already has this change — it is theirs. Marking it keeps
+		// the next pull from handing it straight back: the row just recorded
+		// carries the same GUID they sent, so it is findable by name.
+		models.MarkChangeGUIDSyncedToPeer(change.GUID, req.PeerID)
 	}
 
 	// Return empty slices instead of nil for clean JSON serialization

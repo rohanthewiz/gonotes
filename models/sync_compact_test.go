@@ -384,7 +384,7 @@ func TestCountUnsentChangesExcludesSyncOperations(t *testing.T) {
 	fragment.Body.String, fragment.Body.Valid = "arrived", true
 
 	if _, err := models.ApplySyncNoteCreate("compact-incoming", "From the hub", fragment,
-		time.Now(), compactUserGUID); err != nil {
+		time.Now(), compactUserGUID, "incoming-change-guid"); err != nil {
 		t.Fatalf("failed to apply an incoming note: %v", err)
 	}
 

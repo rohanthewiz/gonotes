@@ -15,10 +15,31 @@ import (
 // table, always land in the public database. There is no cache and no
 // per-note encryption — the private database is encrypted as a whole.
 
+// originChangeGUID is the identity of the change being applied, and every
+// ApplySync* function takes one.
+//
+// It is what the local change row records as its OWN guid, rather than a fresh
+// one, and that single decision is what makes a hub-and-two-spokes topology
+// converge:
+//
+//	spoke A ──push(X)──► hub records X ──pull──► spoke A sees X, already has it
+//	                          │                  (changeGUIDExists → skip)
+//	                          └────pull────────► spoke B applies X, records X
+//	                                             ──push(X)──► hub already has X
+//
+// With a fresh guid at each hop, none of those "already has it" checks fire:
+// the hub hands every spoke back its own change under a new name, each side
+// applies it and records another change, and the log grows without end. The
+// idempotency check in ApplyIncomingSyncChange has always been written for
+// this; it just never had a stable identity to check against.
+//
+// An empty originChangeGUID means "no incoming change to inherit from" and
+// generates one, which is what a caller outside the sync path gets.
+
 // ApplySyncNoteCreate inserts a note from sync data with an explicit
 // authored_at (preserving the source authoring time). Records an
 // OperationSync change so peers don't re-propagate it.
-func ApplySyncNoteCreate(noteGUID, title string, fragment NoteFragment, authoredAt time.Time, userGUID string) (*Note, error) {
+func ApplySyncNoteCreate(noteGUID, title string, fragment NoteFragment, authoredAt time.Time, userGUID, originChangeGUID string) (*Note, error) {
 	description := fragment.Description
 	body := fragment.Body
 	tags := fragment.Tags
@@ -65,7 +86,7 @@ func ApplySyncNoteCreate(noteGUID, title string, fragment NoteFragment, authored
 	if fragmentID, err := insertNoteFragment(en, syncFragment); err != nil {
 		logger.LogErr(err, "failed to record sync note create fragment", "note_guid", noteGUID)
 	} else {
-		if err := insertNoteChange(en, GenerateChangeGUID(), noteGUID, OperationSync,
+		if err := insertNoteChange(en, relayChangeGUID(originChangeGUID), noteGUID, OperationSync,
 			sql.NullInt64{Int64: fragmentID, Valid: true}, userGUID); err != nil {
 			logger.LogErr(err, "failed to record sync note create change", "note_guid", noteGUID)
 		}
@@ -78,7 +99,7 @@ func ApplySyncNoteCreate(noteGUID, title string, fragment NoteFragment, authored
 // authored_at. It resolves the incoming fragment (applying a body diff when
 // present) against the current note, and — if the privacy bit flips — moves
 // the note between the two databases.
-func ApplySyncNoteUpdate(noteGUID string, fragment NoteFragment, authoredAt time.Time) error {
+func ApplySyncNoteUpdate(noteGUID string, fragment NoteFragment, authoredAt time.Time, originChangeGUID string) error {
 	existing, err := GetNoteByGUID(noteGUID)
 	if err != nil {
 		return serr.Wrap(err, "failed to get existing note for sync update")
@@ -166,11 +187,19 @@ func ApplySyncNoteUpdate(noteGUID string, fragment NoteFragment, authoredAt time
 		}
 	}
 
-	// Record OperationSync in the destination engine.
-	if fragmentID, err := insertNoteFragment(dst, fragment); err != nil {
+	// Record OperationSync in the destination engine — from the RESOLVED
+	// state, not from the incoming fragment.
+	//
+	// The difference only shows when the incoming fragment carried a body
+	// diff: that diff is expressed against the SENDER's previous body, so
+	// relaying it verbatim to a third machine asks it to patch a base it may
+	// never have had. A snapshot of what this note now says cannot fail that
+	// way. (Same reasoning as the compactor — see sync_compact.go.)
+	relay := noteRelayFragment(&resolved, fragment.Bitmask)
+	if fragmentID, err := insertNoteFragment(dst, relay); err != nil {
 		logger.LogErr(err, "failed to record sync update fragment", "note_guid", noteGUID)
 	} else {
-		if err := insertNoteChange(dst, GenerateChangeGUID(), noteGUID, OperationSync,
+		if err := insertNoteChange(dst, relayChangeGUID(originChangeGUID), noteGUID, OperationSync,
 			sql.NullInt64{Int64: fragmentID, Valid: true}, ""); err != nil {
 			logger.LogErr(err, "failed to record sync update change", "note_guid", noteGUID)
 		}
@@ -180,7 +209,7 @@ func ApplySyncNoteUpdate(noteGUID string, fragment NoteFragment, authoredAt time
 }
 
 // ApplySyncNoteDelete soft-deletes a note received via sync (idempotent).
-func ApplySyncNoteDelete(noteGUID string) error {
+func ApplySyncNoteDelete(noteGUID, originChangeGUID string) error {
 	existing, err := GetNoteByGUID(noteGUID)
 	if err != nil {
 		return serr.Wrap(err, "failed to resolve note for sync delete")
@@ -201,7 +230,7 @@ func ApplySyncNoteDelete(noteGUID string) error {
 		return nil
 	}
 
-	if err := insertNoteChange(en, GenerateChangeGUID(), noteGUID, OperationDelete,
+	if err := insertNoteChange(en, relayChangeGUID(originChangeGUID), noteGUID, OperationDelete,
 		sql.NullInt64{}, ""); err != nil {
 		logger.LogErr(err, "failed to record sync delete change", "note_guid", noteGUID)
 	}
@@ -209,7 +238,7 @@ func ApplySyncNoteDelete(noteGUID string) error {
 }
 
 // ApplySyncCategoryCreate creates a category from sync data (public database).
-func ApplySyncCategoryCreate(categoryGUID, name string, fragment CategoryFragment, userGUID string) (*Category, error) {
+func ApplySyncCategoryCreate(categoryGUID, name string, fragment CategoryFragment, userGUID, originChangeGUID string) (*Category, error) {
 	description := fragment.Description
 	subcategories := fragment.Subcategories
 
@@ -231,7 +260,7 @@ func ApplySyncCategoryCreate(categoryGUID, name string, fragment CategoryFragmen
 	if fragmentID, err := insertCategoryFragment(fragment); err != nil {
 		logger.LogErr(err, "failed to record sync category create fragment", "category_guid", categoryGUID)
 	} else {
-		if err := insertCategoryChange(GenerateChangeGUID(), categoryGUID, OperationSync,
+		if err := insertCategoryChange(relayChangeGUID(originChangeGUID), categoryGUID, OperationSync,
 			sql.NullInt64{Int64: fragmentID, Valid: true}, ""); err != nil {
 			logger.LogErr(err, "failed to record sync category create change", "category_guid", categoryGUID)
 		}
@@ -241,7 +270,7 @@ func ApplySyncCategoryCreate(categoryGUID, name string, fragment CategoryFragmen
 }
 
 // ApplySyncCategoryUpdate updates a category from sync data (public database).
-func ApplySyncCategoryUpdate(categoryGUID string, fragment CategoryFragment) error {
+func ApplySyncCategoryUpdate(categoryGUID string, fragment CategoryFragment, originChangeGUID string) error {
 	setClauses := []string{}
 	args := []any{}
 
@@ -272,7 +301,7 @@ func ApplySyncCategoryUpdate(categoryGUID string, fragment CategoryFragment) err
 	if fragmentID, err := insertCategoryFragment(fragment); err != nil {
 		logger.LogErr(err, "failed to record sync category update fragment", "category_guid", categoryGUID)
 	} else {
-		if err := insertCategoryChange(GenerateChangeGUID(), categoryGUID, OperationSync,
+		if err := insertCategoryChange(relayChangeGUID(originChangeGUID), categoryGUID, OperationSync,
 			sql.NullInt64{Int64: fragmentID, Valid: true}, ""); err != nil {
 			logger.LogErr(err, "failed to record sync category update change", "category_guid", categoryGUID)
 		}
@@ -281,12 +310,12 @@ func ApplySyncCategoryUpdate(categoryGUID string, fragment CategoryFragment) err
 }
 
 // ApplySyncCategoryDelete deletes a category from sync (public database).
-func ApplySyncCategoryDelete(categoryGUID string) error {
+func ApplySyncCategoryDelete(categoryGUID, originChangeGUID string) error {
 	if _, err := pubDB.Exec(`DELETE FROM categories WHERE guid = ?`, categoryGUID); err != nil {
 		return serr.Wrap(err, "failed to delete synced category")
 	}
 
-	if err := insertCategoryChange(GenerateChangeGUID(), categoryGUID, OperationDelete,
+	if err := insertCategoryChange(relayChangeGUID(originChangeGUID), categoryGUID, OperationDelete,
 		sql.NullInt64{}, ""); err != nil {
 		logger.LogErr(err, "failed to record sync category delete change", "category_guid", categoryGUID)
 	}
@@ -373,4 +402,55 @@ func joinStrings(parts []string, sep string) string {
 // a fan-out read.
 func getNoteByGUIDFromDisk(guid string) (*Note, error) {
 	return GetNoteByGUID(guid)
+}
+
+// relayChangeGUID returns the identity a locally recorded change should carry:
+// the incoming change's, so the same edit keeps one name across every machine
+// it reaches, or a fresh one when there is no incoming change to inherit from.
+func relayChangeGUID(originChangeGUID string) string {
+	if originChangeGUID != "" {
+		return originChangeGUID
+	}
+	return GenerateChangeGUID()
+}
+
+// noteRelayFragment snapshots the fields a bitmask names from a note as it now
+// stands, for the change row an apply records on the way through. Body is
+// literal text with BodyIsDiff false — see the note at its call site.
+func noteRelayFragment(note *Note, bitmask int16) NoteFragment {
+	fragment := NoteFragment{Bitmask: bitmask}
+	if bitmask&FragmentTitle != 0 {
+		fragment.Title = sql.NullString{String: note.Title, Valid: true}
+	}
+	if bitmask&FragmentDescription != 0 {
+		fragment.Description = note.Description
+	}
+	if bitmask&FragmentBody != 0 {
+		fragment.Body = note.Body
+		fragment.BodyIsDiff = false
+	}
+	if bitmask&FragmentTags != 0 {
+		fragment.Tags = note.Tags
+	}
+	if bitmask&FragmentIsPrivate != 0 {
+		fragment.IsPrivate = sql.NullBool{Bool: note.IsPrivate, Valid: true}
+	}
+	if bitmask&FragmentCategories != 0 {
+		fragment.Categories = note.categoriesSnapshotForRelay()
+	}
+	return fragment
+}
+
+// categoriesSnapshotForRelay re-reads the note's category links so a relayed
+// fragment that claims the categories bit carries the current filing rather
+// than the sender's view of it. A failure leaves the field absent, which the
+// receiver reads as "this change says nothing about categories" — the safe
+// reading, since the alternative is unfiling the note.
+func (n *Note) categoriesSnapshotForRelay() sql.NullString {
+	mappingsJSON, err := noteCategoryMappingsJSON(n.ID)
+	if err != nil {
+		logger.LogErr(err, "failed to snapshot categories for relayed change", "note_guid", n.GUID)
+		return sql.NullString{}
+	}
+	return sql.NullString{String: mappingsJSON, Valid: true}
 }

@@ -918,7 +918,16 @@ func (sc *SyncClient) applyChangeWithConflictDetection(change SyncChange) error 
 	}
 
 	// Apply the change (idempotent — duplicate GUIDs are no-ops)
-	return ApplyIncomingSyncChange(change)
+	if err := ApplyIncomingSyncChange(change); err != nil {
+		return err
+	}
+
+	// The hub already has this change — it is what we just pulled from it. The
+	// row applying it recorded carries the same GUID, so marking it here keeps
+	// the next push from sending the hub its own change back. Symmetric with
+	// what the hub does for a spoke's push; see MarkChangeGUIDSyncedToPeer.
+	MarkChangeGUIDSyncedToPeer(change.GUID, sc.peerID)
+	return nil
 }
 
 // pushChanges builds a batch of local unsent changes and sends them to the hub.
