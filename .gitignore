@@ -36,3 +36,7 @@ models.test
 
 # migration tool binary
 gonotes-migrate
+
+# cats' per-repo todo state. It is written by the cats host as you work, so
+# tracking it means every session ends with an unrelated diff to carry.
+.cats-todo/
