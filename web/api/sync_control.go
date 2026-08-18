@@ -170,10 +170,15 @@ func SyncControlSnooze(ctx rweb.Context) error {
 // Switches between prompt mode (nothing syncs unasked) and auto mode (a cycle
 // every interval) at runtime.
 //
-// Request body: {"mode": "prompt"} or {"mode": "auto"}. The change is not
-// persisted — GONOTES_SYNC_MODE in the .env is what survives a restart — so
-// this is a session-scoped override, and the response says which mode is now
-// live rather than assuming the request took.
+// Request body: {"mode": "prompt"} or {"mode": "auto"}, optionally with
+// {"persist": true} to write GONOTES_SYNC_MODE into config/cfg_files/.env so
+// the choice survives a restart.
+//
+// Persisting is opt-in rather than automatic because the two are genuinely
+// different requests: "sync in the background for the rest of this afternoon"
+// is not "sync in the background from now on", and only one of them should
+// edit a file holding the hub credentials. The response says which mode is now
+// live, and whether it was written down.
 func SyncControlMode(ctx rweb.Context) error {
 	userGUID := GetCurrentUserGUID(ctx)
 	if userGUID == "" {
@@ -186,7 +191,8 @@ func SyncControlMode(ctx rweb.Context) error {
 	}
 
 	var req struct {
-		Mode string `json:"mode"`
+		Mode    string `json:"mode"`
+		Persist bool   `json:"persist"`
 	}
 	if err := json.Unmarshal(ctx.Request().Body(), &req); err != nil {
 		return writeError(ctx, http.StatusBadRequest, "invalid request body")
@@ -206,7 +212,27 @@ func SyncControlMode(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusBadRequest, err.Error())
 	}
 
-	return writeSuccess(ctx, http.StatusOK, client.GetStatus())
+	persisted := false
+	if req.Persist {
+		if err := setEnvFileValue("GONOTES_SYNC_MODE", string(mode)); err != nil {
+			// The live mode already changed, and saying so is more useful than
+			// pretending the whole request failed — the caller needs to know
+			// which half took.
+			logger.LogErr(serr.Wrap(err, "failed to persist sync mode"), "user_guid", userGUID)
+			return writeSuccess(ctx, http.StatusOK, map[string]any{
+				"status":    client.GetStatus(),
+				"persisted": false,
+				"warning":   "mode changed for this session, but could not be written to the .env file",
+			})
+		}
+		persisted = true
+		logger.Info("Sync mode persisted to env file", "mode", string(mode))
+	}
+
+	return writeSuccess(ctx, http.StatusOK, map[string]any{
+		"status":    client.GetStatus(),
+		"persisted": persisted,
+	})
 }
 
 // SyncControlCompact handles POST /api/v1/sync/control/compact

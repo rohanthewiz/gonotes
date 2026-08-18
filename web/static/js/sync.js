@@ -601,6 +601,11 @@
     } else {
       parts.push('last synced ' + formatRelativeTime(spokeStatus.last_sync));
     }
+    if (spokeStatus.last_error) {
+      // Named, not detailed: the full error is a Go wrap chain, and the thing
+      // the reader needs is that the hub is not answering right now.
+      parts.push('the hub is not responding');
+    }
     return parts.join(', ');
   }
 
@@ -621,6 +626,14 @@
     // the wrong thing about what it does.
     const offerCompact = spokeStatus.pending_changes > 1 && !spokeStatus.compact_before_push;
 
+    // Compact-WITHOUT-syncing is a narrower answer and gets a narrower
+    // condition: it earns its place only when the last cycle failed, because
+    // an unreachable hub is both the reason the log is growing and the reason
+    // "compact & sync" would not finish. Offering it unconditionally would put
+    // four buttons in a one-line banner, three of which do nearly the same
+    // thing.
+    const offerCompactOnly = offerCompact && !!spokeStatus.last_error;
+
     el.innerHTML =
       '<span class="sync-due-text">\u27F2 Sync is due \u2014 ' + escapeHtml(spokeSummary()) + '.</span>' +
       '<span class="sync-due-actions">' +
@@ -628,6 +641,10 @@
         (offerCompact
           ? '<button class="btn btn-secondary" onclick="app.spokeSyncNow(true)" ' +
             'title="Collapse the pending change log to one change per note, then sync">Compact &amp; sync</button>'
+          : '') +
+        (offerCompactOnly
+          ? '<button class="btn btn-secondary" onclick="app.spokeCompactChanges()" ' +
+            'title="Pack the pending changes down without contacting the hub">Compact only</button>'
           : '') +
         '<button class="btn btn-secondary" onclick="app.spokeSnooze()">Later</button>' +
       '</span>';

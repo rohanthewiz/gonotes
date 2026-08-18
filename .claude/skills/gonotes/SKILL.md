@@ -391,13 +391,29 @@ Runtime control — all authenticated:
 | `POST` | `/api/v1/sync/control/toggle` | `{"enabled":bool}` |
 | `POST` | `/api/v1/sync/control/sync-now` | `{"compact":bool}` optional |
 | `POST` | `/api/v1/sync/control/snooze` | `{"duration":"30m"}` optional; defaults to the prompt interval |
-| `POST` | `/api/v1/sync/control/mode` | `{"mode":"prompt"\|"auto"}`; session-scoped, not persisted |
+| `POST` | `/api/v1/sync/control/mode` | `{"mode":"prompt"\|"auto","persist":bool}`; `persist` writes `GONOTES_SYNC_MODE` into the `.env`. Returns `{status, persisted}` |
 | `POST` | `/api/v1/sync/control/compact` | Returns `{compaction, status}` |
 
 The TUI reaches all of this through four Store methods (`SyncStatus`,
 `SyncNow`, `SnoozeSync`, `CompactChanges`) plus `DeclineExitSync`; local mode
 drives `models.GetSyncClient()` directly (runTui starts one now), HTTP mode
-calls the endpoints above.
+calls the endpoints above. It polls status every minute, dropping to every 15
+when the answer is "no sync configured here".
+
+**An applied change keeps its origin's GUID.** Every `ApplySync*` function
+takes an `originChangeGUID` and records it as the local change row's own guid
+rather than generating a fresh one. That stable identity is what makes a
+hub-and-two-spokes topology converge — `changeGUIDExists` finally has something
+to recognize — and it is why `MarkChangeGUIDSyncedToPeer` can stop a hub from
+handing a spoke back its own push.
+
+**`OperationSync` (9) is a first-class inbound operation**, not an error. A hub
+does not re-record a spoke's push as a create; it records what it did, which is
+a sync — and that row is the only account it has of the edit, so it is what a
+SECOND spoke pulls. `applyIncoming*Change` therefore shares its create arm with
+op 9 and decides create-vs-update from what is on disk. Relayed note fragments
+are snapshots of the resolved note, never the diff that arrived, since a diff's
+base belongs to the sender.
 
 ## Privacy
 

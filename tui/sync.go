@@ -167,6 +167,17 @@ type compactDoneMsg struct {
 // enough that in HTTP mode it is one request per minute rather than a stream.
 const syncPollInterval = time.Minute
 
+// syncIdlePollInterval is the rate for an installation that has answered "no
+// sync here". Most GoNotes installations are a single machine with no hub, and
+// a request a minute forever to be told that again is the wrong price for a
+// feature that is not in use.
+//
+// It backs off rather than stopping, because the answer is not quite
+// immutable: in HTTP mode the server could be restarted with sync configured
+// while this TUI stays open. Fifteen minutes finds that without anyone
+// noticing the polling.
+const syncIdlePollInterval = 15 * time.Minute
+
 // syncStatusCmd reads the sync clock.
 func syncStatusCmd(st Store) tea.Cmd {
 	return func() tea.Msg {
@@ -175,9 +186,17 @@ func syncStatusCmd(st Store) tea.Cmd {
 	}
 }
 
-// syncTickCmd schedules the next poll.
-func syncTickCmd() tea.Cmd {
-	return tea.Tick(syncPollInterval, func(time.Time) tea.Msg { return syncTickMsg{} })
+// syncTickCmd schedules the next poll, at the rate the current state deserves.
+func syncTickCmd(interval time.Duration) tea.Cmd {
+	return tea.Tick(interval, func(time.Time) tea.Msg { return syncTickMsg{} })
+}
+
+// pollInterval is how soon this state wants to be looked at again.
+func (s *syncState) pollInterval() time.Duration {
+	if s.configured() {
+		return syncPollInterval
+	}
+	return syncIdlePollInterval
 }
 
 // syncNowCmd runs a cycle, optionally compacting first. quitting is carried

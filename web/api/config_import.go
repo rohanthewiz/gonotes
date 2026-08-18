@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/rohanthewiz/logger"
@@ -109,4 +110,68 @@ func writeEnvFile(cfg SpokeExportConfig) error {
 
 	content := strings.Join(lines, "\n") + "\n"
 	return os.WriteFile(envFilePath, []byte(content), 0600)
+}
+
+// setEnvFileValue sets one key in config/cfg_files/.env, leaving every other
+// line — including the credentials — exactly as it found them.
+//
+// This is deliberately not writeEnvFile: that one composes the whole file from
+// a SpokeExportConfig and is right for first-run setup, where there is nothing
+// to preserve. Changing one setting on a configured spoke is the opposite
+// situation, and rewriting the file from a partial view of it would quietly
+// drop whatever the view did not carry.
+//
+// The write is temp-file-plus-rename so a failure midway cannot truncate a
+// file holding the hub password and the JWT secret. Permissions stay 0600.
+func setEnvFileValue(key, value string) error {
+	existing, err := os.ReadFile(envFilePath)
+	if err != nil && !os.IsNotExist(err) {
+		return serr.Wrap(err, "failed to read env file", "path", envFilePath)
+	}
+
+	line := key + "=" + value
+
+	var out []string
+	replaced := false
+	for _, l := range strings.Split(string(existing), "\n") {
+		// Match on the assignment, not on a Contains: a key name appearing
+		// inside a comment or another value must not be rewritten.
+		if strings.HasPrefix(strings.TrimSpace(l), key+"=") {
+			if replaced {
+				continue // a duplicate of a key we have already set: drop it
+			}
+			out = append(out, line)
+			replaced = true
+			continue
+		}
+		out = append(out, l)
+	}
+
+	if !replaced {
+		// Append, trimming any trailing blank lines first so the file does not
+		// grow a gap on every new key.
+		for len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
+			out = out[:len(out)-1]
+		}
+		out = append(out, line)
+	}
+
+	content := strings.Join(out, "\n")
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+
+	if err := os.MkdirAll(filepath.Dir(envFilePath), 0o700); err != nil {
+		return serr.Wrap(err, "failed to create env file directory")
+	}
+
+	tmp := envFilePath + ".tmp"
+	if err := os.WriteFile(tmp, []byte(content), 0600); err != nil {
+		return serr.Wrap(err, "failed to write temporary env file")
+	}
+	if err := os.Rename(tmp, envFilePath); err != nil {
+		os.Remove(tmp)
+		return serr.Wrap(err, "failed to replace env file")
+	}
+	return nil
 }

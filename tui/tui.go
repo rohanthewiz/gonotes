@@ -363,7 +363,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// obtained, and before that there is nobody whose notes are overdue.
 		if !m.sess.sync.polling {
 			m.sess.sync.polling = true
-			cmds = append(cmds, syncStatusCmd(m.sess.store), syncTickCmd())
+			cmds = append(cmds, syncStatusCmd(m.sess.store), syncTickCmd(m.sess.sync.pollInterval()))
 		}
 		return m, tea.Batch(cmds...)
 
@@ -390,7 +390,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.maybeAskToSync()
 
 	case syncTickMsg:
-		return m, tea.Batch(syncStatusCmd(m.sess.store), syncTickCmd())
+		// The next tick is scheduled from what the LAST poll found, so an
+		// installation with no hub settles onto the idle rate after one round
+		// rather than asking every minute forever.
+		return m, tea.Batch(syncStatusCmd(m.sess.store), syncTickCmd(m.sess.sync.pollInterval()))
 
 	case statusNote:
 		m.statusText = msg.text
