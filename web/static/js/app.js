@@ -575,21 +575,144 @@
     }
   };
 
+  // ============================================
+  // Duplicate Note
+  // ============================================
+
+  // COPY_PREFIX marks a duplicate at a glance. It leads the title rather than
+  // trailing it so copies group together when the list is sorted or scanned,
+  // instead of hiding behind a long title.
+  const COPY_PREFIX = 'COPY ';
+
+  // duplicateCurrentNote opens a "what should be copied" dialog instead of
+  // duplicating straight away. Categories are the reason it exists: they live
+  // in a junction table rather than on the note, so they have to be fetched
+  // deliberately — and once fetched they are worth showing, because a copy that
+  // silently loses (or silently keeps) a category is the surprising outcome.
   window.app.duplicateCurrentNote = async function() {
     if (!state.currentNote) return;
+    const note = state.currentNote;
 
-    const bodyContent = state.currentNote.body;
+    // The notes list payload carries no categories, so ask for this note's.
+    // A failure here is not fatal: the dialog simply offers no category row.
+    let noteCategories = [];
+    try {
+      const resp = await apiRequest(`/notes/${note.id}/categories`);
+      if (resp && Array.isArray(resp.data)) noteCategories = resp.data;
+    } catch (error) {
+      console.error('Failed to load categories for duplicate:', error);
+    }
 
-    // Build note data object with msgpack support
-    const noteData = {
-      guid: generateGUID(),
-      title: state.currentNote.title + ' (Copy)',
-      description: state.currentNote.description,
-      tags: null,
-      is_private: state.currentNote.is_private
+    showDuplicateDialog(note, noteCategories);
+  };
+
+  // categoryDetailLabel renders one note-category link the way the rest of the
+  // app writes categories — "Work/backend" — listing every subcategory this
+  // note selected so the dialog shows exactly what would carry over.
+  function categoryDetailLabel(cat) {
+    const subs = cat.selected_subcategories || [];
+    if (subs.length === 0) return cat.name;
+    return subs.map(sub => `${cat.name}/${sub}`).join(', ');
+  }
+
+  // showDuplicateDialog builds the copy options. Only fields the source note
+  // actually has get a row: an unchecked-by-default or permanently empty
+  // checkbox is noise in a dialog whose whole point is being quick to confirm.
+  // Everything shown starts checked — "duplicate" means duplicate, and the
+  // user unticks what they don't want.
+  function showDuplicateDialog(note, noteCategories) {
+    const modalTitle = document.getElementById('modal-title');
+    const modalBody = document.getElementById('modal-body');
+    const modalFooter = document.getElementById('modal-footer');
+
+    modalTitle.textContent = 'Duplicate Note';
+
+    const option = (id, label, detail) => `
+      <label class="dup-option">
+        <input type="checkbox" class="dup-checkbox" id="${id}" checked>
+        <span class="dup-option-label">${label}</span>
+        ${detail ? `<span class="dup-option-detail">${detail}</span>` : ''}
+      </label>`;
+
+    const rows = [];
+    if (noteCategories.length > 0) {
+      rows.push(option('dup-categories', 'Categories &amp; subcategories',
+        escapeHtml(noteCategories.map(categoryDetailLabel).join(', '))));
+    }
+    if (note.body) rows.push(option('dup-body', 'Body'));
+    if (note.description) rows.push(option('dup-description', 'Description'));
+    if (note.tags) rows.push(option('dup-tags', 'Tags', escapeHtml(note.tags)));
+    if (note.is_private) rows.push(option('dup-private', 'Private'));
+    if (note.is_flagged) rows.push(option('dup-flagged', 'Follow-up flag'));
+
+    modalBody.innerHTML = `
+      <div class="form-group">
+        <label class="form-label" for="dup-title">Title</label>
+        <input type="text" class="form-input" id="dup-title" placeholder="Note title...">
+      </div>
+      ${rows.length > 0
+        ? `<p class="settings-description">Also copy from the original:</p>
+           <div class="dup-options">${rows.join('')}</div>`
+        : ''}
+    `;
+
+    // The title is assigned as a property, not interpolated into the markup:
+    // escapeHtml() escapes element text, not attribute quotes, so a title
+    // containing a double quote would otherwise break out of value="…".
+    const titleInput = document.getElementById('dup-title');
+    titleInput.value = COPY_PREFIX + note.title;
+
+    // Enter anywhere in the title is the same as clicking Duplicate — this is
+    // a two-field dialog, not a form worth tabbing through.
+    titleInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        window.app.confirmModal();
+      }
+    });
+
+    modalFooter.style.display = '';
+    const confirmBtn = document.getElementById('modal-confirm');
+    if (confirmBtn) confirmBtn.textContent = 'Duplicate';
+    modalConfirmHandler = () => performDuplicate(note, noteCategories);
+
+    document.getElementById('modal-overlay').classList.add('open');
+    titleInput.focus();
+    // Caret at the end rather than a full selection: the prefix is the default
+    // answer, so the next keystroke should extend the title, not wipe it.
+    titleInput.setSelectionRange(titleInput.value.length, titleInput.value.length);
+  }
+
+  // performDuplicate creates the copy from whatever the dialog left checked.
+  // A missing checkbox reads as "not offered, so not copied", which is what
+  // showDuplicateDialog means by omitting a row for an empty field.
+  async function performDuplicate(note, noteCategories) {
+    const checked = (id) => {
+      const el = document.getElementById(id);
+      return !!(el && el.checked);
     };
 
-    // Add body field based on encoding mode
+    const titleInput = document.getElementById('dup-title');
+    const title = titleInput ? titleInput.value.trim() : '';
+    if (!title) {
+      showToast('Title is required', 'error');
+      return;
+    }
+
+    const copyCategories = checked('dup-categories');
+    const bodyContent = checked('dup-body') ? note.body : null;
+
+    const noteData = {
+      guid: generateGUID(),
+      title: title,
+      description: checked('dup-description') ? note.description : null,
+      tags: checked('dup-tags') ? note.tags : null,
+      is_private: checked('dup-private'),
+      is_flagged: checked('dup-flagged')
+    };
+
+    // Body field selection mirrors saveNote: msgpack when available, plain
+    // text otherwise, and plain text again if the encoder declines.
     const useMsgPack = USE_MSGPACK_ENCODING && typeof MessagePack !== 'undefined';
     if (useMsgPack && bodyContent) {
       const encodedBody = encodeMsgPackBody(bodyContent);
@@ -602,21 +725,58 @@
       noteData.body = bodyContent;
     }
 
+    const confirmBtn = document.getElementById('modal-confirm');
+    if (confirmBtn) {
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Duplicating...';
+    }
+
     try {
       const response = await apiRequest('/notes', {
         method: 'POST',
         body: JSON.stringify(noteData)
       });
+      if (!response || !response.data) throw new Error('empty create response');
 
-      if (response && response.data) {
-        showToast('Note duplicated', 'success');
-        await loadNotes();
-        window.app.selectNote(response.data.id);
+      const newNoteId = response.data.id;
+
+      if (copyCategories) {
+        // Category links are created one at a time, after the note exists.
+        // The POST body carries this note's own subcategory selection, so the
+        // copy keeps not just the categories but which subcategories were
+        // ticked for the original — that pairing is the point of the feature.
+        for (const cat of noteCategories) {
+          try {
+            await apiRequest(`/notes/${newNoteId}/categories/${cat.id}`, {
+              method: 'POST',
+              body: JSON.stringify({ subcategories: cat.selected_subcategories || [] })
+            });
+          } catch (catError) {
+            // Secondary to the note itself: keep the copy, name what it lost.
+            console.error('Failed to copy category to duplicate:', catError);
+            showToast(`Could not copy category "${cat.name}"`, 'warning');
+          }
+        }
       }
+
+      // closeModal also restores the shared footer button's label and state.
+      window.app.closeModal();
+      showToast('Note duplicated', 'success');
+
+      await loadNotes();
+      if (copyCategories) await window.app._loadNoteCategoryMappings();
+      renderNoteList();
+      window.app.selectNote(newNoteId);
     } catch (error) {
+      // Leave the dialog open with the user's title intact so they can retry.
+      console.error('Duplicate failed:', error);
       showToast('Failed to duplicate note', 'error');
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Duplicate';
+      }
     }
-  };
+  }
 
   // ============================================
   // Note Selection and Preview
@@ -1433,14 +1593,32 @@
   // Modal Dialogs
   // ============================================
 
+  // modalConfirmHandler lets one dialog own the shared footer's primary button.
+  // Null means the generic modal, whose Confirm does nothing but dismiss. The
+  // handler closes the modal itself, so a failed action can keep the dialog
+  // open with the user's input still in it.
+  let modalConfirmHandler = null;
+
   window.app.closeModal = function() {
     document.getElementById('modal-overlay').classList.remove('open');
+    modalConfirmHandler = null;
     // Restore default footer visibility in case a modal hid it
     const footer = document.getElementById('modal-footer');
     if (footer) footer.style.display = '';
+    // ...and the shared button's default label/state, since a dialog may have
+    // renamed it ("Duplicate") or disabled it while its action was in flight.
+    const confirmBtn = document.getElementById('modal-confirm');
+    if (confirmBtn) {
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Confirm';
+    }
   };
 
   window.app.confirmModal = function() {
+    if (modalConfirmHandler) {
+      modalConfirmHandler();
+      return;
+    }
     window.app.closeModal();
   };
 
@@ -1598,6 +1776,19 @@
   // ============================================
 
   document.addEventListener('keydown', function(e) {
+    // A modal owns the screen while it is open: Escape dismisses it (including
+    // from inside its own inputs, where the edit-form branch below would not
+    // fire), and every other shortcut is swallowed so keys like 'n' can't act
+    // on the list hidden behind the dialog.
+    const overlay = document.getElementById('modal-overlay');
+    if (overlay && overlay.classList.contains('open')) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        window.app.closeModal();
+      }
+      return;
+    }
+
     // Don't trigger shortcuts when typing in inputs
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
       // Allow Escape to cancel edit

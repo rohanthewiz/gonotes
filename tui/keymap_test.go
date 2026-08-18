@@ -38,6 +38,9 @@ func TestBindingKeys(t *testing.T) {
 		{"delete", keys.Delete, []string{"d"}},
 		{"flag", keys.Flag, []string{"f"}},
 		{"categories", keys.Categories, []string{"c"}},
+		// Shifted, and deliberately not sharing with DiscardExit's "d","D" —
+		// that pair lives on the unsaved dialog, which this never reaches.
+		{"duplicate", keys.Duplicate, []string{"D"}},
 
 		{"scroll (help-only; the viewport consumes these)", keys.Scroll, []string{"up", "down"}},
 
@@ -65,6 +68,9 @@ func TestBindingKeys(t *testing.T) {
 		{"toggle private", keys.TogglePrivate, []string{"space"}},
 
 		{"confirm yes", keys.Yes, []string{"y", "Y", "enter"}},
+		// The third screen to bind the space bar, pinned separately for the same
+		// reason SelectSub is: a rebind of one must not quietly move the others.
+		{"include in a duplicate", keys.Include, []string{"space"}},
 		{"confirm no", keys.No, []string{"n", "N", "esc", "q"}},
 
 		// The unsaved-changes dialog. Its three answers are pinned as carefully
@@ -118,6 +124,7 @@ func TestHelpSetsAreHandled(t *testing.T) {
 			handled: []key.Binding{
 				keys.Open, keys.New, keys.Edit, keys.Delete,
 				keys.Flag, keys.Categories, keys.Quit, keys.Back,
+				keys.Duplicate,
 				// The capture door. It is handled but deliberately NOT
 				// advertised — see captureHint in capture.go.
 				keys.Capture,
@@ -150,7 +157,7 @@ func TestHelpSetsAreHandled(t *testing.T) {
 			handled: []key.Binding{
 				// Scroll's arrows are not matched by the screen; they fall
 				// through to the viewport, which is a real handler.
-				keys.Scroll, keys.Edit, keys.Flag, keys.Delete,
+				keys.Scroll, keys.Edit, keys.Duplicate, keys.Flag, keys.Delete,
 				keys.Back, keys.Quit,
 			},
 		},
@@ -176,6 +183,16 @@ func TestHelpSetsAreHandled(t *testing.T) {
 			screen:  "prompt",
 			help:    keys.promptHelp(),
 			handled: []key.Binding{keys.Submit, keys.Back},
+		},
+		{
+			screen: "duplicate",
+			help:   keys.duplicateHelp(),
+			handled: []key.Binding{
+				// Move is help-only here: the dispatch is on FieldUp/FieldDown,
+				// which are the same two arrows named one direction at a time.
+				keys.FieldUp, keys.FieldDown, keys.NextField, keys.PrevField,
+				keys.Include, keys.Submit, keys.Back,
+			},
 		},
 		{
 			screen:  "unsaved changes",
@@ -217,6 +234,7 @@ func TestHelpSetsHaveText(t *testing.T) {
 		"form":          keys.formHelp(),
 		"login":         keys.loginHelp(),
 		"prompt":        keys.promptHelp(),
+		"duplicate":     keys.duplicateHelp(),
 		"unsaved":       keys.unsavedHelp(),
 	}
 	for name, set := range sets {

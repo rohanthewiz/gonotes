@@ -489,6 +489,17 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		}
 		return s, tea.Batch(s.refresh(), status("Note deleted"))
 
+	case noteDuplicatedMsg:
+		// The list reloads either way: an error here can still have left a copy
+		// behind (a category that would not attach), and a list that does not
+		// show it would be the second wrong thing to happen. Which of the two
+		// failures happened is read off the note, not off the error text —
+		// serr's wrap message is context for the log, not part of Error().
+		if msg.err != nil {
+			return s, tea.Batch(s.refresh(), statusErr(msg.err, duplicateErrContext(msg.note)))
+		}
+		return s, tea.Batch(s.refresh(), status("Duplicated as \""+msg.note.Title+"\""))
+
 	case tea.MouseWheelMsg:
 		// Only over the list: the preview pane renders a fixed block rather than
 		// a viewport, so there is nothing on that side to scroll, and rolling
@@ -577,6 +588,14 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		case key.Matches(msg, keys.Flag):
 			if n := s.selectedNote(); n != nil {
 				return s, toggleFlagCmd(s.sess.store, n.ID, s.sess.user.GUID)
+			}
+
+		case key.Matches(msg, keys.Duplicate):
+			if n := s.selectedNote(); n != nil {
+				// No lock is taken: duplicating READS the selected note and
+				// writes a different one, so it neither blocks nor is blocked by
+				// whoever has the original open for editing.
+				return s, push(newDuplicateScreen(s.sess, *n))
 			}
 
 		case key.Matches(msg, keys.Delete):

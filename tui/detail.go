@@ -185,6 +185,17 @@ func (s *detailScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		// We just deleted the note we're looking at — back to the list.
 		return s, tea.Sequence(pop(true), status("Note deleted"))
 
+	case noteDuplicatedMsg:
+		if msg.err != nil {
+			// Stay on the note: the copy is what failed, and this screen is
+			// still showing the thing the user was reading.
+			return s, statusErr(msg.err, duplicateErrContext(msg.note))
+		}
+		// Back to the list, which is where the new note actually is. Staying
+		// here would leave the user looking at the original with only a status
+		// line to say that anything happened.
+		return s, tea.Sequence(pop(true), status("Duplicated as \""+msg.note.Title+"\""))
+
 	case tea.KeyPressMsg:
 		switch {
 		case key.Matches(msg, keys.Back, keys.Quit):
@@ -194,6 +205,10 @@ func (s *detailScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			// Claim first, open second — the same order browse uses. The form
 			// is pushed from the reply (see lockAcquiredMsg below).
 			return s, acquireLockCmd(s.sess.store, &s.note, s.sess.user.GUID, false)
+		case key.Matches(msg, keys.Duplicate):
+			// Read-only as far as this note is concerned, so no lock is taken —
+			// see the same call on the browse screen.
+			return s, push(newDuplicateScreen(s.sess, s.note))
 		case key.Matches(msg, keys.Flag):
 			return s, toggleFlagCmd(s.sess.store, s.note.ID, s.sess.user.GUID)
 		case key.Matches(msg, keys.Delete):

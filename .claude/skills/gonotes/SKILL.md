@@ -172,11 +172,19 @@ re-export and byte-diff as an independent check.
 **Terminal UI**: `gonotes tui` (or `gonotes tui -d <dir>`). Keys: `/` search,
 `n`/`e` new/edit, `c` category filter (then `s` for that category's
 subcategories, `space` to toggle several, `enter` to filter), `f` flag, `d`
-delete, `ctrl+e` edit body in `$EDITOR`, `ctrl+s` save, `ctrl+g` capture an agent
-pane, `q`/`esc` quit. Leaving a dirty form raises a three-way dialog —
-`s`/`enter` save & exit, `d` discard, `esc` keep editing. The note form's
+delete, `D` duplicate, `ctrl+e` edit body in `$EDITOR`, `ctrl+s` save, `ctrl+g`
+capture an agent pane, `q`/`esc` quit. Leaving a dirty form raises a three-way
+dialog — `s`/`enter` save & exit, `d` discard, `esc` keep editing. The note form's
 Categories field takes the same `Name/Sub` notation as the frontmatter and
 `gn-clip -c`, creating unknown categories and subcategories on save.
+
+`D` (browse or detail) opens the duplicate dialog: an editable title prefilled
+`COPY <title>`, then a checkbox per part the copy can carry over — categories
+**with their per-note subcategory selection** first, then body, description,
+tags, private and flagged, all checked, and only shown when the source note has
+them. `↑`/`↓` move, `space` includes, `enter` duplicates, `esc` cancels. The web
+UI's Duplicate button opens the same dialog. No lock is taken: duplicating reads
+the original and writes a new note.
 
 **Build & test**: `go build -o gonotes .` (pure Go now — bytdb needs no cgo);
 `go vet && go test -race ./...`. Tests that touch models open their own

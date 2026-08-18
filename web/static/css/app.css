@@ -2223,6 +2223,51 @@ mark.note-search-hit-current {
   background: var(--bg-secondary);
 }
 
+/* Duplicate-note dialog — one checkbox per thing that can be carried over.
+   Rows are full-width click targets so the label, not just the 18px box,
+   toggles the option. The detail span (category paths, tag list) is the
+   answer to "what exactly would I be copying?", so it stays on the row but
+   recedes visually, and wraps rather than stretching the modal. */
+.dup-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.dup-option {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.dup-option:hover {
+  background: var(--bg-tertiary);
+}
+
+.dup-checkbox {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary);
+  /* Baseline alignment puts a checkbox low against its label; nudge it back. */
+  align-self: center;
+}
+
+.dup-option-label {
+  font-size: var(--font-size-sm);
+}
+
+.dup-option-detail {
+  flex: 1 1 100%;
+  padding-left: calc(18px + var(--spacing-sm));
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}
+
 /* ============================================
    Toast Notifications
    ============================================ */

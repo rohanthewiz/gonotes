@@ -43,6 +43,11 @@ type keyMap struct {
 	Flag       key.Binding
 	Categories key.Binding // open the category screen
 	Scroll     key.Binding // help-only: the viewport's own ↑/↓ handling
+	// Duplicate opens the copy dialog on the selected note. Shifted, because
+	// every unshifted letter on these screens is already spent — and "d" of all
+	// letters is the one it must not share, since the neighbouring meaning is
+	// delete.
+	Duplicate key.Binding
 
 	// ---- Category and subcategory screens ---------------------------------
 	Filter   key.Binding // enter: narrow the note list to this category
@@ -75,6 +80,13 @@ type keyMap struct {
 	// ---- Confirm dialog ---------------------------------------------------
 	Yes key.Binding
 	No  key.Binding
+
+	// ---- Duplicate dialog -------------------------------------------------
+	// Include toggles one thing the copy will carry over. It shares the space
+	// bar with TogglePrivate and SelectSub, on screens neither of those
+	// reaches, and stays a separate binding so this footer can name what THIS
+	// screen's space bar does.
+	Include key.Binding
 
 	// ---- Unsaved-changes dialog -------------------------------------------
 	// Leaving a dirty form is a three-way question, not a yes/no one, so it
@@ -154,6 +166,16 @@ func defaultKeyMap() keyMap {
 			key.WithHelp("↑/↓", "scroll"),
 		),
 
+		// "D" rather than a free unshifted letter: browse spends every one of
+		// those on a note action, and the shifted form of the neighbouring
+		// action keeps the mnemonic. The slip that matters — reaching for D and
+		// getting d — lands on the delete CONFIRMATION, which is one esc away
+		// from nothing having happened.
+		Duplicate: key.NewBinding(
+			key.WithKeys("D"),
+			key.WithHelp("D", "duplicate"),
+		),
+
 		Filter: key.NewBinding(
 			key.WithKeys("enter"),
 			key.WithHelp("enter", "filter notes"),
@@ -231,6 +253,13 @@ func defaultKeyMap() keyMap {
 		Yes: key.NewBinding(
 			key.WithKeys("y", "Y", "enter"),
 			key.WithHelp("y/enter", "confirm"),
+		),
+
+		// The same space bar as TogglePrivate, named for what it does here:
+		// the question on the duplicate dialog is what the copy INCLUDES.
+		Include: key.NewBinding(
+			key.WithKeys("space"),
+			key.WithHelp("space", "include"),
 		),
 		No: key.NewBinding(
 			key.WithKeys("n", "N", "esc", "q"),
@@ -312,7 +341,11 @@ func defaultKeyMap() keyMap {
 // assert that no screen advertises a key it does not handle.
 
 func (k keyMap) browseHelp() []key.Binding {
-	return []key.Binding{k.Open, k.New, k.Edit, k.Delete, k.Flag, k.Categories, k.Quit}
+	// Duplicate sits late deliberately: the list footer is elided from the right
+	// on a narrow terminal, and edit/delete/flag are the rows that must survive
+	// the cut. Duplicate is discoverable wherever there is room for it, and the
+	// detail screen — which renders its whole footer — always has room.
+	return []key.Binding{k.Open, k.New, k.Edit, k.Delete, k.Flag, k.Categories, k.Duplicate, k.Quit}
 }
 
 func (k keyMap) categoriesHelp() []key.Binding {
@@ -328,7 +361,7 @@ func (k keyMap) agentPickerHelp() []key.Binding {
 }
 
 func (k keyMap) detailHelp() []key.Binding {
-	return []key.Binding{k.Scroll, k.Edit, k.Flag, k.Delete, k.Back}
+	return []key.Binding{k.Scroll, k.Edit, k.Duplicate, k.Flag, k.Delete, k.Back}
 }
 
 func (k keyMap) formHelp() []key.Binding {
@@ -337,6 +370,20 @@ func (k keyMap) formHelp() []key.Binding {
 
 func (k keyMap) loginHelp() []key.Binding {
 	return []key.Binding{k.Submit, k.NextField, k.ForceQuit}
+}
+
+// duplicateHelp is the copy dialog's footer. Move is the help-only ↑/↓ pair —
+// the screen dispatches on FieldUp/FieldDown, which are the same two keys said
+// one direction at a time.
+func (k keyMap) duplicateHelp() []key.Binding {
+	// enter is Submit — the same key the screen dispatches on — said in this
+	// dialog's own words. Built from Submit.Keys() rather than a fresh literal
+	// so a rebind of enter cannot leave this footer naming a dead key.
+	confirm := key.NewBinding(
+		key.WithKeys(k.Submit.Keys()...),
+		key.WithHelp("enter", "duplicate"),
+	)
+	return []key.Binding{k.Move, k.Include, confirm, k.Back}
 }
 
 func (k keyMap) promptHelp() []key.Binding {

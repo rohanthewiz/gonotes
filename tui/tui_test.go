@@ -60,6 +60,10 @@ func TestKeyNames(t *testing.T) {
 		{"delete", keyPress('d'), "d"},
 		{"flag", keyPress('f'), "f"},
 		{"categories", keyPress('c'), "c"},
+		// duplicate.go's door. A shifted letter arrives with Text already
+		// uppercased, which is what String() returns — so the binding is "D",
+		// not "shift+d".
+		{"duplicate", tea.KeyPressMsg{Code: 'd', ShiftedCode: 'D', Text: "D", Mod: tea.ModShift}, "D"},
 		{"all notes", keyPress('a'), "a"},
 		{"confirm yes", keyPress('y'), "y"},
 

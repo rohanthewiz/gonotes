@@ -1,5 +1,19 @@
 [
   {
+    "id": "07c719bdb46938a9",
+    "title": "Duplicating a note should duplicate the categories -- hmm m…",
+    "prompt": "Duplicating a note should duplicate the categories -- hmm maybe give a quick popup of what we want duplicated with defaults already checked.\nBy default we want 1) the title duplicated with the COPY prefix 2) Categories and Subcats",
+    "done": true,
+    "created": "2026-08-18T16:50:02.445785-05:00"
+  },
+  {
+    "id": "b5ac010093780fb7",
+    "title": "Bump / Create GoNotes tag when at a good point",
+    "prompt": "Bump / Create GoNotes tag",
+    "done": true,
+    "created": "2026-08-17T00:22:50.1907-05:00"
+  },
+  {
     "id": "c11ae5b15496e05a",
     "title": "ESC key to quit, but warn and give oppor to save on dirty b…",
     "prompt": "ESC key to quit, but warn and give oppor to save on dirty buffer",
@@ -54,17 +68,17 @@
     }
   },
   {
-    "id": "c18d223b23d56536",
-    "title": "GoNotes needs to be tagged",
-    "prompt": "GoNotes needs to be tagged",
+    "id": "55835cdf21b00d3c",
+    "title": "Delete not working?",
+    "prompt": "Delete not working?",
     "done": false,
-    "created": "2026-08-16T22:48:37.376682-05:00"
+    "created": "2026-08-18T16:44:22.743376-05:00"
   },
   {
-    "id": "b5ac010093780fb7",
-    "title": "Bump / Create GoNotes tag when at a good point",
-    "prompt": "Bump / Create GoNotes tag when at a good point",
+    "id": "0b9978ff8c514c4a",
+    "title": "Add option to compact changes if not yet synched.",
+    "prompt": "Do not auto-synch by default -- rather prompt to sync after 2hrs or on exit.\nAdd option to compact changes if not yet synched.",
     "done": false,
-    "created": "2026-08-17T00:22:50.1907-05:00"
+    "created": "2026-08-18T16:45:25.160229-05:00"
   }
 ]

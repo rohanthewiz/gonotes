@@ -319,6 +319,54 @@ func registerSubcategories(st Store, cat models.Category, subs []string, userGUI
 	return nil
 }
 
+// noteDuplicatedMsg is the reply to the duplicate dialog. It carries the copy
+// even when err is set, because the two failures it reports are not the same
+// shape: a create that failed has no note, while a category that failed to
+// attach has one — and the list must still refresh to show it.
+type noteDuplicatedMsg struct {
+	note *models.Note
+	err  error
+}
+
+// duplicateNoteCmd creates the copy and files it under the given categories.
+//
+// It takes the category DETAILS rather than ids because a copy has to reproduce
+// the note's selection within each category ("Work/backend", not "Work"), and
+// the detail struct is the only shape that carries both. Attaching happens in
+// one call per category — AddCategoryToNoteWithSubcategories is the same door
+// the form's category sync uses for a new link, and it records the selection on
+// the insert rather than needing an update afterwards.
+//
+// The GUID is generated here for the same reason saveNoteCmd generates one:
+// both stores require the caller to supply it, matching the web API.
+func duplicateNoteCmd(st Store, input models.NoteInput, cats []models.NoteCategoryDetailOutput, userGUID string) tea.Cmd {
+	return func() tea.Msg {
+		input.GUID = uuid.New().String()
+		note, err := st.CreateNote(input, userGUID)
+		if err != nil {
+			return noteDuplicatedMsg{err: err}
+		}
+		if note == nil {
+			return noteDuplicatedMsg{err: serr.New("the copy was not created")}
+		}
+
+		for _, c := range cats {
+			if err = st.AddCategoryToNoteWithSubcategories(
+				note.ID, c.ID, c.SelectedSubcategories, userGUID); err != nil {
+				// Stop at the first failure and name the category in the error
+				// text itself — serr.Wrap's message is context for the log, not
+				// part of Error(), and this string is going straight into the
+				// status bar. The copy is real and is returned regardless; what
+				// it means that note is non-nil here is the receiving screen's
+				// to phrase.
+				return noteDuplicatedMsg{note: note,
+					err: serr.Wrap(err, "failed to attach category "+c.Name+" to the copy")}
+			}
+		}
+		return noteDuplicatedMsg{note: note}
+	}
+}
+
 type noteDeletedMsg struct{ err error }
 
 func deleteNoteCmd(st Store, id int64, userGUID string) tea.Cmd {
