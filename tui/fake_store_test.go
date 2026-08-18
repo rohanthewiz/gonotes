@@ -56,6 +56,18 @@ type fakeStore struct {
 	// storage failure any other way means corrupting a real database.
 	failWith error
 
+	// ---- Sync ---------------------------------------------------------------
+	// syncStatus is what SyncStatus reports; nil means this installation has no
+	// sync configured, which is what most do. The counters are how a test says
+	// "the user answered the prompt with this" without a hub anywhere in sight.
+	syncStatus    *models.SyncClientStatus
+	syncFailWith  error // when set, SyncNow reports this instead of succeeding
+	syncCalls     int
+	syncCompacted bool // a SyncNow was asked to compact on the way
+	snoozeCalls   int
+	compactCalls  int
+	declineCalls  int
+
 	// tokens mirrors what the real stores keep: the lease tokens this "session"
 	// holds. Same type, same bookkeeping — so a test exercises the same
 	// token-by-note-id plumbing production uses.
@@ -602,6 +614,71 @@ func (f *fakeStore) RemoveCategoryFromNote(noteID, categoryID int64) error {
 		}
 	}
 	return serr.New("relationship not found")
+}
+
+// ---- Sync ------------------------------------------------------------------
+//
+// The fake's sync is a struct a test sets and four methods that read it. That
+// is enough for everything the TUI does with sync — the banner, the due
+// prompt, the quit guard, the compact answer — because the TUI never computes
+// any of it, it only renders what the store reports and calls back.
+
+// syncStatus, when non-nil, is what SyncStatus returns. Nil is the common
+// installation: no hub, nothing about sync on screen anywhere.
+func (f *fakeStore) setSyncStatus(status *models.SyncClientStatus) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.syncStatus = status
+}
+
+func (f *fakeStore) SyncStatus() (*models.SyncClientStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failWith != nil {
+		return nil, f.failWith
+	}
+	return f.syncStatus, nil
+}
+
+func (f *fakeStore) SyncNow(compact bool) (*models.SyncClientStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.syncCalls++
+	f.syncCompacted = f.syncCompacted || compact
+	if f.syncFailWith != nil {
+		return f.syncStatus, f.syncFailWith
+	}
+	// A successful cycle clears the two things the UI reads: nothing is
+	// pending any more, and nothing is due.
+	if f.syncStatus != nil {
+		f.syncStatus.Pending = 0
+		f.syncStatus.Due = false
+	}
+	return f.syncStatus, nil
+}
+
+func (f *fakeStore) SnoozeSync() (*models.SyncClientStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.snoozeCalls++
+	if f.syncStatus != nil {
+		f.syncStatus.Due = false
+	}
+	return f.syncStatus, nil
+}
+
+func (f *fakeStore) CompactChanges() (*models.CompactionResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.compactCalls++
+	return &models.CompactionResult{ChangesBefore: 9, ChangesAfter: 3}, nil
+}
+
+func (f *fakeStore) DeclineExitSync() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.declineCalls++
+	return nil
 }
 
 func ptrToNull(p *string) sql.NullString {

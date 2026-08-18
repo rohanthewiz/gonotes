@@ -37,7 +37,7 @@ func (p Page) renderHead(b *element.Builder) any {
 		// Inline theme init — runs before CSS to prevent flash of wrong theme
 		b.Script().T(`(function(){var t=localStorage.getItem('gonotes-theme')||'dark-green';document.documentElement.setAttribute('data-theme',t);})()`),
 		// CSS
-		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=9"),
+		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=10"),
 		// Highlight.js CSS theme - chosen based on current theme (default to dark)
 		b.Link("rel", "stylesheet", "id", "hljs-theme", "href", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css"),
 		// Update hljs theme link based on saved preference
@@ -66,6 +66,17 @@ func (p Page) renderBody(b *element.Builder) any {
 		b.Div("class", "app-container", "id", "app").R(
 			// Top toolbar — includes search, filters, sort, and user controls in one row
 			element.RenderComponents(b, Toolbar{}),
+
+			// The "a sync is due" banner. Empty and hidden until the sync
+			// client says otherwise (sync.js polls /sync/control/status), and
+			// permanently absent on installations with no hub configured.
+			//
+			// It sits between the toolbar and the panes rather than floating
+			// over them because it is a standing condition, not an event: it
+			// stays until the user syncs or defers, and a toast that vanished
+			// after four seconds would be exactly the reminder that gets
+			// missed. See "prompt mode" in models/sync_config.go.
+			b.Div("class", "sync-due-banner", "id", "sync-due-banner", "hidden", "hidden").R(),
 
 			// Main content area with three panes
 			b.Div("class", "app-main", "id", "app-main").R(
@@ -112,7 +123,7 @@ func (p Page) renderBody(b *element.Builder) any {
 		// app.js must load first — it exposes _internal for cats_subcats.js
 		b.Script("src", "/static/js/app.js?v=10").R(),
 		b.Script("src", "/static/js/cats_subcats.js?v=2").R(),
-		b.Script("src", "/static/js/sync.js?v=1").R(),
+		b.Script("src", "/static/js/sync.js?v=2").R(),
 		b.Script("src", "/static/js/note_links.js?v=2").R(),
 		b.Script("src", "/static/js/image_embed.js?v=2").R(),
 		b.Script("src", "/static/js/note_search.js?v=2").R(),

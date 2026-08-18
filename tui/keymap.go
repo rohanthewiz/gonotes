@@ -96,6 +96,16 @@ type keyMap struct {
 	DiscardExit key.Binding
 	CancelExit  key.Binding
 
+	// ---- Sync -------------------------------------------------------------
+	// Sync is prompt-driven by default (see tui/sync.go), so it needs a door
+	// the user can open and a set of answers for when it opens itself.
+	Sync            key.Binding // "S": open the sync dialog from the list
+	SyncGo          key.Binding // sync now
+	SyncCompact     key.Binding // compact the pending log, then sync
+	SyncCompactOnly key.Binding // compact without syncing (the hub may be gone)
+	SyncLater       key.Binding // defer the prompt
+	SyncQuitAnyway  key.Binding // leave without syncing (quit dialog only)
+
 	// ---- Locked-note dialog -----------------------------------------------
 	// Shown when another session already has the note open. Like the unsaved
 	// dialog, this is a fork rather than a yes/no, so it gets its own letters
@@ -289,6 +299,46 @@ func defaultKeyMap() keyMap {
 			key.WithHelp("esc", "keep editing"),
 		),
 
+		// "S" rather than a bare "s": browse has no free unshifted letter left,
+		// and the shifted form keeps the mnemonic — the same reasoning that put
+		// duplicate on "D". A slip that lands on lowercase "s" on the browse
+		// screen does nothing at all, which is the right cost for a miss.
+		Sync: key.NewBinding(
+			key.WithKeys("S"),
+			key.WithHelp("S", "sync"),
+		),
+		// enter is bound to the plain sync rather than to the compacting one:
+		// the reflex answer should be the one that changes least. Compaction
+		// discards local change history, so it is always a letter, never enter.
+		SyncGo: key.NewBinding(
+			key.WithKeys("s", "y", "Y", "enter"),
+			key.WithHelp("s/enter", "sync now"),
+		),
+		SyncCompact: key.NewBinding(
+			key.WithKeys("c", "C"),
+			key.WithHelp("c", "compact & sync"),
+		),
+		// "p" for pack. Deliberately not a second "c": the difference between
+		// compacting-and-syncing and compacting-only is exactly the thing a
+		// user must not press by accident when the hub is unreachable.
+		SyncCompactOnly: key.NewBinding(
+			key.WithKeys("p", "P"),
+			key.WithHelp("p", "compact only"),
+		),
+		// esc is bound here — the dialog the clock raised was not asked for, so
+		// the reflex dismissal has to be the answer that loses nothing: it
+		// defers, and the banner keeps saying a sync is owed.
+		SyncLater: key.NewBinding(
+			key.WithKeys("l", "esc"),
+			key.WithHelp("esc", "later"),
+		),
+		// "q" only, and only on the quit dialog. It is the answer that leaves
+		// changes on this machine, so it gets neither enter nor esc.
+		SyncQuitAnyway: key.NewBinding(
+			key.WithKeys("q", "Q"),
+			key.WithHelp("q", "quit without syncing"),
+		),
+
 		// "r" for read — the safe answer, and the one enter is bound to for the
 		// same reason it is bound to "save & exit" on the unsaved dialog: a
 		// dialog the user did not ask for gets dismissed on reflex, so the
@@ -340,12 +390,35 @@ func defaultKeyMap() keyMap {
 // a binding to a screen is a one-line change here, and so keymap_test.go can
 // assert that no screen advertises a key it does not handle.
 
+// syncHelp is the sync dialog's answer set. It varies by why the dialog is up:
+// only the quit form offers "leave without syncing", and only the forms the
+// user did not open themselves describe their escape as deferring.
+func (k keyMap) syncHelp(purpose syncPurpose) []key.Binding {
+	rows := []key.Binding{k.SyncGo, k.SyncCompact, k.SyncCompactOnly}
+	if purpose == syncQuitting {
+		rows = append(rows, k.SyncQuitAnyway)
+		// On the quit dialog, esc is "stay in GoNotes" rather than "defer" —
+		// the same key doing the same thing (nothing irreversible), said in
+		// the words this dialog makes true.
+		return append(rows, key.NewBinding(
+			key.WithKeys(k.SyncLater.Keys()...),
+			key.WithHelp("esc", "keep working"),
+		))
+	}
+	return append(rows, k.SyncLater)
+}
+
 func (k keyMap) browseHelp() []key.Binding {
 	// Duplicate sits late deliberately: the list footer is elided from the right
 	// on a narrow terminal, and edit/delete/flag are the rows that must survive
 	// the cut. Duplicate is discoverable wherever there is room for it, and the
 	// detail screen — which renders its whole footer — always has room.
-	return []key.Binding{k.Open, k.New, k.Edit, k.Delete, k.Flag, k.Categories, k.Duplicate, k.Quit}
+	//
+	// Sync sits beside Duplicate for the same reason and with the same
+	// trade-off: it is worth finding, and it is not worth pushing edit or
+	// delete off a narrow footer. The banner names the key too, on exactly the
+	// occasions when it matters.
+	return []key.Binding{k.Open, k.New, k.Edit, k.Delete, k.Flag, k.Categories, k.Duplicate, k.Sync, k.Quit}
 }
 
 func (k keyMap) categoriesHelp() []key.Binding {

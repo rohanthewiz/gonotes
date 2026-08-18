@@ -129,4 +129,9 @@ func setupRoutes(s *rweb.Server) {
 	s.Get("/api/v1/sync/control/status", api.SyncControlStatus)
 	s.Post("/api/v1/sync/control/toggle", api.SyncControlToggle)
 	s.Post("/api/v1/sync/control/sync-now", api.SyncControlNow)
+	// Prompt mode: defer the "sync is due" question, switch how it is asked,
+	// and collapse the change log that built up while it went unanswered.
+	s.Post("/api/v1/sync/control/snooze", api.SyncControlSnooze)
+	s.Post("/api/v1/sync/control/mode", api.SyncControlMode)
+	s.Post("/api/v1/sync/control/compact", api.SyncControlCompact)
 }

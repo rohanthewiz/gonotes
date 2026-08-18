@@ -544,6 +544,188 @@
   // Init Handler
   // ============================================
 
+  // ============================================
+  // Spoke sync: the prompt, the compaction, the exit
+  //
+  // This is a DIFFERENT sync from everything above. The code above is
+  // browser-driven peer sync (this tab talking to another GoNotes over CORS).
+  // What follows drives the SERVER's sync client — the hub-spoke background
+  // client in models/sync_client.go — which since prompt mode became the
+  // default no longer syncs on its own.
+  //
+  // The contract is one endpoint family:
+  //
+  //   GET  /sync/control/status    the clock: due, pending, mode, last sync
+  //   POST /sync/control/sync-now  {compact:bool} — run a cycle
+  //   POST /sync/control/snooze    defer the prompt without syncing
+  //   POST /sync/control/compact   collapse the pending log without syncing
+  //
+  // Everything here is inert when the server reports enabled:false, which is
+  // every installation that has not configured a hub.
+  // ============================================
+
+  // spokeStatus is the last status the server reported, or null before the
+  // first poll. Kept module-level rather than on app state because nothing
+  // else reads it and it is replaced wholesale on every poll.
+  let spokeStatus = null;
+
+  // spokePollMs is how often the clock is re-read. A minute is far finer than
+  // the two-hour prompt interval it watches for and coarse enough to be one
+  // request per minute.
+  const spokePollMs = 60000;
+
+  async function pollSpokeSync() {
+    try {
+      const resp = await apiRequest('/sync/control/status');
+      spokeStatus = (resp && resp.data) ? resp.data : null;
+    } catch (err) {
+      // An unreachable server is a condition the rest of the UI already
+      // reports. Leaving the last known status in place beats blanking the
+      // banner on one failed poll.
+      return;
+    }
+    renderSpokeBanner();
+  }
+
+  // spokeSummary phrases the state in the two terms a person holds: how much
+  // is waiting, and how long it has been.
+  function spokeSummary() {
+    if (!spokeStatus) return '';
+    const parts = [];
+    if (spokeStatus.pending_changes > 0) {
+      parts.push(spokeStatus.pending_changes +
+        (spokeStatus.pending_changes === 1 ? ' change' : ' changes') + ' not synced');
+    }
+    if (!spokeStatus.last_sync) {
+      parts.push('never synced with the hub');
+    } else {
+      parts.push('last synced ' + formatRelativeTime(spokeStatus.last_sync));
+    }
+    return parts.join(', ');
+  }
+
+  function renderSpokeBanner() {
+    const el = document.getElementById('sync-due-banner');
+    if (!el) return;
+
+    const show = spokeStatus && spokeStatus.enabled && spokeStatus.due;
+    if (!show) {
+      el.hidden = true;
+      el.innerHTML = '';
+      return;
+    }
+
+    // The compacting answer is only offered when there is something to
+    // compact, and never when the server compacts on every push anyway —
+    // a button that does what is already happening is a button that teaches
+    // the wrong thing about what it does.
+    const offerCompact = spokeStatus.pending_changes > 1 && !spokeStatus.compact_before_push;
+
+    el.innerHTML =
+      '<span class="sync-due-text">\u27F2 Sync is due \u2014 ' + escapeHtml(spokeSummary()) + '.</span>' +
+      '<span class="sync-due-actions">' +
+        '<button class="btn btn-primary" onclick="app.spokeSyncNow(false)">Sync now</button>' +
+        (offerCompact
+          ? '<button class="btn btn-secondary" onclick="app.spokeSyncNow(true)" ' +
+            'title="Collapse the pending change log to one change per note, then sync">Compact &amp; sync</button>'
+          : '') +
+        '<button class="btn btn-secondary" onclick="app.spokeSnooze()">Later</button>' +
+      '</span>';
+    el.hidden = false;
+  }
+
+  window.app.spokeSyncNow = async function(compact) {
+    const banner = document.getElementById('sync-due-banner');
+    if (banner) banner.hidden = true; // no second click while it runs
+    updateSyncStatus('syncing', compact ? 'Compacting and syncing...' : 'Syncing...');
+
+    try {
+      const resp = await apiRequest('/sync/control/sync-now', {
+        method: 'POST',
+        body: JSON.stringify({ compact: !!compact })
+      });
+      spokeStatus = (resp && resp.data) ? resp.data : spokeStatus;
+      updateSyncStatus('synced', 'Synced');
+      showToast(compact ? 'Compacted and synced with the hub' : 'Synced with the hub', 'success');
+      // The hub may have sent notes back, so the list on screen is stale.
+      await loadNotes();
+      renderNoteList();
+    } catch (err) {
+      updateSyncStatus('error', 'Sync failed');
+      showToast('Sync failed: ' + err.message, 'error');
+    } finally {
+      renderSpokeBanner();
+    }
+  };
+
+  window.app.spokeSnooze = async function() {
+    try {
+      const resp = await apiRequest('/sync/control/snooze', { method: 'POST', body: JSON.stringify({}) });
+      spokeStatus = (resp && resp.data) ? resp.data : spokeStatus;
+    } catch (err) {
+      showToast('Could not defer the sync prompt: ' + err.message, 'error');
+    }
+    renderSpokeBanner();
+  };
+
+  // spokeCompactOnly collapses the log without syncing. Worth having on its
+  // own precisely when the hub is unreachable, which is when the log grows.
+  window.app.spokeCompactChanges = async function() {
+    try {
+      const resp = await apiRequest('/sync/control/compact', { method: 'POST', body: JSON.stringify({}) });
+      const c = resp && resp.data ? resp.data.compaction : null;
+      if (resp && resp.data && resp.data.status) spokeStatus = resp.data.status;
+      if (c && c.changes_before > c.changes_after) {
+        showToast('Packed ' + c.changes_before + ' pending changes into ' + c.changes_after, 'success');
+      } else {
+        showToast('Nothing to compact', 'info');
+      }
+    } catch (err) {
+      showToast('Compaction failed: ' + err.message, 'error');
+    }
+    renderSpokeBanner();
+  };
+
+  // The exit half of "prompt after two hours, or on exit". A tab closing is
+  // the web UI's exit, and an ordinary fetch there is cancelled the moment the
+  // page goes away.
+  //
+  // fetch(keepalive) is the mechanism built for this: the browser keeps the
+  // request in flight after the document is gone, and unlike sendBeacon it can
+  // still carry the Authorization header — which matters, because the
+  // alternative would be putting a JWT in a query string to work around a
+  // header restriction.
+  //
+  // Fired only when something is actually pending, and best-effort throughout:
+  // the server's own shutdown cycle and the next prompt both still cover the
+  // case where it never arrives.
+  function syncOnUnload() {
+    if (!spokeStatus || !spokeStatus.enabled || spokeStatus.pending_changes === 0) return;
+
+    const token = localStorage.getItem('token');
+    if (!token) return;
+
+    try {
+      fetch('/api/v1/sync/control/sync-now', {
+        method: 'POST',
+        keepalive: true,
+        headers: {
+          'Authorization': 'Bearer ' + token,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ compact: false })
+      });
+    } catch (err) {
+      // Nothing to report to a user who has already closed the tab.
+    }
+  }
+
+  window.app._initSpokeSync = function() {
+    pollSpokeSync();
+    setInterval(pollSpokeSync, spokePollMs);
+    window.addEventListener('pagehide', syncOnUnload);
+  };
+
   window.app._initSyncHandlers = function() {
     // Initialize sync state on the shared app state
     getState().sync = {
@@ -584,6 +766,10 @@
 
     // Render initial sync stats from persisted state
     renderSyncStats();
+
+    // The server-side spoke sync is independent of everything above and has
+    // its own clock to watch.
+    window.app._initSpokeSync();
   };
 
 })();

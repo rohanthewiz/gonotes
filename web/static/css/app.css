@@ -3033,3 +3033,40 @@ mark.note-search-hit-current {
   margin-bottom: var(--spacing-lg);
   text-align: center;
 }
+
+/* ============================================
+   Sync-due banner
+   ============================================
+   Shown when the sync client reports that a cycle is owed (prompt mode — see
+   models/sync_config.go). A standing bar rather than a toast, because the
+   condition it reports does not pass on its own: it stays until the user
+   syncs or defers it.
+
+   Warning colors, not danger: nothing is broken and nothing is lost. There is
+   a decision waiting, and it should not compete with a real error. */
+.sync-due-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  padding: var(--spacing-sm) var(--spacing-lg);
+  background: var(--warning-light);
+  border-bottom: 1px solid var(--border-light);
+  font-size: var(--font-size-sm);
+}
+
+.sync-due-banner[hidden] {
+  display: none;
+}
+
+.sync-due-banner .sync-due-text {
+  flex: 1;
+}
+
+/* The actions sit at the end of the row and keep their reading order — sync,
+   the compacting variant, then the deferral. "Later" is deliberately last and
+   unstyled: it is the answer that changes nothing. */
+.sync-due-banner .sync-due-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  flex-shrink: 0;
+}

@@ -24,8 +24,16 @@ type SpokeExportConfig struct {
 	PasswordB64  string `json:"password_b64"`  // base64-encoded login password
 	JWTSecret    string `json:"jwt_secret"`    // hub's JWT signing secret
 	InviteToken  string `json:"invite_token"`  // single-use token for spoke registration
-	SyncInterval string `json:"sync_interval"` // e.g. "5m"
+	SyncInterval string `json:"sync_interval"` // e.g. "5m" — only auto mode reads it
 	ExportedAt   string `json:"exported_at"`   // RFC3339 timestamp
+
+	// SyncMode and PromptAfter carry the spoke's sync trigger. They are part
+	// of the export because a spoke set up from a config file is exactly the
+	// spoke nobody will think to configure by hand afterwards — and the
+	// difference between the two modes is whether its notes leave the machine
+	// without anyone asking.
+	SyncMode    string `json:"sync_mode"`    // "prompt" (default) or "auto"
+	PromptAfter string `json:"prompt_after"` // e.g. "2h" — prompt mode only
 }
 
 // ExportSpokeConfig handles POST /api/v1/admin/export-spoke-config
@@ -97,6 +105,8 @@ func ExportSpokeConfig(ctx rweb.Context) error {
 		JWTSecret:    os.Getenv("GONOTES_JWT_SECRET"),
 		InviteToken:  inviteToken.Token,
 		SyncInterval: "5m",
+		SyncMode:     string(models.SyncModePrompt),
+		PromptAfter:  "2h",
 		ExportedAt:   time.Now().UTC().Format(time.RFC3339),
 	}
 

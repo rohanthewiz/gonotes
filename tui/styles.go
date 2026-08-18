@@ -62,6 +62,12 @@ var (
 	statusErrStyle lipgloss.Style
 	statusOKStyle  lipgloss.Style
 
+	// syncDueStyle renders the "a sync is owed" line in the status bar. It
+	// takes the warn color rather than danger: nothing is broken and nothing
+	// is lost — there is a decision waiting, and the line should read like one
+	// without competing with a real error for attention.
+	syncDueStyle lipgloss.Style
+
 	// helpStyle renders key hints (e.g. "enter view • n new • q quit").
 	helpStyle lipgloss.Style
 
@@ -117,6 +123,7 @@ func applyPalette(p Palette) {
 	statusBarStyle = lipgloss.NewStyle().Foreground(colorSubtle).Padding(0, 1)
 	statusErrStyle = lipgloss.NewStyle().Foreground(colorDanger).Bold(true).Padding(0, 1)
 	statusOKStyle = lipgloss.NewStyle().Foreground(colorSuccess).Padding(0, 1)
+	syncDueStyle = lipgloss.NewStyle().Foreground(colorWarn).Padding(0, 1)
 
 	helpStyle = lipgloss.NewStyle().Foreground(colorSubtle)
 	dimStyle = lipgloss.NewStyle().Foreground(colorSubtle)

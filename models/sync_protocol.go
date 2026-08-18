@@ -841,3 +841,80 @@ func MarkSyncChangesForPeer(changes []SyncChange, peerID string) {
 		}
 	}
 }
+
+// ============================================================================
+// CountUnsentChangesForPeer
+// ============================================================================
+
+// CountUnsentChangesForPeer reports how many changes are waiting to go to a
+// peer, across notes (both databases) and categories.
+//
+// Prompt mode asks this on every status poll, which is why it counts rows
+// rather than calling GetUnifiedChangesForPeer and measuring the result: that
+// path loads every fragment and resolves an authored_at per change, which is
+// the right cost to pay when the changes are about to be pushed and an absurd
+// one to pay to render "3 changes waiting".
+//
+// OperationSync rows are excluded for the same reason compaction skips them —
+// they record changes this machine received, not changes it owes anyone.
+func CountUnsentChangesForPeer(peerID string, userGUID string) (int, error) {
+	noteCounts, err := queryBothNotes(func(en *dbEngine) ([]int, error) {
+		var q string
+		var args []any
+		if userGUID != "" {
+			q = `
+				SELECT COUNT(*) FROM note_changes nc
+				INNER JOIN notes n ON nc.note_guid = n.guid AND n.created_by = ?
+				WHERE nc.operation != ? AND nc.id NOT IN (
+					SELECT note_change_id FROM note_change_sync_peers WHERE peer_id = ?
+				)`
+			args = []any{userGUID, OperationSync, peerID}
+		} else {
+			q = `
+				SELECT COUNT(*) FROM note_changes nc
+				WHERE nc.operation != ? AND nc.id NOT IN (
+					SELECT note_change_id FROM note_change_sync_peers WHERE peer_id = ?
+				)`
+			args = []any{OperationSync, peerID}
+		}
+		var n int
+		if err := en.QueryRow(q, args...).Scan(&n); err != nil {
+			return nil, serr.Wrap(err, "failed to count unsent note changes")
+		}
+		return []int{n}, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	total := 0
+	for _, n := range noteCounts {
+		total += n
+	}
+
+	var catQuery string
+	var catArgs []any
+	if userGUID != "" {
+		catQuery = `
+			SELECT COUNT(*) FROM category_changes cc
+			INNER JOIN categories c ON cc.category_guid = c.guid AND c.created_by = ?
+			WHERE cc.operation != ? AND cc.id NOT IN (
+				SELECT category_change_id FROM category_change_sync_peers WHERE peer_id = ?
+			)`
+		catArgs = []any{userGUID, OperationSync, peerID}
+	} else {
+		catQuery = `
+			SELECT COUNT(*) FROM category_changes cc
+			WHERE cc.operation != ? AND cc.id NOT IN (
+				SELECT category_change_id FROM category_change_sync_peers WHERE peer_id = ?
+			)`
+		catArgs = []any{OperationSync, peerID}
+	}
+
+	var catCount int
+	if err := pubDB.QueryRow(catQuery, catArgs...).Scan(&catCount); err != nil {
+		return 0, serr.Wrap(err, "failed to count unsent category changes")
+	}
+
+	return total + catCount, nil
+}

@@ -52,6 +52,16 @@ func ApplySpokeConfig(ctx rweb.Context) error {
 		cfg.SyncInterval = "5m"
 	}
 
+	// Default the trigger to prompt mode, matching LoadSyncConfig. A config
+	// file exported by an older hub says nothing about mode, and the safe
+	// reading of silence is the one where nothing leaves the machine unasked.
+	if cfg.SyncMode == "" {
+		cfg.SyncMode = "prompt"
+	}
+	if cfg.PromptAfter == "" {
+		cfg.PromptAfter = "2h"
+	}
+
 	// Write the .env file with restrictive permissions (owner read/write only)
 	if err := writeEnvFile(cfg); err != nil {
 		logger.LogErr(serr.Wrap(err, "failed to write .env file during setup"), "path", envFilePath)
@@ -79,6 +89,11 @@ func writeEnvFile(cfg SpokeExportConfig) error {
 		fmt.Sprintf("GONOTES_SYNC_USERNAME=%s", cfg.Username),
 		fmt.Sprintf("GONOTES_SYNC_PASSWORD_B64=%s", cfg.PasswordB64),
 		fmt.Sprintf("GONOTES_SYNC_INTERVAL=%s", cfg.SyncInterval),
+		"",
+		"# How a sync cycle is triggered: 'prompt' asks (after GONOTES_SYNC_PROMPT_AFTER,",
+		"# and at exit); 'auto' runs one every GONOTES_SYNC_INTERVAL with nobody asked.",
+		fmt.Sprintf("GONOTES_SYNC_MODE=%s", cfg.SyncMode),
+		fmt.Sprintf("GONOTES_SYNC_PROMPT_AFTER=%s", cfg.PromptAfter),
 	}
 
 	// Invite token is optional — only include if present

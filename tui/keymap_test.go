@@ -124,7 +124,7 @@ func TestHelpSetsAreHandled(t *testing.T) {
 			handled: []key.Binding{
 				keys.Open, keys.New, keys.Edit, keys.Delete,
 				keys.Flag, keys.Categories, keys.Quit, keys.Back,
-				keys.Duplicate,
+				keys.Duplicate, keys.Sync,
 				// The capture door. It is handled but deliberately NOT
 				// advertised — see captureHint in capture.go.
 				keys.Capture,
@@ -199,6 +199,25 @@ func TestHelpSetsAreHandled(t *testing.T) {
 			help:    keys.unsavedHelp(),
 			handled: []key.Binding{keys.SaveExit, keys.DiscardExit, keys.CancelExit},
 		},
+		{
+			// The sync dialog in the form the clock raises. Quit-anyway is
+			// absent from both sides here: the screen guards it on purpose,
+			// so a footer that offered it would be advertising a key that
+			// does nothing.
+			screen: "sync (due)",
+			help:   keys.syncHelp(syncDue),
+			handled: []key.Binding{
+				keys.SyncGo, keys.SyncCompact, keys.SyncCompactOnly, keys.SyncLater,
+			},
+		},
+		{
+			screen: "sync (quitting)",
+			help:   keys.syncHelp(syncQuitting),
+			handled: []key.Binding{
+				keys.SyncGo, keys.SyncCompact, keys.SyncCompactOnly,
+				keys.SyncLater, keys.SyncQuitAnyway,
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -236,6 +255,8 @@ func TestHelpSetsHaveText(t *testing.T) {
 		"prompt":        keys.promptHelp(),
 		"duplicate":     keys.duplicateHelp(),
 		"unsaved":       keys.unsavedHelp(),
+		"sync":          keys.syncHelp(syncDue),
+		"syncQuitting":  keys.syncHelp(syncQuitting),
 	}
 	for name, set := range sets {
 		for i, b := range set {

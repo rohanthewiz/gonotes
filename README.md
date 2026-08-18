@@ -74,7 +74,8 @@ GoNotes supports syncing notes and categories between machines using a **hub-spo
 
 ### How It Works
 
-- The spoke runs a background goroutine that periodically authenticates with the hub, pulls new changes, resolves conflicts, pushes local changes, and verifies consistency via checksums.
+- A sync cycle authenticates with the hub, pulls new changes, resolves conflicts, pushes local changes, and verifies consistency via checksums.
+- **Cycles do not run on their own by default.** The spoke asks — after two hours unsynced (configurable), and on the way out — and syncs when told. `GONOTES_SYNC_MODE=auto` restores the background timer. See [When does a sync actually happen?](#when-does-a-sync-actually-happen).
 - Conflict resolution is automatic: **delete-wins** (deletes take priority), then **last-writer-wins** on `authored_at` timestamp. All conflicts are logged to a `sync_conflicts` table for auditing.
 - Changes are tracked at the field level using bitmask-driven delta fragments, with body diffs for efficient storage of large note edits.
 - All sync data is **user-scoped** on the hub — each spoke only sees its own user's notes and categories.
@@ -129,7 +130,12 @@ New users can only register with an **invite token** created by the admin. There
    export GONOTES_SYNC_USERNAME=myuser
    export GONOTES_SYNC_PASSWORD_B64=$(echo -n 'MySecurePass123!' | base64)
    export GONOTES_SYNC_INVITE_TOKEN=<token-from-admin>
-   export GONOTES_SYNC_INTERVAL=5m
+
+   # How syncing is triggered. "prompt" (the default) syncs only when asked;
+   # "auto" restores the old background timer, which is what GONOTES_SYNC_INTERVAL
+   # then governs.
+   export GONOTES_SYNC_MODE=prompt
+   export GONOTES_SYNC_PROMPT_AFTER=2h
    ```
 
 3. Start the spoke:
@@ -138,21 +144,81 @@ New users can only register with an **invite token** created by the admin. There
    ```
    On first run, it will auto-register on the hub using the invite token, then begin syncing. The invite token is consumed on first use and can be removed afterward.
 
-4. Confirm sync is running — look for these log lines:
+4. Confirm sync is running — look for this log line:
    ```
-   Sync client initialized and running
-   Sync cycle completed successfully
+   Sync client initialized  mode=prompt ...
    ```
+   In prompt mode there is no "Sync cycle completed successfully" until something
+   asks for one; set `GONOTES_SYNC_MODE=auto` if you want the old behavior of a
+   cycle every interval.
+
+### When does a sync actually happen?
+
+Since prompt mode became the default, **nothing syncs on its own**. A cycle runs
+when one of these happens:
+
+| Trigger | Where |
+|---|---|
+| The prompt is answered | The web UI's "Sync is due" banner, or the TUI's sync dialog |
+| `S` in the TUI, or **Sync now** in the web UI | Any time — the clock does not have to say it is due |
+| `POST /api/v1/sync/control/sync-now` | Scripts, cron, another agent |
+| Exit | Server shutdown (SIGINT/SIGTERM), the TUI quitting, the web tab closing |
+
+The prompt appears once `GONOTES_SYNC_PROMPT_AFTER` (default 2h) has passed
+since the last successful cycle. Deferring it ("Later" / `esc`) pushes it out by
+the same interval without syncing; it says nothing about what the exit cycle
+will do.
+
+**Why the default flipped.** Background sync is a write to another machine that
+the user did not initiate and cannot see. On a laptop that sleeps, roams
+networks and holds private notes, "when did this last leave here" is better as a
+decision than as a timer. `GONOTES_SYNC_MODE=auto` is one line away for the
+setups — a hub-adjacent spoke, a headless box nobody watches — where the timer
+was the right answer all along.
+
+### Compacting the change log
+
+Every edit appends a change row with a fragment describing what moved. Between
+two-hourly syncs that adds up: an afternoon on one note is thirty rows, each
+carrying a body diff against the one before it, all of which the hub will replay
+to reach a state your machine already has.
+
+**Compaction** collapses the pending (unsynced) tail of that log to one change
+per note or category:
+
+```
+note A: create ─ update ─ update ─ update  ──►  create (a snapshot of A now)
+note B: update ─ update ─ delete           ──►  delete
+note C: update                             ──►  untouched
+```
+
+The replacement is built from the entity's *current state*, so a chain of body
+diffs becomes plain final text and the result cannot drift from what is on disk.
+Its field bitmask is the union of the ones it replaces, so a field nobody
+touched stays absent and the hub keeps its own value. Changes already sent to
+the hub are never touched.
+
+It is offered wherever the prompt is — **Compact & sync** in the banner, `c` in
+the TUI dialog, `p` to compact without syncing (useful precisely when the hub is
+unreachable, which is when the log grows) — and can be made automatic with
+`GONOTES_SYNC_COMPACT=true`, which compacts before every push.
+
+Compaction **discards local change history** for the changes it replaces. That
+history exists to be pushed, and these have not been; but it is why nothing
+compacts unless you ask or opt in.
 
 ### Sync Control API
 
-The spoke exposes three endpoints for UI integration (all require authentication):
+The spoke exposes six endpoints for UI integration (all require authentication):
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET`  | `/api/v1/sync/control/status`   | Returns sync state (enabled, connected, last sync time, errors) |
+| `GET`  | `/api/v1/sync/control/status`   | Sync state: enabled, connected, last sync, errors, plus `mode`, `due`, `due_in_seconds`, `pending_changes`, `snoozed_until` |
 | `POST` | `/api/v1/sync/control/toggle`   | Enable/disable sync at runtime. Body: `{"enabled": true}` |
-| `POST` | `/api/v1/sync/control/sync-now`  | Trigger an immediate sync cycle. Returns 409 if already in progress |
+| `POST` | `/api/v1/sync/control/sync-now`  | Trigger an immediate cycle. Body (optional): `{"compact": true}` to collapse the change log first. Returns 409 if already in progress |
+| `POST` | `/api/v1/sync/control/snooze`   | Defer the "sync is due" prompt without syncing. Body (optional): `{"duration": "30m"}`, default is the prompt interval |
+| `POST` | `/api/v1/sync/control/mode`     | Switch trigger at runtime. Body: `{"mode": "prompt"}` or `{"mode": "auto"}`. Not persisted — the `.env` is what survives a restart |
+| `POST` | `/api/v1/sync/control/compact`  | Collapse the pending change log without syncing. Returns the compaction counts |
 
 ### Environment Variables Reference
 
@@ -164,7 +230,11 @@ The spoke exposes three endpoints for UI integration (all require authentication
 | `GONOTES_SYNC_USERNAME` | When sync enabled | — | Username for hub authentication |
 | `GONOTES_SYNC_PASSWORD_B64` | When sync enabled | — | Base64-encoded password (`echo -n 'pass' \| base64`) |
 | `GONOTES_SYNC_PASSWORD` | — | — | Legacy plaintext password (fallback if `_B64` not set) |
-| `GONOTES_SYNC_INTERVAL` | No | `5m` | Polling interval between sync cycles (minimum 10s) |
+| `GONOTES_SYNC_MODE` | No | `prompt` | `prompt` syncs only when asked (and at exit); `auto` runs a cycle every interval |
+| `GONOTES_SYNC_PROMPT_AFTER` | No | `2h` | How long a spoke may go unsynced before the prompt appears (minimum 1m). Prompt mode only |
+| `GONOTES_SYNC_INTERVAL` | No | `5m` | Polling interval between sync cycles (minimum 10s). **Auto mode only** |
+| `GONOTES_SYNC_ON_EXIT` | No | `true` | Run one final cycle at shutdown — the sync nobody has to ask for |
+| `GONOTES_SYNC_COMPACT` | No | `false` | Collapse the pending change log before every push (see [Compacting](#compacting-the-change-log)) |
 | `GONOTES_SYNC_INVITE_TOKEN` | No | — | One-time invite token for auto-registration on the hub |
 
 ---
@@ -281,8 +351,15 @@ The same rules apply to the web UI and to anything else writing through the API 
 | | `f` | Toggle the follow-up flag |
 | | `d` | Delete (with confirmation) |
 | | `c` | Category picker — filter the list by category |
+| | `D` | Duplicate the selected note |
+| | `S` | Sync with the hub (only on a spoke that has one configured) |
 | | `esc` | Clear search, then subcategory filter, then category filter — then quit |
-| | `q` | Quit |
+| | `q` | Quit — asks first when changes have not reached the hub |
+| Sync | `s` | Sync now |
+| | `c` | Compact the pending change log, then sync |
+| | `p` | Compact only — no sync (the hub may be what is unreachable) |
+| | `q` | On the quit dialog: leave without syncing |
+| | `esc` | Later — defers the prompt, or keeps you in the app |
 | Note view | `↑/↓` | Scroll |
 | | `e` / `f` / `d` | Edit / flag / delete |
 | Note form | `tab` | Next field |
@@ -305,6 +382,7 @@ The same rules apply to the web UI and to anything else writing through the API 
 | | `n` / `d` | Add / remove a subcategory of this category |
 
 Notes:
+- The bottom line says `⟲ 12 changes not synced, last synced 3 hours ago — S to sync` once a sync is due, and keeps saying it until you sync or defer. See [When does a sync actually happen?](#when-does-a-sync-actually-happen).
 - Category and subcategory entry is covered above, under [Categories and subcategories](#categories-and-subcategories).
 - Editing the same note from two sessions is covered above, under [Editing the same note from two places](#editing-the-same-note-from-two-places).
 - The TUI shares the databases with the web server. Avoid running both against the same directory at the same time (bytdb allows a single writer process per database).

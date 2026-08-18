@@ -24,9 +24,21 @@ import (
 // authenticates with the hub, pulls new changes (with conflict resolution),
 // pushes local changes, and periodically verifies consistency via checksums.
 //
+// WHEN a cycle runs is decided by SyncConfig.Mode:
+//
+//	prompt (default)   the loop runs no cycles of its own. It keeps the clock
+//	                   (Due / DueIn / PendingChanges) that a UI turns into a
+//	                   question, and cycles happen when someone answers it —
+//	                   SyncNow — or when the process is going away (SyncOnExit).
+//	auto               the original timer: a cycle every Interval.
+//
 // Design decisions:
 //   - Single goroutine + mutex: the polling timer and "Sync Now" button both
 //     call runSyncCycle protected by syncMu. No channel complexity needed.
+//   - stateMu guards the mutable bookkeeping (last sync, last error, backoff,
+//     snooze). It has to: the loop writes it while an HTTP status poll or a
+//     TUI keystroke reads it, and prompt mode makes those reads frequent
+//     rather than incidental.
 //   - Exponential backoff: consecutive failures increase wait time up to 5m,
 //     reset on success. Prevents hammering a downed hub.
 //   - Auth token is cached in memory and persisted to sync_state so the
@@ -47,9 +59,35 @@ type SyncClient struct {
 	syncMu     sync.Mutex  // Prevents concurrent sync cycles
 	enabled    atomic.Bool // Runtime toggle for the "enable sync" checkbox
 	cancelFunc context.CancelFunc
-	lastSync   time.Time
-	lastError  error
 	inProgress atomic.Bool // True while a sync cycle is running
+
+	// mode is the runtime copy of SyncConfig.Mode, held separately so the UI
+	// can flip between prompt and auto without a restart. atomic.Value rather
+	// than a stateMu field because the loop reads it on every tick.
+	mode atomic.Value // SyncMode
+
+	// stateMu guards everything below it. See the note in the file header.
+	stateMu   sync.Mutex
+	lastSync  time.Time
+	lastError error
+
+	// snoozeUntil suppresses the "sync is due" report until it passes. This is
+	// what a UI's "not now" writes: due-ness is derived from lastSync, which a
+	// dismissal must not touch (dismissing a prompt is not syncing), so the
+	// deferral needs a home of its own.
+	snoozeUntil time.Time
+
+	// startedAt anchors due-ness for a spoke that has never synced. Without it
+	// a first run is due the instant it starts, which is a prompt before the
+	// user has typed anything — the least useful moment to ask.
+	startedAt time.Time
+
+	// exitDeclined records that a user has already been asked the exit
+	// question and said no. Without it the two halves of "prompt or on exit"
+	// contradict each other: the TUI's quit dialog IS the exit prompt, and
+	// syncing anyway after someone chose "quit without syncing" would make
+	// answering it pointless.
+	exitDeclined bool
 
 	// Exponential backoff state — consecutive failures increase wait time.
 	// Cap at maxBackoff to avoid indefinitely long pauses.
@@ -60,7 +98,19 @@ type SyncClient struct {
 // between retries when the hub is down for an extended period.
 const maxBackoff = 5 * time.Minute
 
+// exitSyncTimeout bounds the final cycle at shutdown. Long enough for a real
+// push over a slow link, short enough that quitting an app never feels hung
+// when the hub is simply not there — the changes stay pending either way and
+// go out on the next sync.
+const exitSyncTimeout = 20 * time.Second
+
 // SyncClientStatus exposes sync state to the UI without leaking internal details.
+//
+// The second half of the struct is what prompt mode needs a UI to be able to
+// render without asking a second question: whether to show the prompt (Due),
+// what to say in it (Pending), when it will next appear (DueInSeconds), and
+// which of the two options to offer alongside "sync now" (CompactBeforePush
+// tells the UI whether compaction is already automatic).
 type SyncClientStatus struct {
 	Enabled    bool       `json:"enabled"`
 	Connected  bool       `json:"connected"` // True if last sync succeeded
@@ -68,6 +118,15 @@ type SyncClientStatus struct {
 	InProgress bool       `json:"in_progress"`
 	LastError  string     `json:"last_error,omitempty"`
 	PeerID     string     `json:"peer_id"`
+
+	Mode              SyncMode   `json:"mode"`                    // "prompt" or "auto"
+	Due               bool       `json:"due"`                     // prompt mode: it is time to ask
+	DueInSeconds      int64      `json:"due_in_seconds"`          // seconds until Due (0 when due or in auto mode)
+	PromptAfterSecs   int64      `json:"prompt_after_seconds"`    // the configured prompt interval
+	Pending           int        `json:"pending_changes"`         // local changes not yet pushed
+	SnoozedUntil      *time.Time `json:"snoozed_until,omitempty"` // nil when not snoozed
+	CompactBeforePush bool       `json:"compact_before_push"`     // compaction runs automatically on push
+	SyncOnExit        bool       `json:"sync_on_exit"`            // a final cycle runs at shutdown
 }
 
 // Schema for sync_state lives in schema.go (public database only). Keyed
@@ -90,6 +149,8 @@ func NewSyncClient(config *SyncConfig) (*SyncClient, error) {
 		},
 	}
 	client.enabled.Store(config.Enabled)
+	client.mode.Store(config.Mode)
+	client.startedAt = time.Now()
 
 	// Load or generate a stable peer ID from the database
 	state, err := GetOrCreateSyncState(config.HubURL)
@@ -103,8 +164,44 @@ func NewSyncClient(config *SyncConfig) (*SyncClient, error) {
 		client.authToken = state.AuthToken.String
 	}
 
+	// Restore when this spoke last synced. In auto mode this only sharpened
+	// the backoff; in prompt mode it is load-bearing — due-ness is measured
+	// from it, and a client that forgot it on every restart would either never
+	// prompt (a spoke restarted daily) or prompt on every launch.
+	if state.LastSyncAt.Valid {
+		client.lastSync = state.LastSyncAt.Time
+	}
+
 	syncClientInstance = client
 	return client, nil
+}
+
+// Mode reports how cycles are currently triggered.
+func (sc *SyncClient) Mode() SyncMode {
+	if m, ok := sc.mode.Load().(SyncMode); ok && m != "" {
+		return m
+	}
+	return SyncModePrompt
+}
+
+// SetMode switches between prompt and auto at runtime. Switching to auto does
+// NOT run a cycle immediately — the loop picks it up on its next tick — so a
+// user toggling the setting never triggers an upload as a side effect of
+// changing a preference.
+func (sc *SyncClient) SetMode(mode SyncMode) error {
+	if mode != SyncModePrompt && mode != SyncModeAuto {
+		return serr.New("invalid sync mode: " + string(mode))
+	}
+	sc.mode.Store(mode)
+	// A mode change answers the question the snooze was deferring, so it
+	// clears it: switching to auto makes it moot, and switching back to prompt
+	// should ask rather than stay quiet on the strength of an old dismissal.
+	sc.stateMu.Lock()
+	sc.snoozeUntil = time.Time{}
+	sc.stateMu.Unlock()
+
+	logger.Info("Sync mode changed", "mode", string(mode))
+	return nil
 }
 
 // GetSyncClient returns the package-level sync client instance.
@@ -114,8 +211,11 @@ func GetSyncClient() *SyncClient {
 }
 
 // Start launches the background sync goroutine.
-// The first cycle runs immediately (passive sync on startup),
-// then subsequent cycles run on the configured interval.
+//
+// In auto mode the first cycle runs immediately (passive sync on startup) and
+// subsequent cycles run on the configured interval. In prompt mode the
+// goroutine still runs — it is what notices a later switch to auto — but it
+// syncs nothing until asked.
 func (sc *SyncClient) Start(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	sc.cancelFunc = cancel
@@ -124,7 +224,9 @@ func (sc *SyncClient) Start(ctx context.Context) {
 	logger.Info("Sync client started",
 		"hub_url", sc.config.HubURL,
 		"peer_id", sc.peerID,
+		"mode", string(sc.Mode()),
 		"interval", sc.config.Interval.String(),
+		"prompt_after", sc.config.PromptAfter.String(),
 	)
 }
 
@@ -136,7 +238,8 @@ func (sc *SyncClient) Stop() {
 	logger.Info("Sync client stopped")
 }
 
-// SyncNow triggers an immediate sync cycle (for the "Sync Now" button).
+// SyncNow triggers an immediate sync cycle (for the "Sync Now" button, and
+// for the answer to a prompt-mode prompt).
 // Returns an error if a sync is already in progress.
 func (sc *SyncClient) SyncNow() error {
 	if !sc.enabled.Load() {
@@ -148,6 +251,170 @@ func (sc *SyncClient) SyncNow() error {
 
 	// Run synchronously so the caller knows when it completes
 	return sc.runSyncCycle(context.Background())
+}
+
+// ============================================================================
+// Prompt mode: the clock a UI reads
+// ============================================================================
+
+// LastSync reports when the last cycle succeeded — zero if this spoke has
+// never synced with this hub.
+func (sc *SyncClient) LastSync() time.Time {
+	sc.stateMu.Lock()
+	defer sc.stateMu.Unlock()
+	return sc.lastSync
+}
+
+// failureCount reports the consecutive-failure count behind stateMu.
+func (sc *SyncClient) failureCount() int {
+	sc.stateMu.Lock()
+	defer sc.stateMu.Unlock()
+	return sc.consecutiveFailures
+}
+
+// dueSince is the moment due-ness is measured from: the last successful sync,
+// or — for a spoke that has never managed one — when this process started.
+// Anchoring an unsynced spoke to process start is what keeps a fresh install
+// from opening with a prompt.
+func (sc *SyncClient) dueSince() time.Time {
+	sc.stateMu.Lock()
+	defer sc.stateMu.Unlock()
+	if sc.lastSync.IsZero() {
+		return sc.startedAt
+	}
+	return sc.lastSync
+}
+
+// DueIn reports how long until a sync prompt is owed. Zero means it is owed
+// now; a negative value never escapes (it is clamped to zero). In auto mode
+// there is no prompt to be owed, so it always reports zero.
+func (sc *SyncClient) DueIn() time.Duration {
+	if !sc.enabled.Load() || sc.Mode() != SyncModePrompt {
+		return 0
+	}
+
+	deadline := sc.dueSince().Add(sc.config.PromptAfter)
+
+	// A snooze can only push the deadline out, never pull it in: "ask me
+	// later" is a deferral, not a way to be asked sooner than the interval.
+	sc.stateMu.Lock()
+	snooze := sc.snoozeUntil
+	sc.stateMu.Unlock()
+	if snooze.After(deadline) {
+		deadline = snooze
+	}
+
+	remaining := time.Until(deadline)
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+// Due reports whether a UI should be asking. It is deliberately independent
+// of whether anything is pending: a cycle also PULLS, and a spoke that has
+// written nothing for two hours may still be two hours behind the hub. What
+// is pending shapes the wording of the prompt, not whether it appears — see
+// PendingChanges.
+func (sc *SyncClient) Due() bool {
+	if !sc.enabled.Load() || sc.Mode() != SyncModePrompt {
+		return false
+	}
+	if sc.inProgress.Load() {
+		return false // a cycle is already answering the question
+	}
+	return sc.DueIn() == 0
+}
+
+// Snooze defers the prompt by d. A non-positive d clears the snooze instead,
+// which is how "ask me again now" is expressed.
+func (sc *SyncClient) Snooze(d time.Duration) {
+	sc.stateMu.Lock()
+	defer sc.stateMu.Unlock()
+	if d <= 0 {
+		sc.snoozeUntil = time.Time{}
+		return
+	}
+	sc.snoozeUntil = time.Now().Add(d)
+}
+
+// DeclineExitSync records that the user was asked at quit time and declined.
+// Set by a UI that has already put the question in front of them — the exit
+// path must not then do it silently. Cleared by an explicit sync, so a later
+// change of mind in the same session is honored.
+func (sc *SyncClient) DeclineExitSync() {
+	sc.stateMu.Lock()
+	defer sc.stateMu.Unlock()
+	sc.exitDeclined = true
+}
+
+// SnoozeDuration is the deferral a UI gets when it does not name one: the
+// same interval as the prompt itself, so "not now" means "ask me next time
+// you would have asked".
+func (sc *SyncClient) SnoozeDuration() time.Duration {
+	return sc.config.PromptAfter
+}
+
+// PendingChanges counts the local changes waiting to be pushed. Errors are
+// swallowed into 0 — this feeds a status line, and a count that cannot be
+// read is not worth failing a status poll over. The error is returned too, so
+// a caller that cares can log it.
+func (sc *SyncClient) PendingChanges() (int, error) {
+	n, err := CountUnsentChangesForPeer(sc.peerID, "")
+	if err != nil {
+		return 0, serr.Wrap(err, "failed to count pending sync changes")
+	}
+	return n, nil
+}
+
+// Compact collapses the pending change log for this spoke's peer id. It is
+// the explicit form of the same work GONOTES_SYNC_COMPACT does before every
+// push, exposed so a UI can offer it as a choice at the moment the user is
+// being asked to sync — which is exactly when a long unsynced log exists and
+// the user is in a position to say what should happen to it.
+func (sc *SyncClient) Compact() (*CompactionResult, error) {
+	return CompactPendingChanges(sc.peerID, "")
+}
+
+// SyncOnExit runs the final cycle during shutdown, if one is warranted.
+//
+// This is the half of "prompt or on exit" that needs nobody present: a
+// headless server stopping, a TUI whose user has answered the quit dialog, an
+// app being quit. It is best-effort and bounded — a shutdown must not hang on
+// a hub that has gone away — and it reports whether a cycle actually ran so a
+// caller can say so.
+func (sc *SyncClient) SyncOnExit(ctx context.Context) (ran bool, err error) {
+	if !sc.config.SyncOnExit || !sc.enabled.Load() {
+		return false, nil
+	}
+
+	sc.stateMu.Lock()
+	declined := sc.exitDeclined
+	sc.stateMu.Unlock()
+	if declined {
+		return false, nil
+	}
+
+	// Nothing pending and nothing overdue means the exit cycle would be a
+	// round trip to confirm what is already true. A pull is still worth
+	// running when the spoke is past its prompt interval, which is why this
+	// is not simply "pending == 0, skip".
+	pending, countErr := sc.PendingChanges()
+	if countErr != nil {
+		logger.LogErr(countErr, "could not count pending changes for exit sync")
+	}
+	if pending == 0 && sc.Mode() == SyncModePrompt && sc.DueIn() > 0 {
+		return false, nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, exitSyncTimeout)
+	defer cancel()
+
+	logger.Info("Running final sync before exit", "pending_changes", pending)
+	if err := sc.runSyncCycle(ctx); err != nil {
+		return true, serr.Wrap(err, "exit sync failed")
+	}
+	return true, nil
 }
 
 // SetEnabled toggles sync on/off at runtime (for the UI checkbox).
@@ -162,34 +429,78 @@ func (sc *SyncClient) IsEnabled() bool {
 }
 
 // GetStatus returns the current sync state for UI display.
+//
+// The snapshot is taken under stateMu in one go rather than field by field:
+// a status that says "due in 0s" beside "last synced just now" is a lie
+// assembled from two moments, and prompt mode puts this in front of a user
+// deciding whether to act.
 func (sc *SyncClient) GetStatus() *SyncClientStatus {
+	sc.stateMu.Lock()
+	lastSync := sc.lastSync
+	lastErr := sc.lastError
+	failures := sc.consecutiveFailures
+	snooze := sc.snoozeUntil
+	sc.stateMu.Unlock()
+
 	status := &SyncClientStatus{
 		Enabled:    sc.enabled.Load(),
-		Connected:  sc.consecutiveFailures == 0 && !sc.lastSync.IsZero(),
+		Connected:  failures == 0 && !lastSync.IsZero(),
 		InProgress: sc.inProgress.Load(),
 		PeerID:     sc.peerID,
+
+		Mode:              sc.Mode(),
+		Due:               sc.Due(),
+		DueInSeconds:      int64(sc.DueIn().Seconds()),
+		PromptAfterSecs:   int64(sc.config.PromptAfter.Seconds()),
+		CompactBeforePush: sc.config.CompactBeforePush,
+		SyncOnExit:        sc.config.SyncOnExit,
 	}
-	if !sc.lastSync.IsZero() {
-		status.LastSync = &sc.lastSync
+	if !lastSync.IsZero() {
+		status.LastSync = &lastSync
 	}
-	if sc.lastError != nil {
-		status.LastError = sc.lastError.Error()
+	if lastErr != nil {
+		status.LastError = lastErr.Error()
+	}
+	if snooze.After(time.Now()) {
+		status.SnoozedUntil = &snooze
+	}
+	if pending, err := sc.PendingChanges(); err == nil {
+		status.Pending = pending
+	} else {
+		logger.LogErr(err, "failed to count pending changes for sync status")
 	}
 	return status
 }
 
 // syncLoop is the background goroutine that runs sync cycles on a timer.
-// It runs immediately on startup, then waits for the configured interval
-// (or exponential backoff on failure) before each subsequent cycle.
+//
+// The tick is a poll of the world rather than the schedule itself: it fires
+// often enough to notice a runtime mode change or a lifted backoff, and each
+// firing decides for itself whether a cycle is owed. That indirection is what
+// lets prompt mode and auto mode share one goroutine — and what lets a user
+// switch between them without a restart.
+//
+//	tick ──► enabled?  ──no──► wait
+//	          │yes
+//	          ▼
+//	         mode==auto? ──no──► wait   (prompt mode syncs only when asked)
+//	          │yes
+//	          ▼
+//	         interval elapsed and backoff clear? ──no──► wait
+//	          │yes
+//	          ▼
+//	         runSyncCycle
 func (sc *SyncClient) syncLoop(ctx context.Context) {
-	// Run first cycle immediately (startup sync)
-	if sc.enabled.Load() {
+	// The startup cycle belongs to auto mode alone. In prompt mode it would be
+	// the one thing the mode exists to prevent: a push nobody asked for, at
+	// the moment of launch.
+	if sc.enabled.Load() && sc.Mode() == SyncModeAuto {
 		if err := sc.runSyncCycle(ctx); err != nil {
 			logger.LogErr(err, "initial sync cycle failed")
 		}
 	}
 
-	ticker := time.NewTicker(sc.config.Interval)
+	ticker := time.NewTicker(sc.tickInterval())
 	defer ticker.Stop()
 
 	for {
@@ -197,16 +508,22 @@ func (sc *SyncClient) syncLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if !sc.enabled.Load() {
+			if !sc.enabled.Load() || sc.Mode() != SyncModeAuto {
+				continue
+			}
+
+			// The tick can be finer than the configured interval, so elapsed
+			// time — not "a tick happened" — is what makes a cycle due.
+			if time.Since(sc.LastSync()) < sc.config.Interval {
 				continue
 			}
 
 			// Apply exponential backoff if we've had consecutive failures.
 			// The ticker still fires at the normal interval, but we skip
 			// cycles until the backoff period has elapsed.
-			if sc.consecutiveFailures > 0 {
+			if sc.failureCount() > 0 {
 				backoff := sc.calculateBackoff()
-				timeSinceLastSync := time.Since(sc.lastSync)
+				timeSinceLastSync := time.Since(sc.LastSync())
 				if timeSinceLastSync < backoff {
 					continue // Still in backoff period
 				}
@@ -214,11 +531,26 @@ func (sc *SyncClient) syncLoop(ctx context.Context) {
 
 			if err := sc.runSyncCycle(ctx); err != nil {
 				logger.LogErr(err, "sync cycle failed",
-					"consecutive_failures", sc.consecutiveFailures,
+					"consecutive_failures", sc.failureCount(),
 				)
 			}
 		}
 	}
+}
+
+// tickInterval is how often the loop wakes to re-decide. It tracks the
+// configured interval but never coarser than a minute — otherwise a spoke
+// configured with a 6h auto interval would take up to 6h to notice that the
+// user just switched it to prompt mode — and never finer than 10s.
+func (sc *SyncClient) tickInterval() time.Duration {
+	t := sc.config.Interval
+	if t > time.Minute {
+		t = time.Minute
+	}
+	if t < 10*time.Second {
+		t = 10 * time.Second
+	}
+	return t
 }
 
 // runSyncCycle executes one full sync cycle: health → auth → pull → push → verify.
@@ -261,10 +593,17 @@ func (sc *SyncClient) runSyncCycle(ctx context.Context) error {
 		logger.LogErr(err, "consistency verification failed (advisory)")
 	}
 
-	// Success — reset backoff and record timestamps
+	// Success — reset backoff and record timestamps. Clearing the snooze here
+	// matters in prompt mode: the deferral was of a question that has now been
+	// answered, and leaving it set would suppress the NEXT prompt too.
+	sc.stateMu.Lock()
 	sc.consecutiveFailures = 0
 	sc.lastError = nil
 	sc.lastSync = time.Now()
+	sc.snoozeUntil = time.Time{}
+	sc.exitDeclined = false
+	sc.stateMu.Unlock()
+
 	if err := UpdateSyncTimestamps(sc.config.HubURL); err != nil {
 		logger.LogErr(err, "failed to persist sync timestamps")
 	}
@@ -583,7 +922,23 @@ func (sc *SyncClient) applyChangeWithConflictDetection(change SyncChange) error 
 }
 
 // pushChanges builds a batch of local unsent changes and sends them to the hub.
+//
+// When the spoke is configured to compact, that happens here rather than at
+// the end of the previous cycle: the log to collapse is only fully known
+// immediately before it is read, and doing it here means an "unsynced for six
+// hours" log is compacted exactly once, on its way out.
 func (sc *SyncClient) pushChanges(ctx context.Context) error {
+	if sc.config.CompactBeforePush {
+		if res, err := CompactPendingChanges(sc.peerID, ""); err != nil {
+			// Compaction is an optimization; a failed one must not stop the
+			// push it was meant to shrink.
+			logger.LogErr(err, "failed to compact changes before push (pushing uncompacted)")
+		} else if res.Removed() > 0 {
+			logger.Info("Compacted change log before push",
+				"changes_before", res.ChangesBefore, "changes_after", res.ChangesAfter)
+		}
+	}
+
 	// Use the same unified change stream that the hub uses for pulls,
 	// but from our local perspective: changes not yet sent to the hub.
 	// Empty userGUID: spoke is single-user, no per-user filtering needed locally
@@ -681,6 +1036,8 @@ func (sc *SyncClient) verifyConsistency(ctx context.Context) error {
 
 // recordFailure updates backoff state after a failed sync cycle.
 func (sc *SyncClient) recordFailure(err error) {
+	sc.stateMu.Lock()
+	defer sc.stateMu.Unlock()
 	sc.consecutiveFailures++
 	sc.lastError = err
 }
@@ -688,8 +1045,9 @@ func (sc *SyncClient) recordFailure(err error) {
 // calculateBackoff returns the wait duration based on consecutive failures.
 // Uses exponential backoff: 1s, 2s, 4s, 8s, ... capped at maxBackoff.
 func (sc *SyncClient) calculateBackoff() time.Duration {
+	failures := sc.failureCount()
 	backoff := time.Second
-	for i := 0; i < sc.consecutiveFailures; i++ {
+	for i := 0; i < failures; i++ {
 		backoff *= 2
 		if backoff > maxBackoff {
 			return maxBackoff

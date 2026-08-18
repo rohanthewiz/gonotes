@@ -107,6 +107,12 @@ type session struct {
 	// by the root's opening status line; nothing routes on it.
 	mode Mode
 
+	// sync is what this process last heard about the sync clock. Always
+	// non-nil; its zero value reports itself unconfigured, so screens read it
+	// without a nil check on the many installations that have no hub. Mutated
+	// only in the root's Update — see syncState.
+	sync *syncState
+
 	user   *models.User
 	width  int
 	height int // content height available to screens (status bar excluded)
@@ -196,7 +202,7 @@ type appModel struct {
 // here and only detects anything when Run calls init on it, which is what lets
 // every pre-existing test keep constructing an app model with no host at all.
 func newAppModel(st Store) appModel {
-	sess := &session{store: st, cats: newCatsState()}
+	sess := &session{store: st, cats: newCatsState(), sync: &syncState{}}
 	return appModel{
 		sess:  sess,
 		stack: []screen{newLoginScreen(sess)},
@@ -351,7 +357,40 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sess.user = msg.user
 		browse := newBrowseScreen(m.sess)
 		m.stack = []screen{browse}
-		return m, browse.Init()
+		cmds := []tea.Cmd{browse.Init()}
+		// Start watching the sync clock now rather than at startup: in HTTP
+		// mode the status endpoint requires the token that login just
+		// obtained, and before that there is nobody whose notes are overdue.
+		if !m.sess.sync.polling {
+			m.sess.sync.polling = true
+			cmds = append(cmds, syncStatusCmd(m.sess.store), syncTickCmd())
+		}
+		return m, tea.Batch(cmds...)
+
+	// ---- Sync ------------------------------------------------------------
+	//
+	// Handled at the root, like the cats messages and for the same reason:
+	// syncState has one writer and this is it. A poll answers on a command
+	// goroutine while any screen may be rendering.
+
+	case syncStatusMsg:
+		// A failed poll leaves the last known status in place rather than
+		// blanking it. An unreachable hub is the ordinary state of a laptop
+		// away from home, and it does not make what we last knew untrue.
+		if msg.err == nil {
+			m.sess.sync.status = msg.status
+		}
+		// Arm the prompt again once the sync is no longer owed. "Asked once"
+		// is meant to stop a single overdue period from being raised twice —
+		// not to make the dialog a one-time event in a session that stays open
+		// for days and goes overdue again.
+		if !m.sess.sync.due() {
+			m.sess.sync.asked = false
+		}
+		return m, m.maybeAskToSync()
+
+	case syncTickMsg:
+		return m, tea.Batch(syncStatusCmd(m.sess.store), syncTickCmd())
 
 	case statusNote:
 		m.statusText = msg.text
@@ -364,6 +403,31 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	updated, cmd := m.top().Update(msg)
 	m.stack[len(m.stack)-1] = updated
 	return m, cmd
+}
+
+// maybeAskToSync raises the sync dialog when the clock says one is owed —
+// once per session, and never on top of something the user is in the middle
+// of.
+//
+// The two guards are the difference between a prompt and an interruption:
+//
+//	asked        the banner keeps saying a sync is due for as long as it is,
+//	             but the modal appears once. Anything else turns a two-hour
+//	             reminder into a two-hour heckle.
+//	stack depth  a dialog thrown over a half-typed note form would steal the
+//	             next keystroke. From the list there is nothing to steal.
+func (m appModel) maybeAskToSync() tea.Cmd {
+	if !m.sess.sync.due() || m.sess.sync.asked {
+		return nil
+	}
+	if len(m.stack) != 1 {
+		return nil
+	}
+	if _, onList := m.top().(*browseScreen); !onList {
+		return nil
+	}
+	m.sess.sync.asked = true
+	return push(newSyncScreen(m.sess, syncDue))
 }
 
 // View builds the root tea.View. Screens still return plain strings — only
@@ -391,6 +455,14 @@ func (m appModel) View() tea.View {
 
 	content := m.top().View()
 
+	// The bottom line, in priority order: what just happened, then what is
+	// waiting to be decided, then whatever the status bar was already saying.
+	//
+	// The sync banner lives here rather than as a line of its own because it
+	// has to survive: every keypress clears the status text (see Update), and
+	// a reminder that vanishes the moment the user touches an arrow key is not
+	// a reminder. Sitting in the fallback branch, it comes back the instant
+	// the transient message is gone, for as long as the sync is owed.
 	var bar string
 	switch {
 	case m.statusErr:
@@ -398,7 +470,11 @@ func (m appModel) View() tea.View {
 	case m.statusOK && m.statusText != "":
 		bar = statusOKStyle.Render(truncate(m.statusText, m.sess.width-2))
 	default:
-		bar = statusBarStyle.Render(truncate(m.statusText, m.sess.width-2))
+		if banner := m.sess.sync.banner(); m.statusText == "" && banner != "" {
+			bar = syncDueStyle.Render(truncate(banner, m.sess.width-2))
+		} else {
+			bar = statusBarStyle.Render(truncate(m.statusText, m.sess.width-2))
+		}
 	}
 
 	v.Content = content + "\n" + bar

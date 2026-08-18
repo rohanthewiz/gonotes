@@ -538,7 +538,7 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 
 		switch {
 		case key.Matches(msg, keys.Quit):
-			return s, tea.Quit
+			return s, s.leave()
 
 		case key.Matches(msg, keys.Back):
 			// esc peels back UI state one layer at a time, narrowest first:
@@ -565,7 +565,7 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			//
 			// A dirty form can never be one of those layers: it raises the
 			// unsaved-changes dialog before it lets esc past. See formScreen.
-			return s, tea.Quit
+			return s, s.leave()
 
 		case key.Matches(msg, keys.Open):
 			if n := s.selectedNote(); n != nil {
@@ -597,6 +597,16 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				// whoever has the original open for editing.
 				return s, push(newDuplicateScreen(s.sess, *n))
 			}
+
+		case key.Matches(msg, keys.Sync):
+			// The door to the sync dialog, openable whether or not a sync is
+			// due — "I am about to close the laptop" is a reason the clock
+			// cannot know about. On an installation with no hub it says so
+			// rather than opening a dialog with no useful answers in it.
+			if !s.sess.sync.configured() {
+				return s, status("Sync is not configured on this installation")
+			}
+			return s, push(newSyncScreen(s.sess, syncAsked))
 
 		case key.Matches(msg, keys.Delete):
 			if n := s.selectedNote(); n != nil {
@@ -658,6 +668,25 @@ func (s *browseScreen) View() string {
 		return list
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, list, s.previewView())
+}
+
+// leave is what q and the last esc do: quit, unless there is unsynced work on
+// this machine, in which case the sync dialog gets the last word.
+//
+// This is the "or on exit" half of GoNotes' sync prompt. The clock's half
+// (every two hours) can be ignored indefinitely by someone who never leaves
+// the app open long enough; this one catches the case that actually loses
+// data, which is a laptop closed on an afternoon of notes that never left it.
+//
+// The guard is pending changes, not due-ness. A spoke that is overdue but has
+// written nothing has nothing to lose by quitting — the exit path will still
+// pull if it is worth pulling — and a dialog on the way out of a session where
+// the user only read notes is a toll for nothing.
+func (s *browseScreen) leave() tea.Cmd {
+	if s.sess.sync.pending() == 0 {
+		return tea.Quit
+	}
+	return push(newSyncScreen(s.sess, syncQuitting))
 }
 
 // previewView renders the selected note's markdown into the right-hand pane.

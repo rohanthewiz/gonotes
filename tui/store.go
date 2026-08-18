@@ -186,6 +186,49 @@ type Store interface {
 	// list screen's badges. One call rather than one per row — a hundred-row
 	// refresh must not become a hundred round trips.
 	ListNoteLocks(userGUID string) ([]models.NoteLock, error)
+
+	// ---- Sync --------------------------------------------------------------
+	//
+	// Sync defaults to prompt mode: nothing leaves the machine unasked, and
+	// something has to do the asking. In a terminal that is this TUI, which is
+	// why these five methods exist at a seam that otherwise only deals in
+	// notes and categories.
+	//
+	// Which side is actually syncing differs by store, and the difference is
+	// invisible above this line: the local store drives the sync client this
+	// process started, while the HTTP store asks the server that owns it. Both
+	// answer the same three questions — how overdue are we, how much is
+	// waiting, and what should be done about it.
+
+	// SyncStatus reports the sync clock, or (nil, nil) when this installation
+	// has no sync configured at all. Nil is not an error: most GoNotes
+	// installations are a single machine with no hub, and the UI simply says
+	// nothing about sync on those.
+	SyncStatus() (*models.SyncClientStatus, error)
+
+	// SyncNow runs one full cycle and returns the status afterwards. When
+	// compact is true the pending change log is collapsed first — the two
+	// halves of the "compact & sync" answer, kept in one call so a UI cannot
+	// compact and then fail to sync.
+	SyncNow(compact bool) (*models.SyncClientStatus, error)
+
+	// SnoozeSync defers the "sync is due" prompt by the configured interval
+	// without syncing anything.
+	SnoozeSync() (*models.SyncClientStatus, error)
+
+	// CompactChanges collapses the pending change log and reports what it did,
+	// without syncing. Useful precisely when the hub is unreachable, which is
+	// when an unsynced log grows.
+	CompactChanges() (*models.CompactionResult, error)
+
+	// DeclineExitSync records that the user has answered the quit-time sync
+	// question with "no", so the exit path does not then sync anyway.
+	//
+	// The HTTP store does nothing here, and that is correct rather than
+	// unimplemented: quitting the TUI is not the server exiting, and one
+	// client leaving must not disarm the exit cycle of a server that goes on
+	// running for everyone else.
+	DeclineExitSync() error
 }
 
 // ErrNoUserList reports that a store cannot enumerate accounts.
@@ -197,3 +240,10 @@ type Store interface {
 // "no users" — the distinction matters, since an empty list is what puts the
 // screen into first-run registration mode.
 var ErrNoUserList = errors.New("this store cannot list usernames")
+
+// errSyncNotConfigured reports that an action was asked of a sync that does
+// not exist on this installation. Distinct from a nil SyncStatus, which is the
+// quiet answer to a question ("is there sync here?"); this is the answer to an
+// instruction ("sync"), and an instruction that cannot be carried out is worth
+// saying out loud.
+var errSyncNotConfigured = errors.New("sync is not configured on this installation")

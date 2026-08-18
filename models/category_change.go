@@ -329,29 +329,21 @@ type NoteCategoryMappingSnapshot struct {
 	SelectedSubcategories []string `json:"selected_subcategories,omitempty"`
 }
 
-// recordNoteCategoryMappingChange snapshots a note's full category state and
-// records it as a NOTE change in the note's own database. Category ids in
-// the link rows are resolved to GUIDs against the public catalog so the
-// snapshot is portable across machines. Non-blocking.
-func recordNoteCategoryMappingChange(noteID int64) {
-	en := engineForNoteID(noteID)
-	if en == nil {
-		logger.Warn("recordNoteCategoryMappingChange: note not found", "note_id", noteID)
-		return
-	}
-
-	var noteGUID string
-	if err := en.QueryRow(`SELECT guid FROM notes WHERE id = ? AND deleted_at IS NULL`, noteID).Scan(&noteGUID); err != nil {
-		logger.LogErr(err, "failed to get note GUID for category mapping change", "note_id", noteID)
-		return
-	}
-
+// noteCategoryMappingsJSON builds the portable snapshot of a note's category
+// state: every link the note has, with the category resolved from a local id
+// to its GUID and the link's own subcategory selection carried along.
+//
+// Extracted so the two writers of a categories fragment produce byte-identical
+// content — recordNoteCategoryMappingChange when a link changes, and the
+// compactor when it rebuilds a note's pending changes into one snapshot. A
+// second, subtly different serializer here would show up as a phantom category
+// diff on the hub.
+func noteCategoryMappingsJSON(noteID int64) (string, error) {
 	// Read the note's category links from its database, then resolve each
 	// category id to its GUID via the public catalog.
 	links, err := noteLinks(noteID)
 	if err != nil {
-		logger.LogErr(err, "failed to query note categories for mapping change", "note_id", noteID)
-		return
+		return "", serr.Wrap(err, "failed to query note categories for mapping snapshot")
 	}
 
 	var mappings []NoteCategoryMappingSnapshot
@@ -374,13 +366,37 @@ func recordNoteCategoryMappingChange(noteID int64) {
 
 	mappingsJSON, err := json.Marshal(mappings)
 	if err != nil {
-		logger.LogErr(err, "failed to marshal category mappings", "note_id", noteID)
+		return "", serr.Wrap(err, "failed to marshal category mappings")
+	}
+	return string(mappingsJSON), nil
+}
+
+// recordNoteCategoryMappingChange snapshots a note's full category state and
+// records it as a NOTE change in the note's own database. Category ids in
+// the link rows are resolved to GUIDs against the public catalog so the
+// snapshot is portable across machines. Non-blocking.
+func recordNoteCategoryMappingChange(noteID int64) {
+	en := engineForNoteID(noteID)
+	if en == nil {
+		logger.Warn("recordNoteCategoryMappingChange: note not found", "note_id", noteID)
+		return
+	}
+
+	var noteGUID string
+	if err := en.QueryRow(`SELECT guid FROM notes WHERE id = ? AND deleted_at IS NULL`, noteID).Scan(&noteGUID); err != nil {
+		logger.LogErr(err, "failed to get note GUID for category mapping change", "note_id", noteID)
+		return
+	}
+
+	mappingsJSON, err := noteCategoryMappingsJSON(noteID)
+	if err != nil {
+		logger.LogErr(err, "failed to snapshot note categories for mapping change", "note_id", noteID)
 		return
 	}
 
 	fragment := NoteFragment{
 		Bitmask:    FragmentCategories,
-		Categories: sql.NullString{String: string(mappingsJSON), Valid: true},
+		Categories: sql.NullString{String: mappingsJSON, Valid: true},
 	}
 
 	fragmentID, err := insertNoteFragment(en, fragment)

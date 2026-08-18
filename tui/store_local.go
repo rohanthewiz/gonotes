@@ -216,5 +216,63 @@ func (s *localStore) ListNoteLocks(userGUID string) ([]models.NoteLock, error) {
 	return models.ListNoteLocks(userGUID), nil
 }
 
+// ---- Sync ------------------------------------------------------------------
+//
+// The local store drives the sync client this process started (see runTui). It
+// is nil on any installation that has not configured a hub, which is the
+// common case — so every method here starts by asking, and "no sync here" is
+// answered with a nil status rather than an error.
+
+func (s *localStore) SyncStatus() (*models.SyncClientStatus, error) {
+	client := models.GetSyncClient()
+	if client == nil {
+		return nil, nil
+	}
+	return client.GetStatus(), nil
+}
+
+func (s *localStore) SyncNow(compact bool) (*models.SyncClientStatus, error) {
+	client := models.GetSyncClient()
+	if client == nil {
+		return nil, errSyncNotConfigured
+	}
+	if compact {
+		if _, err := client.Compact(); err != nil {
+			// The user asked for their changes to go out; how they were packed
+			// on the way is the part that failed. Sync anyway and let the
+			// cycle's own result be the answer.
+			return client.GetStatus(), err
+		}
+	}
+	if err := client.SyncNow(); err != nil {
+		return client.GetStatus(), err
+	}
+	return client.GetStatus(), nil
+}
+
+func (s *localStore) SnoozeSync() (*models.SyncClientStatus, error) {
+	client := models.GetSyncClient()
+	if client == nil {
+		return nil, errSyncNotConfigured
+	}
+	client.Snooze(client.SnoozeDuration())
+	return client.GetStatus(), nil
+}
+
+func (s *localStore) CompactChanges() (*models.CompactionResult, error) {
+	client := models.GetSyncClient()
+	if client == nil {
+		return nil, errSyncNotConfigured
+	}
+	return client.Compact()
+}
+
+func (s *localStore) DeclineExitSync() error {
+	if client := models.GetSyncClient(); client != nil {
+		client.DeclineExitSync()
+	}
+	return nil
+}
+
 // Compile-time check: the interface and this implementation must not drift.
 var _ Store = (*localStore)(nil)

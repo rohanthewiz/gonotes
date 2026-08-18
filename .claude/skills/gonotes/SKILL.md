@@ -172,8 +172,10 @@ re-export and byte-diff as an independent check.
 **Terminal UI**: `gonotes tui` (or `gonotes tui -d <dir>`). Keys: `/` search,
 `n`/`e` new/edit, `c` category filter (then `s` for that category's
 subcategories, `space` to toggle several, `enter` to filter), `f` flag, `d`
-delete, `D` duplicate, `ctrl+e` edit body in `$EDITOR`, `ctrl+s` save, `ctrl+g`
-capture an agent pane, `q`/`esc` quit. Leaving a dirty form raises a three-way
+delete, `D` duplicate, `S` sync, `ctrl+e` edit body in `$EDITOR`, `ctrl+s` save,
+`ctrl+g` capture an agent pane, `q`/`esc` quit — which stops to ask when changes
+have not reached the hub (`s` sync, `c` compact & sync, `p` compact only, `q`
+leave anyway, `esc` keep working). Leaving a dirty form raises a three-way
 dialog — `s`/`enter` save & exit, `d` discard, `esc` keep editing. The note form's
 Categories field takes the same `Name/Sub` notation as the frontmatter and
 `gn-clip -c`, creating unknown categories and subcategories on save.
@@ -298,12 +300,12 @@ heartbeat that renews leases and reports when one is lost.
 | Path | What lives there |
 |---|---|
 | `main.go` | urfave/cli wiring: default action serves; subcommands `tui`, `import-gob`, `export-md`, `import-md`. `runTui` holds the local-vs-HTTP mode decision. |
-| `models/` | Data layer + business logic: `note.go`, `category.go`, `user.go`, `db.go` (two bytdb engines), `encryption.go`, `lock.go`, `sync_*.go`. |
+| `models/` | Data layer + business logic: `note.go`, `category.go`, `user.go`, `db.go` (two bytdb engines), `encryption.go`, `lock.go`, `sync_*.go` (including `sync_compact.go`, the change-log compactor). |
 | `web/routes.go` | Every route in one file — read it first when looking for an endpoint. |
 | `web/api/` | JSON handlers. All responses use the `APIResponse` envelope: `{success, data?, error?}`. |
 | `web/pages/` | Server-rendered HTML built with `rohanthewiz/element` (+ Monaco editor). |
 | `cats/` | The cats transport: `detect.go`, `client.go`, `hooks.go`, `events.go`. Stdlib only; never imports cats. |
-| `tui/` | Bubble Tea v2 screens (`browse`, `detail`, `form`, `categories`, `subcategories`, `login`, `confirm`, `locked`) + the seams: `store.go` / `store_local.go` / `store_http.go`, `keymap.go`, `palette.go`, `styles.go`, `markdown.go`, `mouse.go`, `lock.go`, and the cats glue (`cats_glue.go`, `catstheme.go`, `capture.go`, `metakeys.go`). |
+| `tui/` | Bubble Tea v2 screens (`browse`, `detail`, `form`, `categories`, `subcategories`, `login`, `confirm`, `locked`, `sync`) + the seams: `store.go` / `store_local.go` / `store_http.go`, `keymap.go`, `palette.go`, `styles.go`, `markdown.go`, `mouse.go`, `lock.go`, and the cats glue (`cats_glue.go`, `catstheme.go`, `capture.go`, `metakeys.go`). |
 | `md_*.go`, `import_gob.go` | Markdown frontmatter format, import/export, legacy gob import. |
 | `scripts/migrate` | The identity-preserving DuckDB → bytdb migrator (historical, but the reference for "move data without changing who you are"). |
 | `cats-plugin.toml` | Plugin manifest — build command and the `tui` / `serve` actions. |
@@ -317,7 +319,7 @@ route-level middleware; every query is user-scoped by GUID.
 
 ### The `Store` seam
 
-`tui/store.go` is an 18-method interface every screen goes through;
+`tui/store.go` is a 23-method interface every screen goes through;
 `store_local.go` is one-line pass-throughs to `models.*` and `store_http.go`
 talks to the API (gn-clip conventions: `GONOTES_USER` / `GONOTES_PASSWORD` /
 `GONOTES_SYNC_PASSWORD_B64`, token cached at `~/.gonotes/.api_token`, validated
@@ -353,14 +355,49 @@ Markdown frontmatter uses a different shape — `guid`, `title`, `description`,
 
 ## Sync (hub-spoke)
 
-Spokes sync to a hub on an interval, configured entirely by env vars
-(`GONOTES_SYNC_ENABLED`, `_HUB_URL`, `_USERNAME`, `_PASSWORD_B64`,
-`_INVITE_TOKEN`, `_INTERVAL`) read from the environment or
+Spokes sync to a hub, configured entirely by env vars (`GONOTES_SYNC_ENABLED`,
+`_HUB_URL`, `_USERNAME`, `_PASSWORD_B64`, `_INVITE_TOKEN`, `_INTERVAL`,
+`_MODE`, `_PROMPT_AFTER`, `_ON_EXIT`, `_COMPACT`) read from the environment or
 `<dir>/config/cfg_files/.env`. Conflict resolution is delete-wins, then
 last-writer-wins on `authored_at`; conflicts land in the `sync_conflicts`
-table. Runtime control: `GET /api/v1/sync/control/status`,
-`POST /api/v1/sync/control/toggle`, `POST /api/v1/sync/control/sync-now`.
-Full setup walkthrough is in `README.md`.
+table. Full setup walkthrough is in `README.md`.
+
+**Nothing syncs in the background by default.** `GONOTES_SYNC_MODE` defaults to
+`prompt`: the client keeps a clock and reports itself *due* once
+`GONOTES_SYNC_PROMPT_AFTER` (default `2h`) has passed since the last successful
+cycle; a UI turns that into a question. `auto` is the old timer, and only then
+does `_INTERVAL` mean anything. So a spoke that looks configured and shows no
+"Sync cycle completed" lines is working as designed — check `mode` in the
+status, not the logs.
+
+A cycle runs when: a prompt is answered, `S` is pressed in the TUI, **Sync now**
+is clicked in the web UI, `POST /sync/control/sync-now` arrives, or the process
+exits (`GONOTES_SYNC_ON_EXIT`, default true — SIGINT/SIGTERM for the server,
+the quit dialog for the TUI, `pagehide` for the web tab).
+
+**Compaction** (`models/sync_compact.go`) collapses the pending unsent log to
+one change per entity, built from the entity's CURRENT state — so body-diff
+chains become literal text and the field bitmask is the union of what it
+replaces. It is destructive to local change history and therefore never
+automatic unless `GONOTES_SYNC_COMPACT=true`. Offered as `c` (compact & sync)
+and `p` (compact only) in the TUI dialog, **Compact & sync** in the web banner,
+and `POST /sync/control/compact`.
+
+Runtime control — all authenticated:
+
+| Verb | Endpoint | Notes |
+|---|---|---|
+| `GET` | `/api/v1/sync/control/status` | Adds `mode`, `due`, `due_in_seconds`, `pending_changes`, `snoozed_until` |
+| `POST` | `/api/v1/sync/control/toggle` | `{"enabled":bool}` |
+| `POST` | `/api/v1/sync/control/sync-now` | `{"compact":bool}` optional |
+| `POST` | `/api/v1/sync/control/snooze` | `{"duration":"30m"}` optional; defaults to the prompt interval |
+| `POST` | `/api/v1/sync/control/mode` | `{"mode":"prompt"\|"auto"}`; session-scoped, not persisted |
+| `POST` | `/api/v1/sync/control/compact` | Returns `{compaction, status}` |
+
+The TUI reaches all of this through four Store methods (`SyncStatus`,
+`SyncNow`, `SnoozeSync`, `CompactChanges`) plus `DeclineExitSync`; local mode
+drives `models.GetSyncClient()` directly (runTui starts one now), HTTP mode
+calls the endpoints above.
 
 ## Privacy
 

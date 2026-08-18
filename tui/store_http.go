@@ -973,6 +973,59 @@ func (s *httpStore) RemoveCategoryFromNote(noteID, categoryID int64) error {
 	return nil
 }
 
+// ---- Sync ------------------------------------------------------------------
+//
+// In HTTP mode the server owns the sync client; these call the sync control
+// API it exposes for exactly this purpose. The response body of every one of
+// them is a models.SyncClientStatus, so a single decode target serves the lot.
+
+func (s *httpStore) SyncStatus() (*models.SyncClientStatus, error) {
+	var status models.SyncClientStatus
+	if err := s.request(http.MethodGet, "/api/v1/sync/control/status", nil, &status); err != nil {
+		return nil, serr.Wrap(err, "failed to read sync status")
+	}
+	return &status, nil
+}
+
+func (s *httpStore) SyncNow(compact bool) (*models.SyncClientStatus, error) {
+	var status models.SyncClientStatus
+	body := map[string]any{"compact": compact}
+	if err := s.request(http.MethodPost, "/api/v1/sync/control/sync-now", body, &status); err != nil {
+		// The status is worth reporting even on failure — "sync failed, 12
+		// changes still pending" says more than "sync failed" — but a failed
+		// call may not have decoded one, so the error travels with whatever
+		// arrived rather than instead of it.
+		return nil, serr.Wrap(err, "sync failed")
+	}
+	return &status, nil
+}
+
+func (s *httpStore) SnoozeSync() (*models.SyncClientStatus, error) {
+	var status models.SyncClientStatus
+	if err := s.request(http.MethodPost, "/api/v1/sync/control/snooze", map[string]any{}, &status); err != nil {
+		return nil, serr.Wrap(err, "failed to defer the sync prompt")
+	}
+	return &status, nil
+}
+
+func (s *httpStore) CompactChanges() (*models.CompactionResult, error) {
+	// The compact endpoint answers with both the compaction and the status;
+	// only the former is news here, and the caller re-reads status when it
+	// wants it.
+	var out struct {
+		Compaction models.CompactionResult `json:"compaction"`
+	}
+	if err := s.request(http.MethodPost, "/api/v1/sync/control/compact", map[string]any{}, &out); err != nil {
+		return nil, serr.Wrap(err, "failed to compact pending changes")
+	}
+	return &out.Compaction, nil
+}
+
+// DeclineExitSync is deliberately a no-op over HTTP. See the interface doc:
+// this TUI quitting is not the server exiting, and one client's answer must
+// not disarm the shutdown cycle of a server that serves others.
+func (s *httpStore) DeclineExitSync() error { return nil }
+
 // ---- Output → model mapping ------------------------------------------------
 //
 // The API speaks in *Output structs (pointers and RFC3339 strings, so JSON

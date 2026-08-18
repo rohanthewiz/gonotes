@@ -189,8 +189,11 @@ const tuiProbeTimeout = 2 * time.Second
 // Every outcome is labelled — see tui.Mode — so that whichever way it goes, the
 // screen says which notes these are.
 //
-// The web server, JWT signing, and the sync client are skipped either way; in
-// HTTP mode the remote server owns all of that.
+// The web server and JWT signing are skipped either way. The sync client is
+// not: in HTTP mode the remote server owns it (and the TUI reaches it through
+// the sync control API), while in local mode this process starts it, because
+// otherwise nothing on this machine would know how long these notes have gone
+// unsynced or be able to do anything about it.
 func runTui(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return serr.Wrap(err, "failed to create directory", "dir", dir)
@@ -254,10 +257,26 @@ func runTui(dir string) error {
 		}
 	}
 
+	// Sync, in local mode, is this process's job — there is no server here to
+	// own it. In the default prompt mode starting the client costs nothing and
+	// syncs nothing: it reads the persisted last-sync time, and from then on
+	// the TUI can say how overdue this spoke is and offer to fix it.
+	syncClient := initSyncClient()
+
 	// The mode carries whatever the decision had to say — including, when the
 	// probe found a server serving someone else's directory, the fact that it
 	// was deliberately passed over.
-	return tui.Run(tui.NewLocalStore(), mode)
+	runErr := tui.Run(tui.NewLocalStore(), mode)
+
+	// The exit cycle, after the terminal is back and before the deferred
+	// CloseDB. The TUI's quit dialog is the prompt half of this, and a user who
+	// answered it with "quit without syncing" has already called
+	// DeclineExitSync — so this covers the exits that never reached that dialog
+	// (ctrl+c, a program that failed to start) without overruling the ones that
+	// did.
+	syncBeforeExit(syncClient)
+
+	return runErr
 }
 
 // decideStore applies the rule in runTui's comment: which store to use, and how
@@ -399,45 +418,86 @@ func serve(dir, port string) error {
 	}
 
 	// Initialize sync client if configured via environment variables.
-	initSyncClient()
+	client := initSyncClient()
 
 	// Start server
 	srv := web.NewServer(port)
 	logger.Info("Starting GoNotes Web", "port", port)
 
-	return web.Run(srv)
+	// web.Run blocks until the process is asked to stop: rweb installs its own
+	// SIGINT/SIGTERM handler and returns from Run when one arrives (see
+	// rweb.Server.Run). That return is the shutdown hook — a second signal
+	// handler here would be delivered the same signal at the same moment and
+	// race the deferred CloseDB above for the databases the exit sync needs.
+	runErr := web.Run(srv)
+
+	// The exit sync, before CloseDB unwinds. A server has nobody to prompt, so
+	// this is the only unattended cycle prompt mode leaves it: without it,
+	// stopping a spoke that has been in prompt mode all afternoon carries the
+	// afternoon's changes into the next launch instead of to the hub.
+	syncBeforeExit(client)
+
+	return runErr
+}
+
+// syncBeforeExit runs the final cycle and stops the client. Safe with a nil
+// client (sync not configured) so the caller needs no guard.
+//
+// Every exit path that gets here still has its databases open — that is the
+// whole reason it is a plain call at the end of a function rather than a
+// signal handler.
+func syncBeforeExit(client *models.SyncClient) {
+	if client == nil {
+		return
+	}
+
+	ran, err := client.SyncOnExit(context.Background())
+	if err != nil {
+		logger.LogErr(err, "final sync before exit did not complete")
+	} else if ran {
+		logger.Info("Final sync complete")
+	}
+	client.Stop()
 }
 
 // initSyncClient loads sync configuration from environment variables and
 // starts the background sync goroutine if enabled. Errors during setup
 // are logged but don't prevent the server from starting — sync is an
 // optional enhancement, not a hard dependency.
-func initSyncClient() {
+//
+// Returns the client so the caller can run the exit cycle, or nil when sync is
+// not configured. "Running" no longer implies "syncing": in the default prompt
+// mode the goroutine keeps the clock and waits to be asked. See
+// models/sync_client.go.
+func initSyncClient() *models.SyncClient {
 	syncConfig, err := models.LoadSyncConfig()
 	if err != nil {
 		logger.LogErr(err, "Failed to load sync config")
-		return
+		return nil
 	}
 
 	if !syncConfig.Enabled {
 		logger.Info("Sync is disabled (set GONOTES_SYNC_ENABLED=true to enable)")
-		return
+		return nil
 	}
 
 	client, err := models.NewSyncClient(syncConfig)
 	if err != nil {
 		logger.LogErr(err, "Failed to create sync client")
-		return
+		return nil
 	}
 
 	// Use a background context — the sync client manages its own lifecycle
-	// via Stop(). In a future iteration this could use a signal-aware
-	// context for graceful OS signal handling.
+	// via Stop(). The signal handling that comment once wished for now lives
+	// in awaitShutdown, which is where the exit cycle is run from.
 	ctx := context.Background()
 	client.Start(ctx)
 
-	logger.Info("Sync client initialized and running",
+	logger.Info("Sync client initialized",
 		"hub_url", syncConfig.HubURL,
+		"mode", string(syncConfig.Mode),
 		"interval", syncConfig.Interval.String(),
+		"prompt_after", syncConfig.PromptAfter.String(),
 	)
+	return client
 }
