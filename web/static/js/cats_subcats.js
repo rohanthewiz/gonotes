@@ -226,6 +226,32 @@
   let categoryEntries = new Map();         // current editing state
   let originalCategoryEntries = new Map(); // snapshot at edit start (for save diff)
 
+  // Category and subcategory names are identifiers the app stores verbatim, not
+  // prose, so every field that types one turns the browser's writing aids off:
+  //   autocapitalize - touch keyboards default to sentence case, so a typed
+  //                    "work" is submitted as "Work". Nothing downstream lowers
+  //                    it again: the name is stored exactly as sent, and while
+  //                    this file folds case when matching a typed name against
+  //                    an *existing* category, subcategory matching here and the
+  //                    server's name lookup are both exact — so a capitalized
+  //                    name becomes a second, near-duplicate spelling.
+  //   autocorrect    - Safari would "fix" short or invented names (a project
+  //                    codename, an abbreviation) into whatever word it prefers.
+  //
+  // spellcheck is deliberately left ON: it only draws a squiggle, it never edits
+  // the value, so it costs nothing here and still catches a genuine typo in a
+  // name that is about to be stored verbatim and matched exactly from then on.
+  //
+  // NAME_INPUT_ATTRS is the markup form (for the template literals below) and
+  // setNameInputAttrs is the DOM form (for inputs built with createElement);
+  // both exist so the two rendering styles in this file cannot drift apart.
+  const NAME_INPUT_ATTRS = 'autocapitalize="off" autocorrect="off"';
+
+  function setNameInputAttrs(el) {
+    el.setAttribute('autocapitalize', 'off');
+    el.setAttribute('autocorrect', 'off');
+  }
+
   // ============================================
   // Edit Form Category Helpers
   // ============================================
@@ -405,6 +431,10 @@
     newSubcatInput.type = 'text';
     newSubcatInput.className = 'edit-input subcat-input';
     newSubcatInput.placeholder = 'Add subcategory...';
+    // Subcategory names are identifiers, not prose. Touch keyboards capitalize the
+    // first letter of a text field by default, which would turn "backend" into
+    // "Backend" and split one subcategory into two spellings of the same thing.
+    setNameInputAttrs(newSubcatInput);
     newSubcatInput.onkeypress = function(e) {
       if (e.key === 'Enter') {
         e.preventDefault();
@@ -630,7 +660,7 @@
     modalBody.innerHTML = `
       <div class="category-manager">
         <div class="category-manager-header">
-          <input type="text" id="new-category-name" placeholder="New category name..." />
+          <input type="text" id="new-category-name" placeholder="New category name..." ${NAME_INPUT_ATTRS} />
           <button class="btn btn-primary" onclick="app.createCategory()">Add</button>
         </div>
         <div class="category-list" id="category-list">
@@ -721,14 +751,14 @@
     editForm.style.display = 'block';
     editForm.innerHTML = `
       <label>Category Name</label>
-      <input type="text" id="edit-cat-name-${categoryId}" value="${escapeHtml(cat.name)}" />
+      <input type="text" id="edit-cat-name-${categoryId}" value="${escapeHtml(cat.name)}" ${NAME_INPUT_ATTRS} />
 
       <label>Subcategories</label>
       <div class="subcategory-tags" id="subcategory-tags-${categoryId}">
         ${renderSubcategoryTags(categoryId)}
       </div>
       <div class="subcategory-input-group">
-        <input type="text" id="new-subcat-${categoryId}" placeholder="Add subcategory..."
+        <input type="text" id="new-subcat-${categoryId}" placeholder="Add subcategory..." ${NAME_INPUT_ATTRS}
                onkeypress="if(event.key==='Enter'){app.addSubcategory(${categoryId}); event.preventDefault();}" />
         <button class="btn btn-secondary" onclick="app.addSubcategory(${categoryId})">Add</button>
       </div>

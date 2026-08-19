@@ -117,9 +117,17 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 						),
 						// Add category row: input with datalist + "Add" button
 						b.DivClass("category-add-row").R(
+							// autocapitalize/autocorrect are off because a category name is an
+							// identifier stored verbatim, not prose: a touch keyboard defaults to
+							// sentence case, so a typed "work" would be created as "Work".
+							// (cats_subcats.js folds case when this name matches a category that
+							// already exists, so the damage lands on new names — which is exactly
+							// the name nobody can correct after the fact.) spellcheck stays on:
+							// it only draws a squiggle, it never rewrites what was typed.
 							b.Input("type", "text", "class", "edit-input", "id", "edit-category",
 								"placeholder", "Type or select category...",
-								"list", "category-datalist", "autocomplete", "off"),
+								"list", "category-datalist", "autocomplete", "off",
+								"autocapitalize", "off", "autocorrect", "off"),
 							b.DataList("id", "category-datalist").R(
 								// Options populated dynamically by JavaScript
 							),
