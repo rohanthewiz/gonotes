@@ -385,12 +385,33 @@
   // Notes CRUD Functions
   // ============================================
 
+  // loadNotes pulls the WHOLE library into state.notes — no limit parameter.
+  //
+  // That is deliberate, not careless. Every filter this UI offers (search,
+  // regex, category, subcategory, flagged, privacy) runs client-side in
+  // getFilteredNotes over state.notes; there is no pagination control and no
+  // server-side search. So whatever this request leaves behind is not merely
+  // "below the fold" — it is invisible to search, uncountable in the result
+  // count, and unreachable by select-all. The old `?limit=100` therefore did
+  // not page the library, it silently truncated it: with 400 notes, a search
+  // combed 100 of them and select-all-then-delete removed at most 100.
+  //
+  // Asking for everything costs the server nothing extra either. ListNotes
+  // reads both databases in full, merges, and sorts before it applies
+  // limit/offset in memory (models/note.go), so N paged requests would be N
+  // full scans to obtain what one request already has in hand.
+  //
+  // Omitting `limit` is how the API spells "no limit" — see ListNotes, where
+  // an absent parameter leaves limit at 0 and 0 means unbounded.
   async function loadNotes() {
     updateSyncStatus('syncing', 'Loading...');
     try {
-      const response = await apiRequest('/notes?limit=100');
+      const response = await apiRequest('/notes');
       if (response && response.data) {
         state.notes = response.data;
+        // renderNoteList prunes the batch selection against what it renders,
+        // so ids that vanished server-side (deleted elsewhere, synced away)
+        // drop out of the selection here rather than lingering as phantoms.
         renderNoteList();
         updateResultCount();
         updateSyncStatus('synced', 'Synced');
@@ -908,6 +929,12 @@
     // Get filtered and sorted notes
     const filteredNotes = getFilteredNotes();
 
+    // The batch selection is reconciled against the rows about to be drawn, on
+    // every render, so the invariant "what is selected is what is visible"
+    // holds no matter which path got us here.
+    reconcileSelection(filteredNotes);
+    updateBatchActions(filteredNotes.length);
+
     // Hide loading state
     if (loadingState) loadingState.classList.add('hidden');
 
@@ -1387,33 +1414,116 @@
     renderNoteList();
   };
 
-  function updateBatchActions() {
-    const batchBar = document.getElementById('batch-actions');
-    const count = state.selectedNotes.size;
-
-    if (count > 0) {
-      batchBar.classList.add('visible');
-      document.getElementById('batch-count').textContent = `${count} selected`;
-    } else {
-      batchBar.classList.remove('visible');
+  // reconcileSelection drops any batch-selected note the list is not showing.
+  //
+  // The selection is a set of note ids kept across re-renders, which is what
+  // makes ticking several boxes possible at all. Kept across a change of *view*,
+  // though, it turns into a trap: select twenty notes, then search or switch
+  // category, and the batch bar still reads "20 selected" above three rows — so
+  // "Delete 20 notes?" quietly removes seventeen notes that are nowhere on
+  // screen. Same trap in the other direction after a reload: an id deleted from
+  // another session (a TUI, a sync pull) stays in the set as a phantom that
+  // every later batch re-attempts and fails on.
+  //
+  // Reconciling here, at the single choke point every filter/sort/search/reload
+  // path funnels through, covers those paths by construction — including ones
+  // added later, which is the reason it lives here rather than as a clear()
+  // sprinkled over a dozen filter mutation sites.
+  //
+  // The resulting rule: a note that falls out of the filter is deselected, and
+  // re-widening the filter does not bring the tick back. That is the honest
+  // reading of "Delete N notes" — N is what you can see.
+  function reconcileSelection(visibleNotes) {
+    if (state.selectedNotes.size === 0) return;
+    const visible = new Set(visibleNotes.map(note => note.id));
+    for (const id of state.selectedNotes) {
+      // Deleting the entry the loop is standing on is defined behaviour for a
+      // Set iterator: it simply is not revisited.
+      if (!visible.has(id)) state.selectedNotes.delete(id);
     }
   }
 
-  window.app.deleteSelected = async function() {
-    if (!confirm(`Delete ${state.selectedNotes.size} notes?`)) return;
+  // updateBatchActions shows/hides the batch bar and syncs the header tick.
+  //
+  // visibleCount is how many rows the list is currently showing. Callers that
+  // already filtered pass it in; the rest omit it and pay for one more filter
+  // pass, which is cheap next to the full re-render that follows.
+  function updateBatchActions(visibleCount) {
+    const batchBar = document.getElementById('batch-actions');
+    const count = state.selectedNotes.size;
 
-    for (const noteId of state.selectedNotes) {
+    batchBar.classList.toggle('visible', count > 0);
+    // Written even when the bar is hidden, so an emptied selection can never
+    // flash a stale "20 selected" the moment the bar comes back.
+    document.getElementById('batch-count').textContent = `${count} selected`;
+
+    // The header checkbox has to follow the selection, not lead it. Left
+    // ticked after reconcileSelection has dropped notes, the user's next click
+    // on it registers as "deselect all" when they meant "select all".
+    const selectAll = document.getElementById('select-all');
+    if (!selectAll) return;
+    const visible = visibleCount === undefined ? getFilteredNotes().length : visibleCount;
+    selectAll.checked = visible > 0 && count >= visible;
+    // Indeterminate is the partial-selection state a plain checkbox cannot
+    // otherwise express — and the state a batch bar is usually in.
+    selectAll.indeterminate = count > 0 && count < visible;
+  }
+
+  // deleteSelected removes every checked note, one request at a time.
+  //
+  // Serial rather than parallel on purpose: each delete is gated by the
+  // note-lock registry and recorded as a sync change against a single-process
+  // store, so firing fifty concurrent DELETEs buys no throughput and scrambles
+  // the order failures come back in.
+  //
+  // The part that matters is what happens to the notes that DON'T delete. A
+  // note another session holds open (a GoNotes TUI in a cats pane, say) answers
+  // 409 and stays exactly where it was. Reporting a flat "Notes deleted" made a
+  // batch that deleted nothing look identical to one that deleted everything —
+  // which is precisely what "delete isn't working" looks like from the outside.
+  // So survivors stay in the selection (their checkboxes come back ticked after
+  // the reload, ready to retry once the other session lets go) and the toast
+  // says how many were left behind and why.
+  window.app.deleteSelected = async function() {
+    const total = state.selectedNotes.size;
+    if (total === 0) return;
+    if (!confirm(`Delete ${total} notes?`)) return;
+
+    // Iterate a snapshot: the live set is edited as each delete lands, so that
+    // a mid-batch failure leaves exactly the survivors selected.
+    const targets = [...state.selectedNotes];
+    const failures = [];
+
+    for (const noteId of targets) {
       try {
         await apiRequest(`/notes/${noteId}`, { method: 'DELETE' });
+        state.selectedNotes.delete(noteId);
+        // The preview pane may be showing a note that no longer exists.
+        if (state.currentNote && state.currentNote.id === noteId) {
+          state.currentNote = null;
+          clearPreview();
+        }
       } catch (error) {
-        console.error('Failed to delete note:', noteId);
+        // apiRequest has already toasted the server's own wording ("note is
+        // locked by pane w1:p3 since 2m ago"); keep it so the summary can
+        // repeat the first one instead of the useless "some failed".
+        console.error('Failed to delete note:', noteId, error);
+        failures.push({ noteId: noteId, message: error.message });
       }
     }
 
-    state.selectedNotes.clear();
     updateBatchActions();
     await loadNotes();
-    showToast('Notes deleted', 'success');
+
+    if (failures.length === 0) {
+      showToast(total === 1 ? 'Note deleted' : `${total} notes deleted`, 'success');
+    } else if (failures.length === total) {
+      showToast(`Nothing deleted — ${failures[0].message}`, 'error');
+    } else {
+      showToast(
+        `Deleted ${total - failures.length} of ${total}; ${failures.length} still selected — ${failures[0].message}`,
+        'error');
+    }
   };
 
   // ============================================
