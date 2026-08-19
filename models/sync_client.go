@@ -164,6 +164,22 @@ func NewSyncClient(config *SyncConfig) (*SyncClient, error) {
 		client.authToken = state.AuthToken.String
 	}
 
+	// Align the local account with this spoke's hub identity at startup rather
+	// than waiting for a cycle. In prompt mode a cycle may not run for hours,
+	// and the symptom being fixed — "my synced notes aren't there" — is
+	// something the user is looking at right now.
+	//
+	// The cached-token branch is the upgrade path: a spoke that logged in
+	// before sync_state learned to record this holds a week-long token and
+	// would otherwise not call login() again until it expired.
+	if state.HubUserGUID.Valid && state.HubUserGUID.String != "" {
+		client.adoptHubIdentity(state.HubUserGUID.String, state.HubUsername.String)
+	} else if client.authToken != "" {
+		if guid, username := hubIdentityFromToken(client.authToken); guid != "" {
+			client.adoptHubIdentity(guid, username)
+		}
+	}
+
 	// Restore when this spoke last synced. In auto mode this only sharpened
 	// the backoff; in prompt mode it is load-bearing — due-ness is measured
 	// from it, and a client that forgot it on every restart would either never
@@ -693,11 +709,18 @@ func (sc *SyncClient) login(ctx context.Context) error {
 		return serr.New(fmt.Sprintf("login failed with status %d", resp.StatusCode))
 	}
 
-	// The login endpoint returns APIResponse { success, data: { user, token } }
+	// The login endpoint returns APIResponse { success, data: { user, token } }.
+	// The user half was previously discarded; it carries the GUID this hub
+	// stamps onto every change it sends us, which is the identity the local
+	// account has to share to be able to see them.
 	var apiResp struct {
 		Success bool `json:"success"`
 		Data    struct {
 			Token string `json:"token"`
+			User  struct {
+				GUID     string `json:"guid"`
+				Username string `json:"username"`
+			} `json:"user"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
@@ -714,7 +737,37 @@ func (sc *SyncClient) login(ctx context.Context) error {
 		logger.LogErr(err, "failed to persist auth token")
 	}
 
+	sc.adoptHubIdentity(apiResp.Data.User.GUID, apiResp.Data.User.Username)
+
 	return nil
+}
+
+// adoptHubIdentity records the hub account this spoke authenticated as and
+// aligns the matching local account with it.
+//
+// Failures here are logged, never returned: this is a repair that makes
+// synced notes visible locally, and a spoke that cannot perform it should
+// still sync. Refusing to log in because ownership could not be realigned
+// would trade a display problem for a total outage.
+func (sc *SyncClient) adoptHubIdentity(hubUserGUID, hubUsername string) {
+	if hubUserGUID == "" {
+		return
+	}
+	// Fall back to the configured sync username: a hub that answers without
+	// echoing the username still told us the GUID, and the name we logged in
+	// with is the same name.
+	if hubUsername == "" {
+		hubUsername = sc.config.Username
+	}
+
+	if err := RecordHubIdentity(sc.config.HubURL, hubUserGUID, hubUsername); err != nil {
+		logger.LogErr(err, "failed to record hub user identity")
+		return
+	}
+	if _, err := ReconcileHubUserGUID(hubUserGUID, hubUsername); err != nil {
+		logger.LogErr(err, "failed to align the local user with its hub identity",
+			"username", hubUsername)
+	}
 }
 
 // registerWithInviteToken sends a registration request to the hub using the
@@ -1081,8 +1134,16 @@ type SyncState struct {
 	LastPullAt sql.NullTime
 	LastSyncAt sql.NullTime
 	AuthToken  sql.NullString
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+
+	// HubUserGUID / HubUsername are who this spoke is on the hub. They are
+	// what lets the spoke's local account carry the same GUID as its hub
+	// account, without which pulled notes are owned by a user nobody here
+	// can log in as. See sync_identity.go.
+	HubUserGUID sql.NullString
+	HubUsername sql.NullString
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // GetOrCreateSyncState loads the sync state for a hub URL, creating a new
@@ -1091,10 +1152,12 @@ type SyncState struct {
 func GetOrCreateSyncState(hubURL string) (*SyncState, error) {
 	state := &SyncState{}
 	err := pubDB.QueryRow(
-		`SELECT hub_url, peer_id, last_push_at, last_pull_at, last_sync_at, auth_token, created_at, updated_at
+		`SELECT hub_url, peer_id, last_push_at, last_pull_at, last_sync_at, auth_token,
+		        hub_user_guid, hub_username, created_at, updated_at
 		 FROM sync_state WHERE hub_url = ?`, hubURL,
 	).Scan(&state.HubURL, &state.PeerID, &state.LastPushAt, &state.LastPullAt,
-		&state.LastSyncAt, &state.AuthToken, &state.CreatedAt, &state.UpdatedAt)
+		&state.LastSyncAt, &state.AuthToken, &state.HubUserGUID, &state.HubUsername,
+		&state.CreatedAt, &state.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		// First time syncing with this hub — generate a new peer ID

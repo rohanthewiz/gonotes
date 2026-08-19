@@ -354,15 +354,33 @@ func (en *dbEngine) createPublicOnlySchema() error {
 
 	// --- sync_state (natural PK on hub_url) ---
 	if err := en.ensureTable("sync_state", `CREATE TABLE sync_state (
-		hub_url      VARCHAR PRIMARY KEY,
-		peer_id      VARCHAR NOT NULL,
-		last_push_at TIMESTAMP,
-		last_pull_at TIMESTAMP,
-		last_sync_at TIMESTAMP,
-		auth_token   VARCHAR,
-		created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		hub_url       VARCHAR PRIMARY KEY,
+		peer_id       VARCHAR NOT NULL,
+		last_push_at  TIMESTAMP,
+		last_pull_at  TIMESTAMP,
+		last_sync_at  TIMESTAMP,
+		auth_token    VARCHAR,
+		hub_user_guid VARCHAR,
+		hub_username  VARCHAR,
+		created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	)`); err != nil {
+		return err
+	}
+
+	// hub_user_guid / hub_username record who this spoke is ON THE HUB, which
+	// is not something it could previously answer without a network call.
+	// Ownership (notes.created_by) travels with every synced change, so the
+	// spoke's local account has to carry the same GUID as its hub account or
+	// pulled notes belong to nobody it can log in as. See sync_identity.go.
+	//
+	// No backfill: the value cannot be derived from what is already on disk.
+	// It is filled in by the next login, or recovered early from a cached
+	// hub JWT at sync client startup.
+	if err := en.ensureColumn("sync_state", "hub_user_guid", "VARCHAR", ""); err != nil {
+		return err
+	}
+	if err := en.ensureColumn("sync_state", "hub_username", "VARCHAR", ""); err != nil {
 		return err
 	}
 

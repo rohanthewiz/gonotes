@@ -143,7 +143,15 @@ func CreateUser(input UserRegisterInput) (*User, error) {
 		return nil, err
 	}
 
-	userGUID := uuid.New().String()
+	// A GUID is normally minted here, but on a spoke that already knows which
+	// hub account this username belongs to, minting one is exactly the bug:
+	// the notes this user is about to pull are owned by the hub's GUID, and a
+	// fresh one would leave them invisible. Adopt instead. See
+	// sync_identity.go.
+	userGUID := adoptableHubUserGUID(input.Username)
+	if userGUID == "" {
+		userGUID = uuid.New().String()
+	}
 
 	var email sql.NullString
 	if input.Email != nil && *input.Email != "" {

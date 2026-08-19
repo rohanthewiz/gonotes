@@ -152,6 +152,34 @@ New users can only register with an **invite token** created by the admin. There
    asks for one; set `GONOTES_SYNC_MODE=auto` if you want the old behavior of a
    cycle every interval.
 
+5. Register locally on the spoke (web `/register` or the TUI) **using the same
+   username as `GONOTES_SYNC_USERNAME`**. The spoke needs a local account to log
+   into; the name is what ties it to the hub account.
+
+#### One account, one GUID
+
+Notes are owned by a user GUID, and that ownership travels with every synced
+change. A spoke's local account therefore has to carry the *same* GUID as its
+hub account — otherwise sync succeeds and the pulled notes belong to a user
+nobody on the spoke can log in as, which looks like "sync ran and nothing
+appeared".
+
+The spoke handles this itself. It learns the hub's user GUID at login (or from
+its cached hub token on restart) and records it, then:
+
+- a local account registered **afterward** is created holding that GUID; and
+- a local account that **already exists** under the sync username adopts it,
+  re-pointing its notes, categories, and change log onto the hub's GUID. This is
+  the repair path for spokes set up before this behavior existed — it happens
+  once, on the next login or restart, and is logged as `Local user adopted its
+  hub identity`.
+
+The one case the spoke will not resolve on its own is a local account registered
+under a *different* name from `GONOTES_SYNC_USERNAME`: two names are two
+accounts as far as the spoke can tell, so it refuses to merge them and logs that
+no local account matches the sync username. Register under the sync username to
+fix it.
+
 ### When does a sync actually happen?
 
 Since prompt mode became the default, **nothing syncs on its own**. A cycle runs

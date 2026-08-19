@@ -375,6 +375,21 @@ is clicked in the web UI, `POST /sync/control/sync-now` arrives, or the process
 exits (`GONOTES_SYNC_ON_EXIT`, default true — SIGINT/SIGTERM for the server,
 the quit dialog for the TUI, `pagehide` for the web tab).
 
+**A spoke's local user carries its hub user's GUID** (`models/sync_identity.go`).
+Ownership (`notes.created_by`) travels with every synced change, and every read
+filters on it, so a local account with a GUID of its own makes pulled notes
+invisible — sync succeeds, the UI shows nothing. The spoke learns the hub GUID
+at login (or from its cached hub JWT at startup, parsed *unverified* — the hub
+holds the signing key), records it in `sync_state.hub_user_guid` /
+`hub_username`, and then either hands it to the next local registration
+(`CreateUser` → `adoptableHubUserGUID`) or makes an existing same-named account
+adopt it (`ReconcileHubUserGUID`, sweeping `notes`, `note_changes`,
+`categories`, `category_changes`, `invite_tokens` across both engines, users row
+last so a crashed sweep re-runs). Matching is by **username**; a local account
+under a different name is left alone and logged. The push direction was never
+broken — the hub's `PushChanges` already overwrites `change.User` with the
+authenticated GUID.
+
 **Compaction** (`models/sync_compact.go`) collapses the pending unsent log to
 one change per entity, built from the entity's CURRENT state — so body-diff
 chains become literal text and the field bitmask is the union of what it
