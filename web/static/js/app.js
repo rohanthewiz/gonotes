@@ -440,6 +440,10 @@
       // Fetch note's categories from the API and populate multi-category entries.
       // Done after showEditMode so the form is visible while categories load.
       await window.app._loadEditNoteCategories(noteId);
+
+      // Categories arrive after the fold state was applied, so refresh the
+      // collapsed summary now that the count is known.
+      updateEditMetaSummary();
     }
   };
 
@@ -1566,6 +1570,9 @@
     document.getElementById('edit-mode').classList.add('active');
     document.getElementById('edit-title').focus();
 
+    // Re-apply the remembered Description/Categories fold state
+    applyEditMetaCollapsed();
+
     // Activate the Monaco editor if the user has opted into it
     // (monaco_editor.js — loads Monaco lazily on first use)
     if (window.app._monacoOnEditShown) window.app._monacoOnEditShown();
@@ -1575,6 +1582,62 @@
     document.getElementById('edit-mode').classList.remove('active');
     document.getElementById('preview-mode').classList.remove('hidden');
   }
+
+  // ============================================
+  // Edit mode: collapsible Description & Categories block
+  // ============================================
+  // Folding the meta block hands its vertical space to the body editor, which
+  // is what you want once the note's description/categories are settled and the
+  // work is all in the body. The choice is a workspace preference, not a
+  // per-note one, so it persists in localStorage and is re-applied every time
+  // edit mode opens.
+  const EDIT_META_COLLAPSED_KEY = 'gonotes-edit-meta-collapsed';
+
+  window.app.toggleEditMeta = function() {
+    const meta = document.getElementById('edit-meta');
+    if (!meta) return;
+    const collapsed = !meta.classList.contains('collapsed');
+    meta.classList.toggle('collapsed', collapsed);
+    localStorage.setItem(EDIT_META_COLLAPSED_KEY, collapsed ? '1' : '0');
+    updateEditMetaSummary();
+  };
+
+  // Restores the remembered fold state. Called on every entry into edit mode
+  // because the form is a single reused DOM node — a note opened later would
+  // otherwise inherit whatever the previous note left behind.
+  function applyEditMetaCollapsed() {
+    const meta = document.getElementById('edit-meta');
+    if (!meta) return;
+    meta.classList.toggle('collapsed',
+      localStorage.getItem(EDIT_META_COLLAPSED_KEY) === '1');
+    updateEditMetaSummary();
+  }
+
+  // While collapsed, echo what is hidden into the header strip so the values
+  // are not silently out of sight (e.g. "Weekly log · 2 categories"). Cleared
+  // when expanded, since the real fields are then on screen.
+  function updateEditMetaSummary() {
+    const meta = document.getElementById('edit-meta');
+    const summary = document.getElementById('edit-meta-summary');
+    if (!meta || !summary) return;
+
+    if (!meta.classList.contains('collapsed')) {
+      summary.textContent = '';
+      return;
+    }
+
+    const parts = [];
+    const desc = (document.getElementById('edit-description') || {}).value || '';
+    if (desc.trim()) parts.push(desc.trim());
+
+    const container = document.getElementById('category-entries-container');
+    const count = container ? container.querySelectorAll('.category-entry').length : 0;
+    if (count) parts.push(count === 1 ? '1 category' : count + ' categories');
+
+    summary.textContent = parts.length ? parts.join(' \u00b7 ') : 'empty';
+  }
+  // Exposed so the category editor can refresh the strip after add/remove
+  window.app._updateEditMetaSummary = updateEditMetaSummary;
 
   window.app.toggleSection = function(sectionId) {
     const section = document.getElementById(sectionId);

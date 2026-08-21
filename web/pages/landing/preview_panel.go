@@ -100,39 +100,53 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 						"name", "title", "placeholder", "Note title...", "required", "required"),
 				),
 
-				// Meta fields (tags removed — replaced by category/subcategory system)
-				b.DivClass("edit-meta").R(
-					// Description input
-					b.DivClass("edit-field").R(
-						b.LabelClass("edit-label", "for", "edit-description").T("Description"),
-						b.Input("type", "text", "class", "edit-input", "id", "edit-description",
-							"name", "description", "placeholder", "Brief description..."),
+				// Meta fields (tags removed — replaced by category/subcategory system).
+				// The whole block is collapsible so a long editing session can give the
+				// body textarea the full height of the panel: clicking the header toggles
+				// `.collapsed` on #edit-meta, which hides .edit-meta-content (see app.css).
+				// Collapsed state is remembered across notes and reloads in localStorage.
+				b.Div("class", "edit-meta", "id", "edit-meta").R(
+					b.Div("class", "edit-meta-header", "onclick", "app.toggleEditMeta()",
+						"title", "Show/hide Description and Categories").R(
+						b.SpanClass("edit-meta-title").T("Description & Categories"),
+						// Filled by JS while collapsed so the hidden values stay visible
+						// at a glance (e.g. "Weekly log · 2 categories")
+						b.Span("class", "edit-meta-summary", "id", "edit-meta-summary").R(),
+						b.SpanClass("edit-meta-toggle").T("▼"),
 					),
-					// Multi-category support: container for assigned category entry cards
-					// Each card shows the category name, remove button, and subcategory checkboxes
-					b.DivClass("edit-field").R(
-						b.LabelClass("edit-label").T("Categories"),
-						b.Div("class", "category-entries-container", "id", "category-entries-container").R(
-						// Category entry cards populated dynamically by JavaScript
+					b.DivClass("edit-meta-content").R(
+						// Description input
+						b.DivClass("edit-field").R(
+							b.LabelClass("edit-label", "for", "edit-description").T("Description"),
+							b.Input("type", "text", "class", "edit-input", "id", "edit-description",
+								"name", "description", "placeholder", "Brief description..."),
 						),
-						// Add category row: input with datalist + "Add" button
-						b.DivClass("category-add-row").R(
-							// autocapitalize/autocorrect are off because a category name is an
-							// identifier stored verbatim, not prose: a touch keyboard defaults to
-							// sentence case, so a typed "work" would be created as "Work".
-							// (cats_subcats.js folds case when this name matches a category that
-							// already exists, so the damage lands on new names — which is exactly
-							// the name nobody can correct after the fact.) spellcheck stays on:
-							// it only draws a squiggle, it never rewrites what was typed.
-							b.Input("type", "text", "class", "edit-input", "id", "edit-category",
-								"placeholder", "Type or select category...",
-								"list", "category-datalist", "autocomplete", "off",
-								"autocapitalize", "off", "autocorrect", "off"),
-							b.DataList("id", "category-datalist").R(
-							// Options populated dynamically by JavaScript
+						// Multi-category support: container for assigned category entry cards
+						// Each card shows the category name, remove button, and subcategory checkboxes
+						b.DivClass("edit-field").R(
+							b.LabelClass("edit-label").T("Categories"),
+							b.Div("class", "category-entries-container", "id", "category-entries-container").R(
+							// Category entry cards populated dynamically by JavaScript
 							),
-							b.SpanClass("new-indicator", "id", "new-category-indicator", "style", "display:none").T("(new)"),
-							b.Button("type", "button", "class", "btn btn-secondary btn-sm", "onclick", "app.addCategoryEntry()").T("Add"),
+							// Add category row: input with datalist + "Add" button
+							b.DivClass("category-add-row").R(
+								// autocapitalize/autocorrect are off because a category name is an
+								// identifier stored verbatim, not prose: a touch keyboard defaults to
+								// sentence case, so a typed "work" would be created as "Work".
+								// (cats_subcats.js folds case when this name matches a category that
+								// already exists, so the damage lands on new names — which is exactly
+								// the name nobody can correct after the fact.) spellcheck stays on:
+								// it only draws a squiggle, it never rewrites what was typed.
+								b.Input("type", "text", "class", "edit-input", "id", "edit-category",
+									"placeholder", "Type or select category...",
+									"list", "category-datalist", "autocomplete", "off",
+									"autocapitalize", "off", "autocorrect", "off"),
+								b.DataList("id", "category-datalist").R(
+								// Options populated dynamically by JavaScript
+								),
+								b.SpanClass("new-indicator", "id", "new-category-indicator", "style", "display:none").T("(new)"),
+								b.Button("type", "button", "class", "btn btn-secondary btn-sm", "onclick", "app.addCategoryEntry()").T("Add"),
+							),
 						),
 					),
 				),

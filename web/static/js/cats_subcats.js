@@ -467,6 +467,9 @@
     categoryEntries.forEach((entry, key) => {
       renderCategoryEntry(key, entry);
     });
+
+    // Keep the collapsed "N categories" strip in the edit header honest
+    if (window.app._updateEditMetaSummary) window.app._updateEditMetaSummary();
   }
 
   // toggleEntrySubcat - Update a specific entry's selectedSubcats list
@@ -524,6 +527,7 @@
     if (newIndicator) newIndicator.style.display = 'none';
     const catInput = document.getElementById('edit-category');
     if (catInput) catInput.value = '';
+    if (window.app._updateEditMetaSummary) window.app._updateEditMetaSummary();
   }
 
   // ============================================

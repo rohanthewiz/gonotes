@@ -1491,11 +1491,64 @@ mark.note-search-hit-current {
 }
 
 .edit-meta {
-  padding: var(--spacing-md) var(--spacing-lg);
   border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0; /* the body editor takes the slack, this block keeps its natural height */
+}
+
+/* Clickable strip that folds the Description/Categories block away so the body
+   editor can own the panel. Mirrors the .filter-header pattern in the sidebar. */
+.edit-meta-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-lg);
+  cursor: pointer;
+  user-select: none;
+}
+
+.edit-meta-header:hover {
+  background: var(--bg-secondary);
+}
+
+.edit-meta-title {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* Preview of what is hidden; only carries text while collapsed (set by app.js).
+   flex:1 + ellipsis keeps a long description from pushing the chevron off. */
+.edit-meta-summary {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.edit-meta-toggle {
+  color: var(--text-muted);
+  transition: transform var(--transition-fast);
+}
+
+.edit-meta.collapsed .edit-meta-toggle {
+  transform: rotate(-90deg);
+}
+
+.edit-meta-content {
+  padding: 0 var(--spacing-lg) var(--spacing-md);
   display: flex;
   flex-direction: column;
   gap: var(--spacing-md);
+}
+
+.edit-meta.collapsed .edit-meta-content {
+  display: none;
 }
 
 .edit-field {
