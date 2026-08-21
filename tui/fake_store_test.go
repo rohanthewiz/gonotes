@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"gonotes/models"
+	"gonotes/summarize"
 
 	"github.com/rohanthewiz/serr"
 )
@@ -67,6 +68,14 @@ type fakeStore struct {
 	snoozeCalls   int
 	compactCalls  int
 	declineCalls  int
+
+	// The summarizer's fake. summarizedText is what the last call was handed,
+	// which is how a test checks that ctrl+r sent the BODY and not, say, the
+	// title.
+	summarizeCalls  int
+	summarizedText  string
+	summarizeResult *summarize.Result
+	summarizeErr    error
 
 	// tokens mirrors what the real stores keep: the lease tokens this "session"
 	// holds. Same type, same bookkeeping — so a test exercises the same
@@ -672,6 +681,23 @@ func (f *fakeStore) CompactChanges() (*models.CompactionResult, error) {
 	defer f.mu.Unlock()
 	f.compactCalls++
 	return &models.CompactionResult{ChangesBefore: 9, ChangesAfter: 3}, nil
+}
+
+// Summarize returns a canned result and records the text it was given, so a
+// test can assert what was sent without a model call. summarizeErr forces the
+// failure path.
+func (f *fakeStore) Summarize(text, model string) (*summarize.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.summarizeCalls++
+	f.summarizedText = text
+	if f.summarizeErr != nil {
+		return nil, f.summarizeErr
+	}
+	if f.summarizeResult != nil {
+		return f.summarizeResult, nil
+	}
+	return &summarize.Result{Title: "Fake summary", Body: "condensed"}, nil
 }
 
 func (f *fakeStore) DeclineExitSync() error {

@@ -135,5 +135,9 @@ func (p Page) renderBody(b *element.Builder) any {
 		// scripts/vendor_monaco.sh. Loads after app.js/image_embed.js since
 		// it wraps their exposed hooks.
 		b.Script("src", "/static/js/monaco_editor.js?v=2").R(),
+		// Summarize buttons (toolbar + edit footer). Last, because it reaches
+		// into both app.js (_internal) and monaco_editor.js (the body sync it
+		// calls when the optional editor is active).
+		b.Script("src", "/static/js/summarize.js?v=1").R(),
 	)
 }

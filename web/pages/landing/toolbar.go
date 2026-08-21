@@ -83,6 +83,27 @@ func (t Toolbar) Render(b *element.Builder) any {
 				"title", "New Note", "aria-label", "New Note").R(
 				b.Text(`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4"/><path d="M13 3l5 5h-5z" fill="currentColor" fill-opacity="0.25"/><path d="M13 3l5 5v3"/><line x1="7.5" y1="10" x2="12" y2="10"/><line x1="7.5" y1="13.5" x2="11" y2="13.5"/><line x1="17.5" y1="14" x2="17.5" y2="21" stroke-width="1.8"/><line x1="14" y1="17.5" x2="21" y2="17.5" stroke-width="1.8"/></svg>`),
 			),
+			// Summarize the clipboard into a new note. Hidden until summarize.js
+			// hears back from GET /api/v1/summarize: the summarizer is the
+			// `claude` CLI on the SERVER's machine, so on a host without it this
+			// button is a door with nothing behind it. Starting hidden (rather
+			// than hiding it after the probe) keeps it from flashing on and off
+			// on every page load.
+			//
+			// The icon is a clipboard with three lines collapsing into one —
+			// board, clip at the top, then a long, a shorter, and a short rule:
+			//
+			//	 ┌─┴─┐        clip
+			//	┌┤   ├┐
+			//	│ ───  │      long   ← the source text
+			//	│ ──   │      medium
+			//	│ ─    │      short  ← what it condenses to
+			//	└──────┘
+			b.Button("class", "btn btn-secondary", "id", "btn-summarize-clip",
+				"onclick", "app.summarizeClipboard()", "style", "display:none",
+				"title", "Summarize the clipboard into a new note", "aria-label", "Summarize clipboard").R(
+				b.Text(`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"/><rect x="9" y="2.5" width="6" height="3.5" rx="1" fill="currentColor" fill-opacity="0.25"/><line x1="8.5" y1="10.5" x2="15.5" y2="10.5"/><line x1="8.5" y1="14" x2="13" y2="14"/><line x1="8.5" y1="17.5" x2="11" y2="17.5"/></svg>`),
+			),
 			// Theme toggle — just left of user menu
 			b.Button("class", "theme-toggle", "id", "btn-theme-toggle", "onclick", "app.toggleTheme()", "title", "Toggle theme").T("\u2600"),
 			// Init toggle icon based on current theme

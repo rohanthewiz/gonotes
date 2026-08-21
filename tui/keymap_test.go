@@ -124,7 +124,7 @@ func TestHelpSetsAreHandled(t *testing.T) {
 			handled: []key.Binding{
 				keys.Open, keys.New, keys.Edit, keys.Delete,
 				keys.Flag, keys.Categories, keys.Quit, keys.Back,
-				keys.Duplicate, keys.Sync,
+				keys.Duplicate, keys.Sync, keys.SummarizeClip,
 				// The capture door. It is handled but deliberately NOT
 				// advertised — see captureHint in capture.go.
 				keys.Capture,
@@ -165,8 +165,8 @@ func TestHelpSetsAreHandled(t *testing.T) {
 			screen: "form",
 			help:   keys.formHelp(),
 			handled: []key.Binding{
-				keys.Save, keys.Editor, keys.NextField, keys.PrevField,
-				keys.Submit, keys.TogglePrivate, keys.Back,
+				keys.Save, keys.Editor, keys.Summarize, keys.NextField,
+				keys.PrevField, keys.Submit, keys.TogglePrivate, keys.Back,
 			},
 		},
 		{

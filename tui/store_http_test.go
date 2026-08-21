@@ -983,3 +983,57 @@ func TestNonGoNotesResponseIsReportedByStatus(t *testing.T) {
 		t.Errorf("error was %q, want it to name the endpoint rather than blame JSON", err.Error())
 	}
 }
+
+// TestHTTPStoreSummarizeWire covers the one call that does not go through the
+// shared client: the payload it sends, the envelope it decodes, and the fact
+// that it waits longer than fifteen seconds for an answer.
+func TestHTTPStoreSummarizeWire(t *testing.T) {
+	var gotPath, gotText, gotModel string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		var in struct{ Text, Model string }
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		gotText, gotModel = in.Text, in.Model
+		writeOK(w, http.StatusOK, map[string]string{
+			"title": "T", "description": "D", "body": "B",
+		})
+	}))
+	defer srv.Close()
+
+	store := NewHTTPStore(srv.URL)
+	res, err := store.Summarize("condense me", "")
+	if err != nil {
+		t.Fatalf("Summarize: %v", err)
+	}
+	if gotPath != "/api/v1/summarize" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if gotText != "condense me" {
+		t.Errorf("text = %q", gotText)
+	}
+	// An empty model is omitted rather than sent as "", so the SERVER's default
+	// applies. Sending "" would work today only because the server re-defaults
+	// it; leaving it out is what makes that not a coincidence.
+	if gotModel != "" {
+		t.Errorf("model = %q, want it omitted", gotModel)
+	}
+	if res.Title != "T" || res.Description != "D" || res.Body != "B" {
+		t.Errorf("res = %+v", res)
+	}
+}
+
+// The summarize client must outlast a model call. Fifteen seconds — the shared
+// client's ceiling — would abort most of them.
+func TestHTTPStoreSummarizeUsesTheSlowClient(t *testing.T) {
+	store := NewHTTPStore("http://127.0.0.1:1").(*httpStore)
+	if store.hcSlow == nil {
+		t.Fatal("no slow client was built")
+	}
+	if store.hcSlow.Timeout <= store.hc.Timeout {
+		t.Fatalf("slow timeout %v is not longer than the shared one %v",
+			store.hcSlow.Timeout, store.hc.Timeout)
+	}
+	if store.hcSlow.Timeout < time.Minute {
+		t.Fatalf("slow timeout %v is too short for a model call", store.hcSlow.Timeout)
+	}
+}

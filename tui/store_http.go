@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"gonotes/models"
+	"gonotes/summarize"
 
 	"github.com/google/uuid"
 	"github.com/rohanthewiz/serr"
@@ -50,6 +51,9 @@ type httpStore struct {
 	// locked note. The store attaches the right one to each write by note id,
 	// which is why no Store method takes a lock token — see lockTokens.
 	tokens *lockTokens
+
+	// hcSlow carries the summarize call only; see the note where it is built.
+	hcSlow *http.Client
 }
 
 // Environment variables, all shared with gn-clip.sh.
@@ -104,7 +108,12 @@ func NewHTTPStore(baseURL string) Store {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		// The timeout is generous compared with the probe's: this covers real
 		// work (a note save with a long body), not a liveness check.
-		hc:        &http.Client{Timeout: 15 * time.Second},
+		hc: &http.Client{Timeout: 15 * time.Second},
+		// A second client for the one call that waits on a model rather than on
+		// a database. Separate rather than a raised timeout on hc, because a
+		// three-minute ceiling on ordinary note traffic would turn a dead server
+		// into a TUI that appears to hang.
+		hcSlow:    &http.Client{Timeout: summarizeHTTPTimeout},
 		tokenFile: tokenFilePath(),
 		tokens:    newLockTokens(),
 	}
@@ -318,7 +327,15 @@ func (s *httpStore) request(method, path string, body, out any) error {
 // hundred existing call sites keep reading as they did and the handful that
 // carry a lock are visibly the ones that do.
 func (s *httpStore) requestH(method, path string, body, out any, headers map[string]string) error {
-	err := s.requestOnce(method, path, body, out, headers)
+	return s.requestHC(s.hc, method, path, body, out, headers)
+}
+
+// requestHC is requestH on a caller-supplied client. It exists for the one call
+// that cannot live under the shared client's 15-second timeout — summarizing,
+// which waits on a model — and keeps that call on the same auth, envelope and
+// re-login path as everything else rather than hand-rolling a second one.
+func (s *httpStore) requestHC(hc *http.Client, method, path string, body, out any, headers map[string]string) error {
+	err := s.requestOnceHC(hc, method, path, body, out, headers)
 	var ae *apiError
 	if !asAPIError(err, &ae) || ae.status != http.StatusUnauthorized {
 		return err
@@ -329,10 +346,14 @@ func (s *httpStore) requestH(method, path string, body, out any, headers map[str
 		// is the accurate description of what happened to the user's action.
 		return err
 	}
-	return s.requestOnce(method, path, body, out, headers)
+	return s.requestOnceHC(hc, method, path, body, out, headers)
 }
 
 func (s *httpStore) requestOnce(method, path string, body, out any, headers map[string]string) error {
+	return s.requestOnceHC(s.hc, method, path, body, out, headers)
+}
+
+func (s *httpStore) requestOnceHC(hc *http.Client, method, path string, body, out any, headers map[string]string) error {
 	var rdr io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
@@ -360,7 +381,7 @@ func (s *httpStore) requestOnce(method, path string, body, out any, headers map[
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 
-	resp, err := s.hc.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return serr.Wrap(err, "request to GoNotes server failed", "path", path)
 	}
@@ -1019,6 +1040,30 @@ func (s *httpStore) CompactChanges() (*models.CompactionResult, error) {
 		return nil, serr.Wrap(err, "failed to compact pending changes")
 	}
 	return &out.Compaction, nil
+}
+
+// summarizeHTTPTimeout bounds a summarize round trip from the client side. It
+// is longer than the server's own ceiling on the model call, so a slow summary
+// fails with the SERVER's message ("the summarizer returned an empty body")
+// rather than with a client timeout that explains nothing.
+const summarizeHTTPTimeout = 4 * time.Minute
+
+// Summarize asks the server to run its `claude` CLI over the text. The CLI runs
+// where the server runs, which for a TUI attached to a hub means the hub's
+// machine and the hub's credentials — see the interface doc.
+func (s *httpStore) Summarize(text, model string) (*summarize.Result, error) {
+	var out summarize.Result
+	body := map[string]any{"text": text}
+	if strings.TrimSpace(model) != "" {
+		body["model"] = model
+	}
+	// The server's error message is the useful one here (it names what the model
+	// said back, or that the CLI is missing), so it is wrapped rather than
+	// replaced.
+	if err := s.requestHC(s.hcSlow, http.MethodPost, "/api/v1/summarize", body, &out, nil); err != nil {
+		return nil, serr.Wrap(err, "failed to summarize")
+	}
+	return &out, nil
 }
 
 // DeclineExitSync is deliberately a no-op over HTTP. See the interface doc:

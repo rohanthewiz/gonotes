@@ -18,7 +18,7 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 				// Meta row: populated meta items on the left, action icons pinned right
 				b.DivClass("preview-meta-row").R(
 					b.Div("class", "preview-meta", "id", "preview-meta").R(
-						// Meta information will be populated by JavaScript
+					// Meta information will be populated by JavaScript
 					),
 					// Right-aligned icon group: search + focus
 					b.DivClass("preview-header-actions").R(
@@ -113,7 +113,7 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 					b.DivClass("edit-field").R(
 						b.LabelClass("edit-label").T("Categories"),
 						b.Div("class", "category-entries-container", "id", "category-entries-container").R(
-							// Category entry cards populated dynamically by JavaScript
+						// Category entry cards populated dynamically by JavaScript
 						),
 						// Add category row: input with datalist + "Add" button
 						b.DivClass("category-add-row").R(
@@ -129,7 +129,7 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 								"list", "category-datalist", "autocomplete", "off",
 								"autocapitalize", "off", "autocorrect", "off"),
 							b.DataList("id", "category-datalist").R(
-								// Options populated dynamically by JavaScript
+							// Options populated dynamically by JavaScript
 							),
 							b.SpanClass("new-indicator", "id", "new-category-indicator", "style", "display:none").T("(new)"),
 							b.Button("type", "button", "class", "btn btn-secondary btn-sm", "onclick", "app.addCategoryEntry()").T("Add"),
@@ -185,6 +185,17 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 						// so it is never serialized with the note form on save.
 						b.Input("type", "file", "id", "attach-file-input", "accept", "image/*",
 							"style", "display:none", "onchange", "app.attachFileSelected(this)"),
+						// Summarize what is in the body right now. Hidden until the
+						// availability probe says the server can summarize — same
+						// reasoning as the toolbar's clipboard button.
+						//
+						// It sits beside the other body tools rather than next to
+						// Save, because that is what it acts on: it rewrites the
+						// body and leaves the note unsaved, exactly like the
+						// paperclip and Link to Note do.
+						b.Button("type", "button", "class", "btn btn-secondary", "id", "btn-summarize-body",
+							"style", "display:none", "onclick", "app.summarizeBody()",
+							"title", "Replace the body with a summary of it (not saved until you save)").T("Summarize"),
 						b.Button("type", "button", "class", "btn btn-secondary", "onclick", "app.showLinkNotePopup()").T("Link to Note"),
 						b.Button("type", "button", "class", "btn btn-secondary", "onclick", "app.cancelEdit()").T("Cancel"),
 						b.Button("type", "submit", "class", "btn btn-primary", "id", "btn-save").T("Save"),

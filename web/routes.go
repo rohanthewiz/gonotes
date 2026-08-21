@@ -123,6 +123,15 @@ func setupRoutes(s *rweb.Server) {
 	s.Get("/api/v1/health", api.HealthCheck)
 
 	// =========================================
+	// Summarization (local `claude` CLI)
+	// =========================================
+	// GET reports whether this host can summarize at all — the CLI lives on the
+	// server, not in the browser, so the UI has to ask before offering the
+	// feature. POST does one summary and stores nothing.
+	s.Get("/api/v1/summarize", api.SummarizeStatus)
+	s.Post("/api/v1/summarize", api.Summarize)
+
+	// =========================================
 	// Sync control endpoints (spoke-side UI)
 	// =========================================
 	// Power the sync status indicator, toggle, and "Sync Now" button

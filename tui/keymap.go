@@ -67,6 +67,15 @@ type keyMap struct {
 	Move    key.Binding // ↑/↓ within the picker
 	Pick    key.Binding // enter: capture from the highlighted pane
 
+	// ---- Summarize --------------------------------------------------------
+	// The same chord on two screens, deliberately: ctrl+r means "condense the
+	// text at hand", and which text that is follows from where you are — the
+	// clipboard in the list, the body on the form. Two bindings rather than one
+	// so each footer can name the thing that screen actually summarizes (the
+	// same reason SelectSub and TogglePrivate share the space bar apart).
+	SummarizeClip key.Binding // browse: clipboard → a new note
+	Summarize     key.Binding // form: the body being edited, in place
+
 	// ---- Form -------------------------------------------------------------
 	Save          key.Binding
 	Editor        key.Binding // ctrl+e: hand the body to $VISUAL/$EDITOR
@@ -210,6 +219,17 @@ func defaultKeyMap() keyMap {
 		// ctrl+g rather than a bare letter: browse spends every unmodified key
 		// on a note action, and g is the one cats forwards as ⌘G (Phase 8's
 		// accelerator table maps onto exactly these bindings).
+		// ctrl+r ("reduce") on both screens. A bare letter was not available on
+		// the form, where every unmodified key is text, and using the same chord
+		// on both is what makes the feature one thing to learn rather than two.
+		SummarizeClip: key.NewBinding(
+			key.WithKeys("ctrl+r"),
+			key.WithHelp("ctrl+r", "summarize clipboard"),
+		),
+		Summarize: key.NewBinding(
+			key.WithKeys("ctrl+r"),
+			key.WithHelp("ctrl+r", "summarize body"),
+		),
 		Capture: key.NewBinding(
 			key.WithKeys("ctrl+g"),
 			key.WithHelp("ctrl+g", "capture agent pane"),
@@ -418,7 +438,11 @@ func (k keyMap) browseHelp() []key.Binding {
 	// trade-off: it is worth finding, and it is not worth pushing edit or
 	// delete off a narrow footer. The banner names the key too, on exactly the
 	// occasions when it matters.
-	return []key.Binding{k.Open, k.New, k.Edit, k.Delete, k.Flag, k.Categories, k.Duplicate, k.Sync, k.Quit}
+	//
+	// SummarizeClip sits with them, one place further out: it is worth finding,
+	// it costs nothing to try, and it is the first row that should go when the
+	// terminal is too narrow for all of this.
+	return []key.Binding{k.Open, k.New, k.Edit, k.Delete, k.Flag, k.Categories, k.Duplicate, k.Sync, k.SummarizeClip, k.Quit}
 }
 
 func (k keyMap) categoriesHelp() []key.Binding {
@@ -438,7 +462,7 @@ func (k keyMap) detailHelp() []key.Binding {
 }
 
 func (k keyMap) formHelp() []key.Binding {
-	return []key.Binding{k.Save, k.Editor, k.NextField, k.Back}
+	return []key.Binding{k.Save, k.Editor, k.Summarize, k.NextField, k.Back}
 }
 
 func (k keyMap) loginHelp() []key.Binding {

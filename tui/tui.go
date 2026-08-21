@@ -328,6 +328,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case captureDoneMsg:
 		return m, m.captureDone(msg)
 
+	// summarizeDoneMsg is delivered at the root for the same reason: a model
+	// call takes seconds and the user is free to move while it runs. See the
+	// rules at the top of summarize.go.
+	case summarizeDoneMsg:
+		return m, m.summarizeDone(msg)
+
 	case catsLinkMsg:
 		// The stream is the only thing that notices a cats which died after the
 		// probe said Tier 1. Dropping Control here is what re-gates every

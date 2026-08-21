@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"gonotes/models"
+	"gonotes/summarize"
 )
 
 // Store is the TUI's entire data-access surface. Every screen reaches the
@@ -229,6 +230,22 @@ type Store interface {
 	// client leaving must not disarm the exit cycle of a server that goes on
 	// running for everyone else.
 	DeclineExitSync() error
+
+	// ---- Summarization -----------------------------------------------------
+
+	// Summarize condenses a block of text into a note's three fields (see
+	// package summarize). model may be empty for the default.
+	//
+	// It sits at this seam for the same reason everything else does: the
+	// summarizer is the local `claude` CLI, so it runs wherever the DATA lives
+	// — in the TUI's own process when it owns the databases, and on the server
+	// when the server does. A TUI attached to a hub on another machine
+	// therefore summarizes with that machine's CLI and credentials, which is
+	// the same answer it already gives for notes themselves.
+	//
+	// The call takes seconds and blocks the goroutine it runs on, so every
+	// caller must be a tea.Cmd, never the event loop.
+	Summarize(text, model string) (*summarize.Result, error)
 }
 
 // ErrNoUserList reports that a store cannot enumerate accounts.

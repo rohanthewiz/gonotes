@@ -620,6 +620,16 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 
 		case key.Matches(msg, keys.Capture):
 			return s, s.openCapture()
+
+		case key.Matches(msg, keys.SummarizeClip):
+			// The clipboard read happens inside the command, not here: a
+			// keystroke must not shell out to pbpaste on the event loop. Which
+			// means the status line cannot name the size yet — it says what is
+			// starting, and summarizeDone says what came of it.
+			return s, tea.Batch(
+				status("Summarizing the clipboard…"),
+				summarizeClipboardCmd(s.sess.store),
+			)
 		}
 	}
 

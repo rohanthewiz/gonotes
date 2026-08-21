@@ -1,7 +1,11 @@
 package tui
 
 import (
+	"context"
+	"time"
+
 	"gonotes/models"
+	"gonotes/summarize"
 )
 
 // localStore is the in-process implementation: the TUI owns the bytdb files
@@ -265,6 +269,20 @@ func (s *localStore) CompactChanges() (*models.CompactionResult, error) {
 		return nil, errSyncNotConfigured
 	}
 	return client.Compact()
+}
+
+// summarizeLocalTimeout bounds the model call made in this process. Matches the
+// server's ceiling (web/api/summarize.go) so the same paste behaves the same
+// way whichever store is under the TUI.
+const summarizeLocalTimeout = 3 * time.Minute
+
+// Summarize runs the local `claude` CLI directly. No server is involved, which
+// is the whole point of local mode: a TUI that owns the databases also owns the
+// machine, and that machine is where the CLI's credentials live.
+func (s *localStore) Summarize(text, model string) (*summarize.Result, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), summarizeLocalTimeout)
+	defer cancel()
+	return summarize.Summarize(ctx, text, model)
 }
 
 func (s *localStore) DeclineExitSync() error {

@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 
 	"gonotes/models"
+	"gonotes/summarize"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
@@ -49,6 +51,13 @@ type formScreen struct {
 
 	focus int // 0 title, 1 desc, 2 tags, 3 categories, 4 private toggle, 5 body
 	busy  bool
+
+	// summarizing is up while a ctrl+r summary is in flight. Separate from busy
+	// on purpose: busy freezes the whole form (a save is writing), whereas a
+	// summary leaves every field editable — it only has to stop a second ctrl+r
+	// from starting a second model call over text the first one is already
+	// condensing.
+	summarizing bool
 
 	// ---- Lock state --------------------------------------------------------
 	//
@@ -182,6 +191,62 @@ func (s *formScreen) prefill(title, tags, body string) {
 	s.title.SetValue(title)
 	s.tags.SetValue(tags)
 	s.body.SetValue(body)
+}
+
+// summarize is the form's ctrl+r: condense the body that is on screen right
+// now. Returns the command, or a status line explaining why there is nothing
+// to do.
+//
+// The body is read from the widget rather than from s.editing, so it covers the
+// case the feature is mostly for: a long text pasted into a NEW note, which
+// exists nowhere else yet.
+func (s *formScreen) summarize() tea.Cmd {
+	if s.summarizing {
+		return status("Already summarizing…")
+	}
+	body := s.body.Value()
+	if strings.TrimSpace(body) == "" {
+		return status("Nothing to summarize — the body is empty")
+	}
+	s.summarizing = true
+	return tea.Batch(
+		status("Summarizing "+strconv.Itoa(len(body))+" characters…"),
+		summarizeTextCmd(s.sess.store, body, summarizeIntoForm),
+	)
+}
+
+// applySummary writes a finished summary into the form and returns the status
+// line describing what it did.
+//
+// TWO RULES ABOUT WHAT IT TOUCHES:
+//
+//   - The body is REPLACED. That is the request — "summarize this" means the
+//     summary takes its place — and it is safe because nothing here is saved:
+//     the note on disk is untouched until ctrl+s, and esc still offers to
+//     discard. The status line says so, because a replaced body is exactly the
+//     kind of change a user needs to be told about rather than notice.
+//   - The title and description are only FILLED IN, never overwritten. A title
+//     the user typed is their own words; the generated one was produced by a
+//     request that was only about condensing the text. This is the same rule
+//     gn-clip.sh -s keeps, where an explicit -t outranks the model's title.
+func (s *formScreen) applySummary(res *summarize.Result) string {
+	s.body.SetValue(res.Body)
+
+	filled := make([]string, 0, 2)
+	if strings.TrimSpace(s.title.Value()) == "" && res.Title != "" {
+		s.title.SetValue(res.Title)
+		filled = append(filled, "title")
+	}
+	if strings.TrimSpace(s.desc.Value()) == "" && res.Description != "" {
+		s.desc.SetValue(res.Description)
+		filled = append(filled, "description")
+	}
+
+	msg := "Body replaced with the summary"
+	if len(filled) > 0 {
+		msg += " (" + strings.Join(filled, " and ") + " filled in)"
+	}
+	return msg + " — ctrl+s to save, esc to discard"
 }
 
 func (s *formScreen) Init() tea.Cmd {
@@ -404,6 +469,9 @@ func (s *formScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 
 		case key.Matches(msg, keys.Editor):
 			return s, openEditorCmd(s.sess.cats, s.body.Value(), s.title.Value())
+
+		case key.Matches(msg, keys.Summarize):
+			return s, s.summarize()
 
 		case key.Matches(msg, keys.Back):
 			// The guard, and the only place esc is not immediate. A clean form

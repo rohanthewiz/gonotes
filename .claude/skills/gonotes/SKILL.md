@@ -145,6 +145,48 @@ discovers `CLAUDE.md`, skills and MCP config from the working directory — insi
 this checkout that measured ~20k cached prompt tokens per summary against ~4k
 lean, all of it irrelevant to condensing a paste.
 
+### The same summarizer in the UIs
+
+The feature is not script-only. The Go side lives in **package `summarize`**,
+which is the same prompt and the same lean invocation, and it is reachable three
+ways:
+
+| Where | How | What it summarizes |
+|---|---|---|
+| `gn-clip.sh -s` | the script's own call | the clipboard |
+| TUI | `ctrl+r` in the note list | the clipboard → a new, **unsaved** note |
+| TUI | `ctrl+r` on the note form | the body on screen, replaced in place |
+| Web | the clipboard button in the toolbar | the clipboard → a new, unsaved note |
+| Web | **Summarize** in the edit footer | the body in the editor, replaced in place |
+
+Two rules hold everywhere, and they are the whole safety story:
+
+- **Nothing is saved.** A summary lands in a form and waits for `ctrl+s` /
+  **Save**. Cancelling walks away from all of it, and the note on disk is
+  untouched until then. The status line always says the body was replaced.
+- **A title you typed is never overwritten** — only an empty title or
+  description gets filled in. Same rule as `-t` outranking the generated title.
+
+The TUI tags clipboard summaries `summary`, the way captures are tagged
+`capture`, so "what did a model condense for me" is one `/summary` away in the
+filter. The web form has no tags field, so summaries made there are untagged —
+add the tag from the TUI (or `gn-clip -g summary`) if you rely on that filter.
+
+**Where the CLI runs is where the notes are.** The summarizer is a subprocess of
+whoever owns the databases: the TUI itself in local mode, and the **server** in
+HTTP mode (`POST /api/v1/summarize`, authenticated, stores nothing;
+`GET /api/v1/summarize` reports `{available, default_model}`). A TUI or browser
+attached to a hub on another machine therefore summarizes with *that* machine's
+`claude` and *that* machine's credentials. On a host without the CLI installed
+the web buttons never appear — they ship hidden and are revealed only by that
+GET — and the endpoint answers 503.
+
+The browser reads the clipboard itself, through `navigator.clipboard.readText`,
+which needs a secure context (`localhost` counts; a plain-http LAN address does
+not) and a permission the user can refuse. When it is refused the toolbar button
+opens an empty note and says to paste and use **Summarize** instead — the other
+door reaches the same place.
+
 ### Doing it by hand (server up)
 
 The whole flow is four calls; `jq -n --arg` is what keeps arbitrary clipboard
@@ -205,7 +247,8 @@ re-export and byte-diff as an independent check.
 `n`/`e` new/edit, `c` category filter (then `s` for that category's
 subcategories, `space` to toggle several, `enter` to filter), `f` flag, `d`
 delete, `D` duplicate, `S` sync, `ctrl+e` edit body in `$EDITOR`, `ctrl+s` save,
-`ctrl+g` capture an agent pane, `q`/`esc` quit — which stops to ask when changes
+`ctrl+g` capture an agent pane, `ctrl+r` summarize (the clipboard in the list,
+the body on the form — see above), `q`/`esc` quit — which stops to ask when changes
 have not reached the hub (`s` sync, `c` compact & sync, `p` compact only, `q`
 leave anyway, `esc` keep working). Leaving a dirty form raises a three-way
 dialog — `s`/`enter` save & exit, `d` discard, `esc` keep editing. The note form's
@@ -336,6 +379,7 @@ heartbeat that renews leases and reports when one is lost.
 | `web/routes.go` | Every route in one file — read it first when looking for an endpoint. |
 | `web/api/` | JSON handlers. All responses use the `APIResponse` envelope: `{success, data?, error?}`. |
 | `web/pages/` | Server-rendered HTML built with `rohanthewiz/element` (+ Monaco editor). |
+| `summarize/` | The `claude`-CLI summarizer: prompt, lean invocation, strict-JSON parsing. Called by `web/api/summarize.go` and by the TUI's Store. |
 | `cats/` | The cats transport: `detect.go`, `client.go`, `hooks.go`, `events.go`. Stdlib only; never imports cats. |
 | `tui/` | Bubble Tea v2 screens (`browse`, `detail`, `form`, `categories`, `subcategories`, `login`, `confirm`, `locked`, `sync`) + the seams: `store.go` / `store_local.go` / `store_http.go`, `keymap.go`, `palette.go`, `styles.go`, `markdown.go`, `mouse.go`, `lock.go`, and the cats glue (`cats_glue.go`, `catstheme.go`, `capture.go`, `metakeys.go`). |
 | `md_*.go`, `import_gob.go` | Markdown frontmatter format, import/export, legacy gob import. |
