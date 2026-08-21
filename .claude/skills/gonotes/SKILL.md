@@ -91,12 +91,15 @@ relative to the **gonotes checkout**:
 .claude/skills/gonotes/scripts/gn-clip.sh                       # title = first line of clipboard
 .claude/skills/gonotes/scripts/gn-clip.sh -t "Deploy checklist" # explicit title
 .claude/skills/gonotes/scripts/gn-clip.sh -t "Auth notes" -c "Work/backend" -g "auth,jwt" -p
+.claude/skills/gonotes/scripts/gn-clip.sh -s                    # summarize the clipboard instead of storing it raw
 ```
 
 | Flag | Meaning |
 |---|---|
 | `-t <title>` | Title. Omitted → first non-blank clipboard line (leading `#`s stripped) becomes the title and is removed from the body. |
 | `-k` | Keep that first line in the body too (no removal). |
+| `-s` | Summarize the clipboard (see below). The body becomes the summary, the title is derived from the content. |
+| `-m <model>` | Model for `-s` (default `haiku`); any alias `claude --model` accepts. |
 | `-c <cat[/sub]>` | Category, created if it doesn't exist. `Work/backend` = category `Work`, subcategory `backend`. Repeatable. |
 | `-g <tags>` | Comma-separated tags. |
 | `-p` | Mark private (stored in the encrypted database). |
@@ -111,7 +114,36 @@ it until it 401s, then logs in again. Supply the password non-interactively via
 already configured as a sync spoke; otherwise it prompts.
 
 Run `-n` first when the clipboard content is unclear — it shows exactly what
-would be stored without writing.
+would be stored without writing. `-n` still runs the summarizer, so `-s -n` is
+the way to see a summary before committing it.
+
+### Summarizing on the way in (`-s`)
+
+`-s` sends the clipboard through the **local `claude` CLI** — not an HTTP API —
+because the CLI already holds the machine's credentials, so no key has to live
+in the environment or in `.env` for this to work. `ANTHROPIC_API_KEY` is not
+consulted and does not need to be set.
+
+What lands in the note:
+
+- **body** — the summary, in Markdown, shaped like the source (prose stays
+  prose, an enumeration stays bullets). **The raw paste is not kept**; when the
+  original matters, capture it first without `-s` and summarize separately.
+- **title** — derived from the content, not from the first line. An explicit
+  `-t` still wins.
+- **description** — one or two sentences, and only when the title alone leaves
+  the note ambiguous. Most summaries come back without one, which is correct.
+
+The model is asked for a strict JSON object (`{title, description, body}`); a
+reply that will not parse aborts the run and prints what came back, so a bad
+summary never becomes a note. Same for an empty body. The clipboard is untouched
+either way, so a re-run costs only the model call.
+
+The call is deliberately made lean: cwd is an empty temp dir, MCP servers and
+tools are off, and session persistence is disabled. Claude Code otherwise
+discovers `CLAUDE.md`, skills and MCP config from the working directory — inside
+this checkout that measured ~20k cached prompt tokens per summary against ~4k
+lean, all of it irrelevant to condensing a paste.
 
 ### Doing it by hand (server up)
 
