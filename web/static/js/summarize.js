@@ -152,6 +152,12 @@
       return;
     }
 
+    // The toolbar button is icon-only, so busy() has nothing to relabel — all
+    // it can show is the disabled state (.btn:disabled in app.css). The toast
+    // carries the rest, and says the same thing the TUI's status line says on
+    // ctrl+r. It auto-dismisses after 3s and a model call can outlast that;
+    // past then the dimmed button is what tells the user the wait is real.
+    toast('Summarizing the clipboard…', 'info');
     busy(btn, true);
     const res = await requestSummary(text);
     busy(btn, false);
@@ -183,6 +189,11 @@
       return;
     }
 
+    // Announced as well as relabelled: the footer button can be scrolled out of
+    // view or simply not where the eye is after a click, and this door is the
+    // one that REPLACES text the user wrote. Being told it started is what
+    // makes the replacement, when it lands, an expected event.
+    toast('Summarizing the note body…', 'info');
     busy(btn, true, 'Summarizing…');
     const res = await requestSummary(text);
     busy(btn, false);

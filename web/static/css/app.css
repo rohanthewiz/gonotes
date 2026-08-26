@@ -273,6 +273,37 @@ input, textarea, select {
   color: var(--text-primary);
 }
 
+/* A disabled button. Two situations reach this: work is in flight (both
+   summarize doors, Save while it posts) and a guard against a double submit.
+   Both want the same thing said — "not now" — so it is said once here rather
+   than per button.
+
+   This carries more weight than it looks. A text button can announce itself by
+   swapping its label ("Summarize" → "Summarizing…"), but an icon-only button
+   has no label to swap, so the dimming below IS its entire in-progress signal.
+   The .btn transition above makes it fade rather than blink. */
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Hover has to be pinned back to the resting colors, or the rules above repaint
+   a disabled button on pointer-over and it reads as live despite the dimming.
+   Each of these is one class more specific than the :hover rule it answers, so
+   it wins regardless of where it sits in the file. */
+.btn-primary:disabled:hover {
+  background: var(--primary);
+}
+
+.btn-secondary:disabled:hover {
+  background: var(--bg-tertiary);
+}
+
+.btn-icon:disabled:hover {
+  background: none;
+  color: var(--text-secondary);
+}
+
 .view-indicator {
   font-size: var(--font-size-md);
   font-weight: 600;
