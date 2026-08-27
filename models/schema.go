@@ -79,19 +79,27 @@ func (en *dbEngine) hasColumn(table, column string) bool {
 // added to its CREATE statement reaches new databases only. Every database
 // created before the column needs the ALTER.
 //
-// The backfill is not optional. bytdb stores rows tagged by column ID, so
-// rows written before the ALTER simply have no value for it and read back as
-// NULL — not as the column's DEFAULT, which the SQL layer applies at INSERT
-// time and cannot retroactively apply to rows already on disk. A NULL where
-// the code expects a number is the kind of difference that shows up as
-// `version = 1` matching nothing, so the rows are given the value the default
-// would have produced. backfillSQL runs on every startup but touches rows
-// only on the first (its WHERE finds none afterwards).
+// backfillSQL is the belt to the ALTER's braces. bytdb stores rows tagged by
+// column ID, so a row written before the ALTER carries no value for the new
+// column and reads back as NULL rather than as the column's DEFAULT — the SQL
+// layer applies a DEFAULT at INSERT time and cannot reach rows already on
+// disk. Since bytdb v0.10.0 ADD COLUMN closes that gap itself: a DEFAULT is
+// evaluated once and written into every stored row inside the same
+// transaction that publishes the descriptor, so the rows and the schema commit
+// together or not at all.
+//
+// backfillSQL is still worth passing for a column whose NULLs would be
+// dangerous rather than merely untidy. It covers the two cases the engine's
+// own backfill cannot: a database whose column was added by some other path
+// (or a future DEFAULT-less ALTER), and rows that acquired a NULL after the
+// migration. A NULL where the code expects a number is the kind of difference
+// that shows up as `version = 1` matching nothing. It runs on every startup
+// but touches rows only when there are any (its WHERE finds none afterwards).
 func (en *dbEngine) ensureColumn(table, column, colType, backfillSQL string) error {
 	if en.hasColumn(table, column) {
-		// Still run the backfill: an ALTER that succeeded on a previous startup
-		// followed by a crash before the UPDATE would otherwise leave NULLs
-		// behind forever, and the UPDATE is free once they are gone.
+		// Still run the backfill: a column added before the engine did its own
+		// backfilling (or by a path that skipped the UPDATE) would otherwise
+		// leave NULLs behind forever, and the UPDATE is free once they are gone.
 		if backfillSQL != "" {
 			if _, err := en.Exec(backfillSQL); err != nil {
 				return serr.Wrap(err, "failed to backfill column", "table", table, "column", column)
@@ -106,6 +114,34 @@ func (en *dbEngine) ensureColumn(table, column, colType, backfillSQL string) err
 		if _, err := en.Exec(backfillSQL); err != nil {
 			return serr.Wrap(err, "failed to backfill column", "table", table, "column", column)
 		}
+	}
+	return nil
+}
+
+// ensureNotNull marks an existing column NOT NULL, so that a database that
+// reached the column through ensureColumn ends up with the same constraint a
+// freshly created one gets from its CREATE TABLE. Without it the two diverge
+// permanently: ADD COLUMN wrote the constraint the ALTER named, but a database
+// whose column predates the constraint keeps the nullable version forever, and
+// the only databases exercising the strict path would be the brand new ones.
+//
+// The call is idempotent and cheap. bytdb (>= v0.11.0) skips the write when
+// the flag is already set, and validates by scanning stored value tuples for
+// the column's tag rather than materializing rows — a read-only pass with no
+// rewrite. It publishes the flag in the same transaction as the scan, so no
+// concurrent write can insert a NULL between "checked" and "constrained".
+//
+// A column still holding NULLs fails the statement, which is the correct
+// direction: startup stops loudly rather than a constraint quietly not being
+// what the schema says it is. Callers therefore run any backfill first.
+func (en *dbEngine) ensureNotNull(table, column string) error {
+	if !en.hasColumn(table, column) {
+		// Nothing to constrain. Not an error: this mirrors ensureColumn's
+		// tolerance for a schema whose CREATE already covered the case.
+		return nil
+	}
+	if _, err := en.Exec(fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET NOT NULL", table, column)); err != nil {
+		return serr.Wrap(err, "failed to set column NOT NULL", "table", table, "column", column)
 	}
 	return nil
 }
@@ -152,7 +188,7 @@ func (en *dbEngine) createNoteSchema(offset int64) error {
 		authored_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		synced_at   TIMESTAMP,
 		deleted_at  TIMESTAMP,
-		version     BIGINT DEFAULT 1
+		version     BIGINT NOT NULL DEFAULT 1
 	)`); err != nil {
 		return err
 	}
@@ -175,8 +211,25 @@ func (en *dbEngine) createNoteSchema(offset int64) error {
 	// default is a backstop for a future one that does not — a NULL version
 	// reads back as 0, which the guard treats as "unchecked", so a note could
 	// silently opt itself out of the protection this column exists to give.)
-	if err := en.ensureColumn("notes", "version", "BIGINT DEFAULT 1",
+	//
+	// NOT NULL turns that backstop into a guarantee, and is what the CREATE
+	// above declares. It is spelled out in three places for three different
+	// database ages, all converging on the same shape:
+	//
+	//	database age            gets NOT NULL from
+	//	----------------------  ------------------------------------------
+	//	created from scratch    the CREATE TABLE above
+	//	predates the column     this ALTER (the DEFAULT backfills the rows
+	//	                        in the same transaction, so the constraint
+	//	                        is satisfiable the moment it is published)
+	//	took an earlier, nul-   ensureNotNull below, after the UPDATE has
+	//	lable version of this   removed any NULL left by that path
+	//	migration
+	if err := en.ensureColumn("notes", "version", "BIGINT NOT NULL DEFAULT 1",
 		`UPDATE notes SET version = 1 WHERE version IS NULL`); err != nil {
+		return err
+	}
+	if err := en.ensureNotNull("notes", "version"); err != nil {
 		return err
 	}
 

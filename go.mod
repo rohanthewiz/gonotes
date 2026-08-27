@@ -6,7 +6,7 @@ require (
 	github.com/charmbracelet/x/exp/teatest/v2 v2.0.0-20260813141921-f091cedeaf78
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
-	github.com/rohanthewiz/bytdb v0.6.4
+	github.com/rohanthewiz/bytdb v0.11.0
 	github.com/rohanthewiz/element v0.6.0
 	github.com/rohanthewiz/logger v1.3.0
 	github.com/rohanthewiz/rutil v0.2.0
@@ -51,7 +51,7 @@ require (
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/rohanthewiz/btypedb v0.6.2 // indirect
+	github.com/rohanthewiz/btypedb v0.7.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/sahilm/fuzzy v0.1.3 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
