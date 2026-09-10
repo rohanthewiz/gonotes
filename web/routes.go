@@ -62,13 +62,22 @@ func setupRoutes(s *rweb.Server) {
 	// This allows handlers to return proper 401 errors with JSON responses
 
 	// Notes CRUD endpoints following RESTful conventions
-	s.Post("/api/v1/notes", api.CreateNote)             // Create a new note
-	s.Get("/api/v1/notes", api.ListNotes)               // List all notes (with pagination)
-	s.Get("/api/v1/notes/search", api.SearchNotes)      // Search notes by title (for note linking autocomplete)
-	s.Get("/api/v1/notes/:id", api.GetNote)             // Get a single note by ID
-	s.Put("/api/v1/notes/:id", api.UpdateNote)          // Update a note by ID
-	s.Delete("/api/v1/notes/:id", api.DeleteNote)       // Soft delete a note by ID
-	s.Put("/api/v1/notes/:id/flag", api.ToggleNoteFlag) // Toggle flag on a note
+	s.Post("/api/v1/notes", api.CreateNote)        // Create a new note
+	s.Get("/api/v1/notes", api.ListNotes)          // List all notes (with pagination)
+	s.Get("/api/v1/notes/search", api.SearchNotes) // Search notes by title (for note linking autocomplete)
+
+	// Advanced search — an SQL-shaped WHERE expression over every note
+	// attribute, plus the two endpoints that make it typeable: completions
+	// for the text at a cursor, and the field/operator catalog a help panel
+	// renders. Registered ahead of /notes/:id so the literal path wins over
+	// the id parameter. See web/api/query.go and models/query.go.
+	s.Get("/api/v1/notes/query", api.QueryNotes)                  // Run an advanced query
+	s.Get("/api/v1/notes/query/complete", api.QueryNotesComplete) // Autocomplete at a cursor position
+	s.Get("/api/v1/notes/query/schema", api.QueryNotesSchema)     // Queryable fields, operators, examples
+	s.Get("/api/v1/notes/:id", api.GetNote)                       // Get a single note by ID
+	s.Put("/api/v1/notes/:id", api.UpdateNote)                    // Update a note by ID
+	s.Delete("/api/v1/notes/:id", api.DeleteNote)                 // Soft delete a note by ID
+	s.Put("/api/v1/notes/:id/flag", api.ToggleNoteFlag)           // Toggle flag on a note
 
 	// Note locks — the mutual-exclusion protocol between editing sessions.
 	// One note's lease is acquired, renewed, and released on the same path

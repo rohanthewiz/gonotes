@@ -56,6 +56,25 @@ type Category struct {
 	UpdatedAt     time.Time      `json:"updated_at"`
 }
 
+// SubcategoryList decodes the JSON array the Subcategories column holds.
+//
+// The column is a JSON string rather than a real list because the storage
+// layer has no array type; every reader therefore has to unmarshal it, and
+// several do so inline. This accessor exists for callers that only want the
+// names and should not have to know the encoding — a malformed or absent
+// value yields no names rather than an error, since a category whose
+// subcategory list will not parse still has a usable name.
+func (c *Category) SubcategoryList() []string {
+	if !c.Subcategories.Valid || c.Subcategories.String == "" {
+		return nil
+	}
+	var subs []string
+	if err := json.Unmarshal([]byte(c.Subcategories.String), &subs); err != nil {
+		return nil
+	}
+	return subs
+}
+
 // CategoryInput is used for creating/updating categories via API.
 type CategoryInput struct {
 	Name          string   `json:"name"`

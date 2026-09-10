@@ -57,6 +57,13 @@ type fakeStore struct {
 	// storage failure any other way means corrupting a real database.
 	failWith error
 
+	// queryCalls and lastQuery record what the advanced search asked for. A
+	// query that never reaches the store looks the same from the outside as one
+	// that matched nothing, and the difference is what several of the query
+	// screen's tests are about.
+	queryCalls int
+	lastQuery  string
+
 	// ---- Sync ---------------------------------------------------------------
 	// syncStatus is what SyncStatus reports; nil means this installation has no
 	// sync configured, which is what most do. The counters are how a test says
@@ -440,6 +447,74 @@ func (f *fakeStore) ToggleNoteFlag(id int64, userGUID string) (*models.Note, err
 		}
 	}
 	return nil, nil
+}
+
+// ---- Advanced search ---------------------------------------------------------
+
+// QueryNotes runs the REAL parser and evaluator over the fake's notes and
+// links, rather than faking the language.
+//
+// That is deliberate and it is the point of this method: the query screen's
+// tests are about the screen — what it sends, what it shows, what it hands to
+// the browse list — and a hand-rolled matcher here would let a screen test pass
+// against semantics the real store does not have. The parser has no storage
+// behind it, so there is nothing to fake.
+func (f *fakeStore) QueryNotes(query, userGUID string) ([]models.Note, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.queryCalls++
+	f.lastQuery = query
+	if f.failWith != nil {
+		return nil, f.failWith
+	}
+	q, err := models.ParseQuery(query)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []models.Note
+	for i := range f.notes {
+		n := f.notes[i]
+		if n.CreatedBy.String != userGUID || n.DeletedAt.Valid {
+			continue
+		}
+		if q.Matches(&n, f.mappingsFor(n.ID), userGUID) {
+			out = append(out, n)
+		}
+	}
+	return out, nil
+}
+
+// mappingsFor converts the fake's links into the shape the evaluator reads.
+// Called with the mutex already held.
+func (f *fakeStore) mappingsFor(noteID int64) []models.NoteCategoryMapping {
+	var out []models.NoteCategoryMapping
+	for _, l := range f.links[noteID] {
+		name := ""
+		for _, c := range f.cats {
+			if c.ID == l.catID {
+				name = c.Name
+				break
+			}
+		}
+		out = append(out, models.NoteCategoryMapping{
+			NoteID: noteID, CategoryID: l.catID, CategoryName: name,
+			SelectedSubcategories: slices.Clone(l.subs),
+		})
+	}
+	return out
+}
+
+// CompleteQuery answers from the real completer, seeded with nothing — the
+// catalog half of a completion (fields, operators, keywords) needs no data, and
+// the data half is what the DB-backed tests in models cover.
+func (f *fakeStore) CompleteQuery(query string, pos int, _ string) (*models.QueryCompletion, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failWith != nil {
+		return nil, f.failWith
+	}
+	return models.CompleteQuery(query, pos, ""), nil
 }
 
 // ---- Categories ------------------------------------------------------------

@@ -227,6 +227,38 @@ curl -s -H "Authorization: Bearer $TOKEN" 'http://localhost:8444/api/v1/notes?li
 curl -s -H "Authorization: Bearer $TOKEN" 'http://localhost:8444/api/v1/notes/search?q=bytdb' | jq
 ```
 
+**Query notes by attribute** — an SQL `WHERE` clause over every note field,
+including the categories and subcategories a note is filed under:
+
+```bash
+curl -s -G "$URL/api/v1/notes/query" -H "Authorization: Bearer $TOKEN" \
+  --data-urlencode "q=category = 'airflow' AND subcategory = 'conversion'" \
+  | jq '.data | {matched, normalized, titles: [.notes[].title]}'
+```
+
+The language lives in `models/query*.go` and is the same in all three doors:
+`/api/v1/notes/query`, the web UI's `{ }` bar, and `:` in the TUI. Worth
+knowing before writing one:
+
+| | |
+|---|---|
+| fields | `id guid title description body tags is_private is_flagged category subcategory category_id created_at updated_at authored_at synced_at deleted_at version created_by updated_by text` — aliases too (`cat`, `subcat`, `flagged`, `private`, `modified`) |
+| operators | `= != < <= > >= CONTAINS LIKE MATCHES IN BETWEEN IS [NOT] NULL IS [NOT] EMPTY`, joined with `AND OR NOT ( )`, plus `ORDER BY` / `LIMIT` |
+| time | `now today yesterday`, offsets `-7d -24h -6mo`, or quoted dates (`'2026-03-04'` means that whole day) |
+| case | string comparison ignores case; `MATCHES` does not (use `'(?i)…'`) |
+| multi-valued fields | `tags`, `category`, `subcategory`: a positive operator means ANY value matches, a negated one means NONE does — so `category != 'archive'` is "not filed under archive" |
+| NULL | absence, not SQL's unknown: `description != 'x'` is TRUE for a note with no description. Use `IS NULL` to ask about absence |
+| deleted notes | excluded unless the query names `deleted_at` |
+| free text | a bare quoted string searches title, description, body, tags, categories and subcategories: `'conversion' AND category = 'airflow'` |
+
+`GET /api/v1/notes/query/schema` returns that table as data (fields, operators,
+examples, semantics) and `GET /api/v1/notes/query/complete?q=…&pos=…` is the
+autocompleter both UIs use — the value suggestions are drawn from the user's
+real categories, subcategories, tags and titles, which is why completion is
+server-side rather than a list in the browser. A syntax error is a `400` whose
+`data` carries `{position, length, hint}`, so both UIs point at the mistake
+rather than describing it.
+
 **Markdown round-trip** (server stopped) — export is Obsidian-compatible and
 idempotent in both directions, anchored on the frontmatter `guid`:
 
@@ -244,7 +276,8 @@ to already exist, routes private notes through `CreateNote` (so their
 re-export and byte-diff as an independent check.
 
 **Terminal UI**: `gonotes tui` (or `gonotes tui -d <dir>`). Keys: `/` search,
-`n`/`e` new/edit, `c` category filter (then `s` for that category's
+`:` advanced query (see above — `tab` accepts a completion, `ctrl+t` lists every
+field), `n`/`e` new/edit, `c` category filter (then `s` for that category's
 subcategories, `space` to toggle several, `enter` to filter), `f` flag, `d`
 delete, `D` duplicate, `S` sync, `ctrl+e` edit body in `$EDITOR`, `ctrl+s` save,
 `ctrl+g` capture an agent pane, `ctrl+r` summarize (the clipboard in the list,
@@ -375,13 +408,13 @@ heartbeat that renews leases and reports when one is lost.
 | Path | What lives there |
 |---|---|
 | `main.go` | urfave/cli wiring: default action serves; subcommands `tui`, `import-gob`, `export-md`, `import-md`. `runTui` holds the local-vs-HTTP mode decision. |
-| `models/` | Data layer + business logic: `note.go`, `category.go`, `user.go`, `db.go` (two bytdb engines), `encryption.go`, `lock.go`, `sync_*.go` (including `sync_compact.go`, the change-log compactor). |
+| `models/` | Data layer + business logic: `note.go`, `category.go`, `user.go`, `db.go` (two bytdb engines), `encryption.go`, `lock.go`, `sync_*.go` (including `sync_compact.go`, the change-log compactor), and `query_*.go` — the advanced-search language: `query_fields.go` (the catalog every other piece reads), `query_lex.go`, `query_parse.go`, `query_value.go`, `query_eval.go`, `query.go` (the runner) and `query_complete.go` (the autocompleter both UIs share). |
 | `web/routes.go` | Every route in one file — read it first when looking for an endpoint. |
 | `web/api/` | JSON handlers. All responses use the `APIResponse` envelope: `{success, data?, error?}`. |
 | `web/pages/` | Server-rendered HTML built with `rohanthewiz/element` (+ Monaco editor). |
 | `summarize/` | The `claude`-CLI summarizer: prompt, lean invocation, strict-JSON parsing. Called by `web/api/summarize.go` and by the TUI's Store. |
 | `cats/` | The cats transport: `detect.go`, `client.go`, `hooks.go`, `events.go`. Stdlib only; never imports cats. |
-| `tui/` | Bubble Tea v2 screens (`browse`, `detail`, `form`, `categories`, `subcategories`, `login`, `confirm`, `locked`, `sync`) + the seams: `store.go` / `store_local.go` / `store_http.go`, `keymap.go`, `palette.go`, `styles.go`, `markdown.go`, `mouse.go`, `lock.go`, and the cats glue (`cats_glue.go`, `catstheme.go`, `capture.go`, `metakeys.go`). |
+| `tui/` | Bubble Tea v2 screens (`browse`, `detail`, `form`, `categories`, `subcategories`, `login`, `confirm`, `locked`, `sync`, `query`) + the seams: `store.go` / `store_local.go` / `store_http.go`, `keymap.go`, `palette.go`, `styles.go`, `markdown.go`, `mouse.go`, `lock.go`, and the cats glue (`cats_glue.go`, `catstheme.go`, `capture.go`, `metakeys.go`). |
 | `md_*.go`, `import_gob.go` | Markdown frontmatter format, import/export, legacy gob import. |
 | `scripts/migrate` | The identity-preserving DuckDB → bytdb migrator (historical, but the reference for "move data without changing who you are"). |
 | `cats-plugin.toml` | Plugin manifest — build command and the `tui` / `serve` actions. |
@@ -395,7 +428,7 @@ route-level middleware; every query is user-scoped by GUID.
 
 ### The `Store` seam
 
-`tui/store.go` is a 23-method interface every screen goes through;
+`tui/store.go` is a 37-method interface every screen goes through;
 `store_local.go` is one-line pass-throughs to `models.*` and `store_http.go`
 talks to the API (gn-clip conventions: `GONOTES_USER` / `GONOTES_PASSWORD` /
 `GONOTES_SYNC_PASSWORD_B64`, token cached at `~/.gonotes/.api_token`, validated

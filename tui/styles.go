@@ -101,6 +101,12 @@ var (
 	// errorTextStyle renders inline error text inside a dialog (as opposed to
 	// the status bar's version, which is padded to sit on the bottom line).
 	errorTextStyle lipgloss.Style
+
+	// querySelStyle fills the highlighted row of the advanced-search
+	// completion list. It uses the same selection fill the note list and the
+	// agent picker do, so "the thing enter will act on" looks the same
+	// everywhere in the TUI.
+	querySelStyle lipgloss.Style
 )
 
 // applyPalette rebuilds every style above from p. Called only by setPalette,
@@ -153,6 +159,8 @@ func applyPalette(p Palette) {
 	previewTitleStyle = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
 
 	errorTextStyle = lipgloss.NewStyle().Foreground(colorDanger)
+
+	querySelStyle = lipgloss.NewStyle().Background(colorSel).Foreground(colorFg).Bold(true)
 }
 
 // renderHelp formats a key hint line from the keymap — "enter view • n new •

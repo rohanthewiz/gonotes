@@ -267,6 +267,143 @@ The spoke exposes six endpoints for UI integration (all require authentication):
 
 ---
 
+## Advanced Search (SQL over every note attribute)
+
+The search box finds text. The advanced search asks questions:
+
+```sql
+category = 'airflow' AND subcategory = 'conversion'
+```
+
+Every note attribute is queryable — the columns, the tags, the categories and
+subcategories a note is filed under — and the query bar completes field names,
+operators and **your own** category, subcategory, tag and title values as you
+type. It is available in the web UI (`{ }` in the toolbar, or ⌘⇧F / Ctrl+Shift+F),
+in the TUI (`:` on the note list), and over the API.
+
+### The language
+
+It is the `WHERE` clause of SQL, narrowed to what a note store can answer:
+
+```sql
+title CONTAINS 'deploy' AND is_flagged
+tags IN ('capture', 'summary') AND updated_at > -7d
+is_private = true AND synced_at IS NULL
+body MATCHES '(?i)panic|fatal' ORDER BY updated_at DESC LIMIT 20
+'conversion' AND NOT category = 'archive'
+created_at BETWEEN '2026-01-01' AND '2026-06-30'
+description IS EMPTY AND body IS NOT EMPTY
+```
+
+A leading `WHERE` is optional, and a pasted `SELECT * FROM notes WHERE …` is
+accepted and trimmed. `ORDER BY <field> [ASC|DESC]` and `LIMIT n [OFFSET m]`
+work as you would expect.
+
+### Queryable attributes
+
+| Field | Type | Aliases | Notes |
+|---|---|---|---|
+| `id` | number | | The numeric primary key. A bare number is shorthand for `id = n`. |
+| `guid` | string | | Stable external identifier. |
+| `title` | string | | |
+| `description` | string, nullable | `desc` | |
+| `body` | string, nullable | `content` | The note's Markdown. |
+| `tags` | string, **multi** | `tag` | The comma-separated column, compared one tag at a time. |
+| `is_private` | bool | `private` | True for notes in the encrypted database. |
+| `is_flagged` | bool | `flagged`, `flag` | The follow-up flag. |
+| `category` | string, **multi** | `categories`, `cat` | Names of the categories the note is filed under. |
+| `subcategory` | string, **multi** | `subcategories`, `subcat`, `sub` | Subcategories selected on this note's links. |
+| `category_id` | number, **multi** | `cat_id` | |
+| `created_at` | time | `created` | |
+| `updated_at` | time | `updated`, `modified` | Any write, including sync. |
+| `authored_at` | time, nullable | `authored` | Last human edit — what sync resolves conflicts on. |
+| `synced_at` | time, nullable | `synced` | `IS NULL` means never synced. |
+| `deleted_at` | time, nullable | `deleted` | Naming this field is what opts a query into seeing deleted notes. |
+| `version` | number | | The optimistic-concurrency counter. |
+| `created_by` | string | `creator`, `owner` | A user GUID; `me` resolves to yours. |
+| `updated_by` | string, nullable | `editor` | |
+| `text` | string, **multi** | `any` | Pseudo-field spanning title, description, body, tags, categories and subcategories. |
+
+**Operators:** `=` `!=` `<` `<=` `>` `>=` `CONTAINS` `LIKE` `NOT LIKE` `MATCHES`
+(`~`, `!~`) `IN` `NOT IN` `BETWEEN` `IS [NOT] NULL` `IS [NOT] EMPTY`, joined with
+`AND` / `OR` / `NOT` and grouped with parentheses.
+
+**Time literals:** `now`, `today`, `yesterday`, `tomorrow`, an offset like `-7d`
+/ `-24h` / `-6mo` (units `s min h d w mo y`), or a quoted date — `'2026-03-04'`,
+`'2026-03'`, `'2026-03-04 09:30'`.
+
+### Where it deliberately differs from SQL
+
+These are the answers to "why did that match?", and the query bar's `?` panel
+lists them too:
+
+- **String comparison ignores case.** `category = 'Airflow'` matches `airflow`.
+  `MATCHES` is the exception — a regular expression carries its own flags, so
+  use `'(?i)…'` when you want it case-insensitive.
+- **A bare quoted string is a free-text term** across title, description, body,
+  tags, categories and subcategories. So `'conversion' AND category = 'airflow'`
+  is a valid query, and the fast thing stays one word long.
+- **On a multi-valued field, an operator asks whether ANY value matches and its
+  negation asks whether NONE does.** `category != 'archive'` therefore means
+  "not filed under archive" rather than SQL's "has some category that is not
+  archive", which is true of almost every note.
+- **A missing value is absence, not SQL's unknown.** `description != 'x'` is
+  true for a note with no description, and every note is accounted for by
+  exactly one of a predicate and its negation. Ask about absence itself with
+  `IS NULL`.
+- **A date literal covers the precision it was written at.**
+  `created_at = '2026-03-04'` matches the whole day; `'2026-03'` the whole
+  month. Ordering comparisons use the window's edges, so `>= '2026-03-04'`
+  includes that day and `> '2026-03-04'` starts the day after.
+- **Soft-deleted notes are excluded** unless the query mentions `deleted_at`.
+
+### Autocomplete
+
+The completions come from the server, because half of what is worth suggesting
+is your data. Type `category = ` and the list is your categories; `tags = ` and
+it is your tags, most-used first; `title = ` and it is your note titles. In the
+web UI: `Tab` accepts, `↑`/`↓` move, `Enter` runs, `Esc` closes, `Ctrl+Space`
+asks again. In the TUI: the same, with `ctrl+t` for the full field list.
+
+A malformed query is never silently ignored. The web UI selects the offending
+run in the input; the TUI underlines it:
+
+```
+> catgory = 'x'
+  ^^^^^^^
+unknown field "catgory" — did you mean category?
+```
+
+### API
+
+```bash
+# Run a query
+curl -s -G http://localhost:8444/api/v1/notes/query \
+  --data-urlencode "q=category = 'airflow' AND subcategory = 'conversion'" \
+  -H "Authorization: Bearer $TOKEN" | jq '.data | {matched, scanned, normalized}'
+
+# What can be typed at a cursor position
+curl -s -G http://localhost:8444/api/v1/notes/query/complete \
+  --data-urlencode "q=subcategory = " -H "Authorization: Bearer $TOKEN"
+
+# The field catalog, operators, examples and the semantics above, as data
+curl -s http://localhost:8444/api/v1/notes/query/schema -H "Authorization: Bearer $TOKEN"
+```
+
+`/notes/query` also takes `limit`, `offset`, `sort`, `dir` and
+`include_deleted`; those override anything the query text says, so a caller's
+paging cannot be undone by a `LIMIT` somebody left in the box. The response
+carries `matched` (before paging), `scanned`, `normalized` (the query as the
+parser understood it) and `fields` (the canonical names it touched). A syntax
+error answers `400` with `{"success":false,"error":…,"data":{"position","length","hint"}}`.
+
+Queries are evaluated in Go rather than pushed into SQL, because a user's notes
+live in **two** databases and a category link in one references the catalog in
+the other — no single statement spans that. See the comment at the top of
+`models/query.go`.
+
+---
+
 ## Terminal UI
 
 Browse and edit notes right in the terminal — no web server needed:
@@ -379,9 +516,10 @@ The same rules apply to the web UI and to anything else writing through the API 
 | | `f` | Toggle the follow-up flag |
 | | `d` | Delete (with confirmation) |
 | | `c` | Category picker — filter the list by category |
+| | `:` | Advanced query — SQL over every attribute, with autocomplete (see [Advanced Search](#advanced-search-sql-over-every-note-attribute)) |
 | | `D` | Duplicate the selected note |
 | | `S` | Sync with the hub (only on a spoke that has one configured) |
-| | `esc` | Clear search, then subcategory filter, then category filter — then quit |
+| | `esc` | Clear search, then the query, then subcategory filter, then category filter — then quit |
 | | `q` | Quit — asks first when changes have not reached the hub |
 | Sync | `s` | Sync now |
 | | `c` | Compact the pending change log, then sync |
@@ -402,6 +540,12 @@ The same rules apply to the web UI and to anything else writing through the API 
 | Changed underneath | `l` | Load their version (drops your edits) |
 | | `o` | Overwrite their version |
 | | `esc` | Decide later — your text stays in the form |
+| Query (`:`) | `tab` | Accept the highlighted completion |
+| | `↑/↓` | Move through the completions |
+| | `enter` | Run the query (or accept a completion you moved to) |
+| | `ctrl+t` | Show every queryable attribute |
+| | `ctrl+n` | Ask for completions again |
+| | `esc` | Dismiss the completions, then the field list, then the screen |
 | Categories | `enter` | Filter notes by the selected category |
 | | `s` | Open that category's subcategories |
 | | `n` / `d` | New / delete category |

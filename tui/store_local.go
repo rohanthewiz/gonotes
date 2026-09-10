@@ -114,6 +114,26 @@ func (s *localStore) ToggleNoteFlag(id int64, userGUID string) (*models.Note, er
 	return models.ToggleNoteFlag(id, userGUID)
 }
 
+// ---- Advanced search --------------------------------------------------------
+
+// QueryNotes parses and runs the query in-process. The QueryOptions are left
+// empty on purpose: the query text carries its own LIMIT and ORDER BY, and a
+// TUI showing a filtered list wants every match, not a page of them.
+func (s *localStore) QueryNotes(query, userGUID string) ([]models.Note, error) {
+	res, err := models.QueryNotes(query, userGUID, models.QueryOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return res.Notes, nil
+}
+
+// CompleteQuery cannot fail locally — the completer answers from the catalog
+// and whatever data it can read — so the error is always nil and exists only to
+// match the interface the HTTP store needs.
+func (s *localStore) CompleteQuery(query string, pos int, userGUID string) (*models.QueryCompletion, error) {
+	return models.CompleteQuery(query, pos, userGUID), nil
+}
+
 // ---- Categories ------------------------------------------------------------
 
 func (s *localStore) ListCategories(userGUID string) ([]models.Category, error) {

@@ -27,6 +27,28 @@
       field: 'updated_at',
       order: 'desc'
     },
+    // Advanced query state, owned by advanced_search.js.
+    //
+    // It sits beside `filters` rather than inside it for one concrete reason:
+    // clearAllFilters() REPLACES state.filters with a fresh literal, which
+    // would silently drop any key added there. It is also conceptually not a
+    // filter — when a query is active it REPLACES the filter pipeline (see
+    // getFilteredNotes), because the server has already done the selecting
+    // and intersecting a SQL result with a category dropdown would answer a
+    // question nobody asked.
+    //
+    //   active  — the query bar is open AND a query has been run
+    //   text    — the query as typed
+    //   notes   — the server's result, already ordered
+    //   ordered — the query named its own ORDER BY (so don't re-sort)
+    advanced: {
+      active: false,
+      text: '',
+      notes: null,
+      ordered: false,
+      matched: 0,
+      scanned: 0
+    },
     user: null
   };
 
@@ -1073,6 +1095,18 @@
   // ============================================
 
   function getFilteredNotes() {
+    // An active advanced query has already selected AND ordered the notes on
+    // the server, over the full library including rows this page never loaded
+    // (soft-deleted ones, when the query asked for them). So it replaces the
+    // client-side pipeline rather than composing with it — see state.advanced.
+    // The toolbar's sort still applies unless the query named its own
+    // ORDER BY, in which case re-sorting would override an explicit
+    // instruction.
+    if (state.advanced.active && state.advanced.notes) {
+      const queried = [...state.advanced.notes];
+      return state.advanced.ordered ? queried : applyNoteSort(queried);
+    }
+
     let notes = [...state.notes];
 
     // Apply search filter — supports text match, numeric ID match, and regex.
@@ -1173,7 +1207,13 @@
       }
     }
 
-    // Apply sorting
+    return applyNoteSort(notes);
+  }
+
+  // applyNoteSort orders a note array by the toolbar's sort control. Split out
+  // of getFilteredNotes so the advanced-query path can reuse it rather than
+  // carry a second copy that would drift.
+  function applyNoteSort(notes) {
     notes.sort((a, b) => {
       let valueA, valueB;
       switch (state.sort.field) {
@@ -1241,6 +1281,11 @@
 
   // clearSearchBar — resets all search bar state: text input, regex, category dropdown, subcats
   window.app.clearSearchBar = function() {
+    // The advanced query goes too. It replaces this whole pipeline when it is
+    // active (see getFilteredNotes), so a Clear that left it running would
+    // appear to do nothing at all.
+    if (window.app.clearAdvancedQuery) window.app.clearAdvancedQuery();
+
     // Reset text search
     document.getElementById('search-input').value = '';
     state.filters.search = '';
@@ -1315,6 +1360,9 @@
   };
 
   window.app.clearAllFilters = function() {
+    // "Clear All Filters" must mean all of them, including the query bar.
+    if (window.app.clearAdvancedQuery) window.app.clearAdvancedQuery();
+
     state.filters = {
       search: '',
       regex: false,
@@ -1653,7 +1701,10 @@
 
   function updateResultCount() {
     const filtered = getFilteredNotes().length;
-    const total = state.notes.length;
+    // Under an advanced query the denominator is what the SERVER scanned, not
+    // what this page happens to hold: a query may match notes the page never
+    // loaded (soft-deleted ones), and "12 of 8 notes" is worse than no count.
+    const total = state.advanced.active ? state.advanced.scanned : state.notes.length;
     const countEl = document.getElementById('result-count');
     const viewCount = document.getElementById('view-count');
 
@@ -1672,6 +1723,12 @@
   // When no filters are active, returns a minimal string like "all notes sort:updated_at↓"
   function buildQueryString() {
     const parts = [];
+
+    // An advanced query owns the list on its own; showing the dormant filter
+    // chips beside it would suggest they are still narrowing something.
+    if (state.advanced.active) {
+      return 'sql:"' + state.advanced.text + '"';
+    }
 
     if (state.filters.search) {
       parts.push(`search:"${state.filters.search}"`);
@@ -2041,10 +2098,12 @@
     renderNoteList,
     updateResultCount,
     updateActiveFilters,
+    applyNoteSort,
     updateSyncStatus,
     loadNotes,
     generateGUID,
-    formatRelativeTime
+    formatRelativeTime,
+    getAuthToken
   };
 
   // ============================================

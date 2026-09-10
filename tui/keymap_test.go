@@ -124,10 +124,18 @@ func TestHelpSetsAreHandled(t *testing.T) {
 			handled: []key.Binding{
 				keys.Open, keys.New, keys.Edit, keys.Delete,
 				keys.Flag, keys.Categories, keys.Quit, keys.Back,
-				keys.Duplicate, keys.Sync, keys.SummarizeClip,
+				keys.Duplicate, keys.Sync, keys.SummarizeClip, keys.Query,
 				// The capture door. It is handled but deliberately NOT
 				// advertised — see captureHint in capture.go.
 				keys.Capture,
+			},
+		},
+		{
+			screen: "query",
+			help:   keys.queryHelp(),
+			handled: []key.Binding{
+				keys.QueryAccept, keys.Move, keys.Submit, keys.QueryFields,
+				keys.QueryComplete, keys.Back,
 			},
 		},
 		{

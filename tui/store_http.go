@@ -735,6 +735,72 @@ func (s *httpStore) ToggleNoteFlag(id int64, _ string) (*models.Note, error) {
 	return &note, nil
 }
 
+// ---- Store: advanced search --------------------------------------------------
+
+// queryResponse mirrors api.QueryNotesResponse. Only the fields the TUI acts
+// on are decoded; the rest of the envelope (timings, the normalized form) is
+// the web UI's business.
+type queryResponse struct {
+	Notes   []models.NoteOutput `json:"notes"`
+	Matched int                 `json:"matched"`
+	Scanned int                 `json:"scanned"`
+}
+
+// QueryNotes runs an advanced query on the server that owns the notes.
+//
+// The interesting part is the error. A syntax error arrives as a 400 whose
+// envelope data is the models.QueryError — position, length and all — and
+// recovering it here is what makes the two stores behave identically: the query
+// screen underlines the mistake in HTTP mode exactly as it does locally,
+// instead of getting a sentence where the local path gets a structure.
+func (s *httpStore) QueryNotes(query, _ string) ([]models.Note, error) {
+	q := url.Values{}
+	q.Set("q", query)
+
+	var out queryResponse
+	err := s.request(http.MethodGet, "/api/v1/notes/query?"+q.Encode(), nil, &out)
+	if err != nil {
+		if qe := asQueryError(err); qe != nil {
+			return nil, qe
+		}
+		return nil, serr.Wrap(err, "failed to run query")
+	}
+	return notesFromOutputs(out.Notes), nil
+}
+
+// CompleteQuery asks the server what belongs at the cursor. It goes over the
+// wire on every keystroke, which is the price of completing against the hub's
+// real categories and tags rather than a list this process guessed at; the
+// response is a few hundred bytes and the endpoint does no parsing.
+func (s *httpStore) CompleteQuery(query string, pos int, _ string) (*models.QueryCompletion, error) {
+	q := url.Values{}
+	q.Set("q", query)
+	q.Set("pos", strconv.Itoa(pos))
+
+	var out models.QueryCompletion
+	if err := s.request(http.MethodGet, "/api/v1/notes/query/complete?"+q.Encode(), nil, &out); err != nil {
+		return nil, serr.Wrap(err, "failed to fetch completions")
+	}
+	return &out, nil
+}
+
+// asQueryError recovers a *models.QueryError from a 400's envelope data,
+// returning nil when the error was anything else. The status check matters:
+// only the query endpoints put a QueryError in `data`, and a 409's conflict
+// detail would otherwise decode into a QueryError full of zero values —
+// syntactically valid, entirely wrong.
+func asQueryError(err error) *models.QueryError {
+	var ae *apiError
+	if !asAPIError(err, &ae) || ae.status != http.StatusBadRequest || len(ae.data) == 0 {
+		return nil
+	}
+	var qe models.QueryError
+	if jsonErr := json.Unmarshal(ae.data, &qe); jsonErr != nil || qe.Msg == "" {
+		return nil
+	}
+	return &qe
+}
+
 // ---- Store: note locks -------------------------------------------------------
 
 // lockAcquireBody mirrors api.lockAcquireRequest.

@@ -87,6 +87,31 @@ type Store interface {
 	DeleteNote(id int64, userGUID string) (bool, error)
 	ToggleNoteFlag(id int64, userGUID string) (*models.Note, error)
 
+	// ---- Advanced search ---------------------------------------------------
+	//
+	// The SQL-shaped query language (models/query*.go). Both methods are on the
+	// seam for the same reason everything else is: the language is evaluated
+	// where the DATA is, so a TUI attached to a hub queries the hub's notes and
+	// completes against the hub's categories, tags and titles.
+	//
+	// Note what is NOT here: the field catalog. models.QuerySchema() is a pure
+	// function over a compiled-in table with no storage behind it, so the query
+	// screen calls it directly — routing it through the seam would add a round
+	// trip to fetch a constant this binary already holds.
+
+	// QueryNotes runs an advanced query and returns the matching notes in the
+	// order the query asked for. A syntax error comes back as a
+	// *models.QueryError carrying the offending position, which is what lets
+	// the query screen underline it rather than just print it; anything else is
+	// a storage or transport failure.
+	QueryNotes(query, userGUID string) ([]models.Note, error)
+
+	// CompleteQuery returns what could be typed at byte offset pos in a
+	// half-written query. It never fails on malformed input — text being typed
+	// is malformed most of the time, and that is exactly when the suggestions
+	// are wanted — so an error here means the store could not be reached at all.
+	CompleteQuery(query string, pos int, userGUID string) (*models.QueryCompletion, error)
+
 	// ---- Categories --------------------------------------------------------
 
 	ListCategories(userGUID string) ([]models.Category, error)

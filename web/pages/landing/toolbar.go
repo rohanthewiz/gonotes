@@ -4,7 +4,7 @@ import "github.com/rohanthewiz/element"
 
 // Toolbar is a single-row bar with three visual groups separated by a flex spacer:
 //
-//	Left:  [🔍 Search] [.* regex] [All Categories ▾] [Sort ▾] [subcats…] [Clear]
+//	Left:  [🔍 Search] [.* regex] [{ } SQL] [All Categories ▾] [Sort ▾] [subcats…] [Clear]
 //	       --- flexible space ---
 //	Right: [✒ new-note] [☀/☾ theme] [user menu]
 type Toolbar struct{}
@@ -30,6 +30,14 @@ func (t Toolbar) Render(b *element.Builder) any {
 			b.Button("class", "btn btn-secondary search-bar-regex-toggle", "id", "regex-toggle",
 				"onclick", "app.toggleRegex()",
 				"title", "Toggle regular expression search").T(".*"),
+			// Advanced query toggle — opens the SQL query bar below the toolbar.
+			// It sits beside the regex toggle because the three of them are one
+			// escalating scale of the same idea: substring, pattern, then an
+			// expression over every attribute. See AdvancedSearchBar.
+			b.Button("class", "btn btn-secondary search-bar-sql-toggle", "id", "btn-advanced-search",
+				"onclick", "app.toggleAdvancedSearch()",
+				"aria-expanded", "false",
+				"title", "Advanced query \u2014 SQL over every note attribute (\u2318\u21e7F)").T("{ }"),
 			// Category dropdown — populated from state.categories by JS on init
 			b.Select("class", "search-bar-select", "id", "search-category-select",
 				"onchange", "app.handleCategoryFilter(this.value)").R(

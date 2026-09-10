@@ -115,6 +115,31 @@ type keyMap struct {
 	SyncLater       key.Binding // defer the prompt
 	SyncQuitAnyway  key.Binding // leave without syncing (quit dialog only)
 
+	// ---- Advanced search (query screen) -----------------------------------
+	//
+	// The query screen is a text input, so every key it claims has to be one
+	// that cannot be part of a query. That rules out every letter and every
+	// punctuation mark the language uses, which is why these are all chords or
+	// navigation keys.
+	Query key.Binding // ":" from the note list: open the query screen
+	// QueryAccept inserts the highlighted completion. Tab, because that is what
+	// completion is bound to in every shell and editor a person arrives from —
+	// and because the query language has no use for a tab character.
+	QueryAccept key.Binding
+	// QueryComplete forces a completion request, for when the list was
+	// dismissed or the cursor moved somewhere the last one did not cover.
+	QueryComplete key.Binding
+	// QueryFields toggles the field catalog, which is the answer to "what can I
+	// even ask about" and therefore the first thing a new user needs.
+	//
+	// ctrl+t ("table of fields") rather than the more obvious ctrl+h: ^H is
+	// what several terminals still send for Backspace, and bubbles' textinput
+	// binds ctrl+h to delete-backward for exactly that reason. Claiming it here
+	// would turn Backspace into "show the field list" on those terminals —
+	// a key that stops deleting is far worse than a mnemonic that has to be
+	// read off the footer.
+	QueryFields key.Binding
+
 	// ---- Locked-note dialog -----------------------------------------------
 	// Shown when another session already has the note open. Like the unsaved
 	// dialog, this is a fork rather than a yes/no, so it gets its own letters
@@ -241,6 +266,31 @@ func defaultKeyMap() keyMap {
 		Pick: key.NewBinding(
 			key.WithKeys("enter"),
 			key.WithHelp("enter", "capture"),
+		),
+
+		// ":" is the query door, taken from the vi/ex command line for the same
+		// reason it works there: it is a punctuation mark no note action wants,
+		// and it already means "type a command" to anyone who has used a
+		// terminal editor.
+		Query: key.NewBinding(
+			key.WithKeys(":"),
+			key.WithHelp(":", "query"),
+		),
+		QueryAccept: key.NewBinding(
+			key.WithKeys("tab"),
+			key.WithHelp("tab", "accept"),
+		),
+		// ctrl+n is textinput's own "next suggestion", which this screen
+		// intercepts before the widget sees it — the suggestion list here is
+		// ours, not the widget's, so the two cannot both be live. ctrl+space is
+		// the same key under the name most editors use for it.
+		QueryComplete: key.NewBinding(
+			key.WithKeys("ctrl+n", "ctrl+space"),
+			key.WithHelp("ctrl+n", "suggest"),
+		),
+		QueryFields: key.NewBinding(
+			key.WithKeys("ctrl+t"),
+			key.WithHelp("ctrl+t", "fields"),
 		),
 
 		Save: key.NewBinding(
@@ -442,7 +492,18 @@ func (k keyMap) browseHelp() []key.Binding {
 	// SummarizeClip sits with them, one place further out: it is worth finding,
 	// it costs nothing to try, and it is the first row that should go when the
 	// terminal is too narrow for all of this.
-	return []key.Binding{k.Open, k.New, k.Edit, k.Delete, k.Flag, k.Categories, k.Duplicate, k.Sync, k.SummarizeClip, k.Quit}
+	//
+	// Query sits between Categories and Duplicate: it is the other way of
+	// narrowing the list, so it belongs beside the one people already know, and
+	// it is worth a footer slot on any terminal wide enough to show the pair.
+	return []key.Binding{k.Open, k.New, k.Edit, k.Delete, k.Flag, k.Categories, k.Query, k.Duplicate, k.Sync, k.SummarizeClip, k.Quit}
+}
+
+// queryHelp is the advanced-search footer. Accept comes first because it is
+// the key that is not guessable — enter and esc mean here what they mean
+// everywhere else, and tab is the one a person has to be told about.
+func (k keyMap) queryHelp() []key.Binding {
+	return []key.Binding{k.QueryAccept, k.Move, k.Submit, k.QueryFields, k.Back}
 }
 
 func (k keyMap) categoriesHelp() []key.Binding {

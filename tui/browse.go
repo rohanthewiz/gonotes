@@ -46,6 +46,18 @@ type browseScreen struct {
 	// backing out of it should land on the category rather than on everything.
 	subFilter []string
 
+	// queryFilter is the advanced-search query in force, or "" for none. It is
+	// a THIRD way of loading this list, alongside "all notes" and the category
+	// filter, and it wins over both — a query names its own conditions, and
+	// silently intersecting it with a category picked five minutes ago would
+	// answer a question nobody asked. See reloadNotes and query.go.
+	//
+	// The query lives here rather than on the query screen because the query
+	// screen is transient: it pops the moment enter is pressed, and what
+	// survives is a list showing its results. Holding the text here is also
+	// what lets ":" reopen the screen with the current query already in it.
+	queryFilter string
+
 	// listWidth is the list's width under the current layout: the full
 	// terminal when narrow, a fraction of it when the preview pane is showing.
 	// Zero until the first layout.
@@ -319,6 +331,12 @@ func (s *browseScreen) Init() tea.Cmd {
 // lasts. See Mode in tui.go.
 func (s *browseScreen) title() string {
 	t := "GoNotes"
+	// A query owns the list outright, so it is what the title says. Truncated,
+	// because a query can be longer than the heading has room for and the
+	// beginning is the part that identifies it.
+	if s.queryFilter != "" {
+		return t + " — " + truncateRunes(s.queryFilter, 60)
+	}
 	if s.catFilter != nil {
 		// The same notation the form field takes, so "Work/backend" in the title
 		// is a string the user could type back into a note to file it here.
@@ -401,6 +419,14 @@ func (s *browseScreen) applyLockBadges() tea.Cmd {
 }
 
 func (s *browseScreen) reloadNotes() tea.Cmd {
+	// A query supersedes the category filter rather than composing with it.
+	// Routing it through the same notesLoadedMsg as every other load is what
+	// makes a query result an ordinary list: the preview pane, the lock badges,
+	// "/" within the results, edit, delete and duplicate all keep working with
+	// no second code path.
+	if s.queryFilter != "" {
+		return runQueryCmd(s.sess.store, s.queryFilter, s.sess.user.GUID)
+	}
 	if s.catFilter != nil {
 		if len(s.subFilter) > 0 {
 			// The subcategory filter is name-keyed rather than id-keyed; see
@@ -465,6 +491,31 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			return s, push(newFormScreen(s.sess, msg.note))
 		}
 
+	case queryRanMsg:
+		// The query screen has already popped and handed its result down. The
+		// notes are adopted directly rather than triggering a reload: the query
+		// has just been run, and running it twice would show the same list a
+		// beat later while also doubling the work on a hub.
+		if msg.err != nil {
+			return s, statusErr(msg.err, "Query failed")
+		}
+		s.queryFilter = msg.query
+		// An empty query is how the query screen says "clear the filter", which
+		// falls back to whatever category filter was in force before it.
+		if msg.query == "" {
+			s.list.Title = s.title()
+			return s, s.refresh()
+		}
+		items := make([]list.Item, 0, len(msg.notes))
+		for _, n := range msg.notes {
+			items = append(items, noteItem{note: n, heldBy: s.heldBy(n.ID)})
+		}
+		s.list.Title = s.title()
+		return s, tea.Batch(
+			s.list.SetItems(items),
+			status(queryResultSummary(len(msg.notes))),
+		)
+
 	case categoryPickedMsg:
 		s.catFilter = msg.cat
 		// Both filters are set from the one message: a pick either replaces the
@@ -475,6 +526,12 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		if msg.cat == nil {
 			s.subFilter = nil
 		}
+		// A category pick also retires any query, because a query outranks the
+		// category filter in reloadNotes — leaving it in place would make the
+		// pick appear to do nothing at all, which is the worst of the three
+		// possible behaviors. The user asked for this category; they can ask
+		// for the query again with ":".
+		s.queryFilter = ""
 		return s, s.refresh()
 
 	case flagToggledMsg:
@@ -549,6 +606,14 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			if s.list.FilterState() == list.FilterApplied {
 				break // let the list clear its own filter
 			}
+			// A query is peeled before the category filter for the same reason
+			// the subcategory is: it is the narrowest thing on screen and the
+			// most recently applied, so it is what the user means to undo.
+			if s.queryFilter != "" {
+				s.queryFilter = ""
+				s.list.Title = s.title()
+				return s, s.refresh()
+			}
 			if len(s.subFilter) > 0 {
 				s.subFilter = nil
 				return s, s.refresh()
@@ -617,6 +682,11 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 
 		case key.Matches(msg, keys.Categories):
 			return s, push(newCategoriesScreen(s.sess))
+
+		case key.Matches(msg, keys.Query):
+			// Opened with the query already in force, so ":" is "edit this
+			// query" as often as it is "write a new one".
+			return s, push(newQueryScreen(s.sess, s.queryFilter))
 
 		case key.Matches(msg, keys.Capture):
 			return s, s.openCapture()
