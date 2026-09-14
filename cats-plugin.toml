@@ -22,6 +22,15 @@ version = "0.1.0"
 description = "A self-hosted note-taking app: markdown notes with categories, tags, private (encrypted) bodies and full-text fuzzy search, in a terminal UI that reports its work to cats and can capture a sibling agent pane straight into a note."
 platforms = ["linux", "macos"]
 
+# Expose the built binary on the user's PATH. The host symlinks it into the cats
+# bin dir (~/.cats/bin/gonotes -> <plugins-root>/<id>/bin/gonotes), which
+# `catctl shellinit` and every cats pane put first on PATH, so `gonotes` typed
+# in a shell is the same build the actions below launch rather than a separate
+# hand-built copy that drifts. The link targets the plugin root, so a rebuild on
+# `catctl plugin update` is picked up with no re-linking. Top-level key, so it
+# sits above the [[build]] tables.
+bin = ["./bin/gonotes"]
+
 # Build the binary at install/link time; the host runs this once in the plugin
 # root. GoNotes is its own Go module, so a plain `go build .` resolves
 # everything from this repo's go.mod.
