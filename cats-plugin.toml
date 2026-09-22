@@ -21,6 +21,11 @@ name = "GoNotes"
 version = "0.1.0"
 description = "A self-hosted note-taking app: markdown notes with categories, tags, private (encrypted) bodies and full-text fuzzy search, in a terminal UI that reports its work to cats and can capture a sibling agent pane straight into a note."
 platforms = ["linux", "macos"]
+# What kind of tool this is. A notes manager is not an LLM agent, so cats lists
+# its pane under PLUGINS, not AGENTS, and never offers it as a drop target. It
+# is also how cats-todo can find a notes plugin to file prompts into, without
+# knowing its id. A cats older than the key ignores it.
+type = "notes_mgr"
 
 # Expose the built binary on the user's PATH. The host symlinks it into the cats
 # bin dir (~/.cats/bin/gonotes -> <plugins-root>/<id>/bin/gonotes), which
