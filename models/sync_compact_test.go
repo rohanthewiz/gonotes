@@ -456,3 +456,50 @@ func TestCompactKeepsARenamedCategoryAheadOfItsNotes(t *testing.T) {
 		t.Errorf("compacted category fragment = %+v (%v), want the renamed row", frag, err)
 	}
 }
+
+// TestPreviewCompactionMatchesTheRealPass: the dry run predicts exactly what
+// the real pass then does, and changes nothing itself.
+func TestPreviewCompactionMatchesTheRealPass(t *testing.T) {
+	setupCompactTestDB(t)
+
+	// A note edited three times (collapses), a note written once (doesn't),
+	// and a category renamed (collapses).
+	chain, err := models.CreateNote(models.NoteInput{GUID: "preview-chain", Title: "v1"}, compactUserGUID)
+	if err != nil {
+		t.Fatalf("create note: %v", err)
+	}
+	for _, title := range []string{"v2", "v3"} {
+		if _, err := models.UpdateNote(chain.ID, models.NoteInput{GUID: "preview-chain", Title: title}, compactUserGUID); err != nil {
+			t.Fatalf("update note: %v", err)
+		}
+	}
+	if _, err := models.CreateNote(models.NoteInput{GUID: "preview-single", Title: "once"}, compactUserGUID); err != nil {
+		t.Fatalf("create note: %v", err)
+	}
+	cat, err := models.CreateCategory(models.CategoryInput{Name: "Before"}, compactUserGUID)
+	if err != nil {
+		t.Fatalf("create category: %v", err)
+	}
+	if _, err := models.UpdateCategory(cat.ID, models.CategoryInput{Name: "After"}, compactUserGUID); err != nil {
+		t.Fatalf("rename category: %v", err)
+	}
+
+	preview, err := models.PreviewCompaction("hub", "")
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if n, _ := models.CountUnsentChangesForPeer("hub", ""); n != preview.ChangesBefore {
+		t.Fatalf("the preview changed the pending count to %d (it reported %d before)", n, preview.ChangesBefore)
+	}
+
+	real, err := models.CompactPendingChanges("hub", "")
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if *preview != *real {
+		t.Errorf("preview %+v != real pass %+v", *preview, *real)
+	}
+	if preview.NotesCompacted != 1 || preview.CategoriesCompacted != 1 {
+		t.Errorf("preview = %+v, want 1 note and 1 category compacted", *preview)
+	}
+}

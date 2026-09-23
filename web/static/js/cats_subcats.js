@@ -938,12 +938,121 @@
       return '<span class="text-muted" style="font-size: var(--font-size-xs);">None</span>';
     }
 
+    // The name itself is the rename control (click it, or focus it and press
+    // Enter): a separate pencil button per tag would double the row's clutter
+    // for an action taken rarely. × stays the remove.
     return editingSubcategories.map((subcat, index) => `
       <span class="subcategory-tag">
-        ${escapeHtml(subcat)}
-        <button onclick="app.removeSubcategory(${categoryId}, ${index})">&times;</button>
+        <span class="subcategory-tag-name" role="button" tabindex="0"
+              title="Rename (notes filed under it follow)"
+              onclick="app.renameSubcategory(${categoryId}, ${index})"
+              onkeydown="if(event.key==='Enter'){app.renameSubcategory(${categoryId}, ${index}); event.preventDefault();}">${escapeHtml(subcat)}</span>
+        <button onclick="app.removeSubcategory(${categoryId}, ${index})" title="Remove from the list (notes keep it)">&times;</button>
       </span>
     `).join('');
+  }
+
+  function rerenderSubcategoryTags(categoryId) {
+    const tags = document.getElementById(`subcategory-tags-${categoryId}`);
+    if (tags) tags.innerHTML = renderSubcategoryTags(categoryId);
+  }
+
+  // renameSubcategory turns one tag into an inline input. Enter commits, Escape
+  // or leaving the field cancels.
+  //
+  // A rename of a SAVED subcategory is not staged with the form's other edits:
+  // it runs at once through POST /categories/:id/subcategories/rename, because
+  // it refiles notes, which only the server can do (models.RenameSubcategory).
+  // The staged list then follows it, so the form's later Save (a PUT of the
+  // whole definition) carries the new name rather than reverting it. A name
+  // added in this form and not saved yet belongs to no note, so renaming it
+  // only edits the staged list.
+  window.app.renameSubcategory = function(categoryId, index) {
+    const tags = document.getElementById(`subcategory-tags-${categoryId}`);
+    const tag = tags && tags.querySelectorAll('.subcategory-tag')[index];
+    const from = editingSubcategories[index];
+    if (!tag || from === undefined) return;
+
+    tag.innerHTML = `<input type="text" class="subcat-rename-input" ${NAME_INPUT_ATTRS} />`;
+    const input = tag.querySelector('input');
+    input.value = from;
+    input.size = Math.max(from.length + 2, 8);
+
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      if (commit) commitSubcategoryRename(categoryId, from, input.value);
+      else rerenderSubcategoryTags(categoryId);
+    };
+    input.addEventListener('keydown', (e) => {
+      // Stop the modal's document-level Escape handler from closing the whole
+      // manager: Escape here means "leave this field", not "leave the dialog".
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(false));
+    input.focus();
+    input.select();
+  };
+
+  // renameInStaged replaces `from` with `to` in the staged list, dropping it
+  // instead when `to` is already there (the server merges the same way).
+  function renameInStaged(from, to) {
+    const hasTo = editingSubcategories.includes(to);
+    editingSubcategories = editingSubcategories
+      .filter(s => !(s === from && hasTo))
+      .map(s => (s === from ? to : s));
+  }
+
+  async function commitSubcategoryRename(categoryId, from, rawTo) {
+    const to = (rawTo || '').trim();
+    if (!to || to === from) {
+      rerenderSubcategoryTags(categoryId);
+      return;
+    }
+    // "/" and "," separate names in the category inputs ("Work/backend,
+    // Personal"), so a name holding one could never be typed back.
+    if (/[\/,]/.test(to)) {
+      showToast('A subcategory name cannot contain "/" or ","', 'warning');
+      rerenderSubcategoryTags(categoryId);
+      return;
+    }
+
+    const cat = getState().categories.find(c => c.id === categoryId);
+    const saved = cat && (cat.subcategories || []).includes(from);
+    if (!saved) {
+      renameInStaged(from, to);
+      rerenderSubcategoryTags(categoryId);
+      return;
+    }
+
+    try {
+      const resp = await apiRequest(`/categories/${categoryId}/subcategories/rename`, {
+        method: 'POST',
+        body: JSON.stringify({ from: from, to: to })
+      });
+      const n = (resp && resp.data && resp.data.notes_changed) || 0;
+      renameInStaged(from, to);
+      rerenderSubcategoryTags(categoryId);
+      await loadCategories();
+      await loadNoteCategoryMappings();
+      // The row header above the open form lists the saved subcategories;
+      // refresh just that text, since re-rendering the list would close the
+      // form and drop any other staged edits.
+      const updated = getState().categories.find(c => c.id === categoryId);
+      const row = document.querySelector(`.category-item[data-category-id="${categoryId}"] .category-subcats`);
+      if (row && updated) {
+        const subs = updated.subcategories || [];
+        row.textContent = subs.length > 0 ? subs.join(', ') : 'No subcategories';
+      }
+      showToast(`Renamed ${from} → ${to}` +
+        (n === 1 ? ' (1 note refiled)' : n > 1 ? ` (${n} notes refiled)` : ''), 'success');
+    } catch (error) {
+      // apiRequest already toasted the server's reason.
+      rerenderSubcategoryTags(categoryId);
+    }
   }
 
   window.app.addSubcategory = function(categoryId) {
@@ -989,8 +1098,13 @@
     }
 
     try {
+      // The description travels along although this form doesn't edit it:
+      // PUT /categories/:id rewrites every column from the body, so leaving it
+      // out would erase a description set elsewhere.
+      const current = getState().categories.find(c => c.id === categoryId);
       const payload = {
         name: name,
+        description: (current && current.description) || null,
         subcategories: editingSubcategories
       };
 

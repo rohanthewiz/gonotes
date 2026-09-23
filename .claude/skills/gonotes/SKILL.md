@@ -547,6 +547,7 @@ Runtime control — all authenticated:
 | `POST` | `/api/v1/sync/control/snooze` | `{"duration":"30m"}` optional; defaults to the prompt interval |
 | `POST` | `/api/v1/sync/control/mode` | `{"mode":"prompt"\|"auto","persist":bool}`; `persist` writes `GONOTES_SYNC_MODE` into the `.env`. Returns `{status, persisted}` |
 | `POST` | `/api/v1/sync/control/compact` | Returns `{compaction, status}` |
+| `GET` | `/api/v1/sync/control/compact` | Dry run: `{compaction}` with what POST would do, nothing written |
 
 The TUI reaches all of this through four Store methods (`SyncStatus`,
 `SyncNow`, `SnoozeSync`, `CompactChanges`) plus `DeclineExitSync`; local mode

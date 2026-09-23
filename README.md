@@ -277,6 +277,7 @@ The spoke exposes six endpoints for UI integration (all require authentication):
 | `POST` | `/api/v1/sync/control/snooze`   | Defer the "sync is due" prompt without syncing. Body (optional): `{"duration": "30m"}`, default is the prompt interval |
 | `POST` | `/api/v1/sync/control/mode`     | Switch trigger at runtime. Body: `{"mode": "prompt"\|"auto", "persist": false}`. With `persist`, `GONOTES_SYNC_MODE` is written into `config/cfg_files/.env` so the choice survives a restart; without it the change lasts for this run. Returns `{status, persisted}` |
 | `POST` | `/api/v1/sync/control/compact`  | Collapse the pending change log without syncing. Returns the compaction counts |
+| `GET`  | `/api/v1/sync/control/compact`  | Dry run of the above: the same counts, nothing written. The web banner shows it in the compact buttons' tooltips |
 
 ### Environment Variables Reference
 

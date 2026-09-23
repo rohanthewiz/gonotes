@@ -157,4 +157,5 @@ func setupRoutes(s *rweb.Server) {
 	s.Post("/api/v1/sync/control/snooze", api.SyncControlSnooze)
 	s.Post("/api/v1/sync/control/mode", api.SyncControlMode)
 	s.Post("/api/v1/sync/control/compact", api.SyncControlCompact)
+	s.Get("/api/v1/sync/control/compact", api.SyncControlCompactPreview) // dry run of the POST
 }

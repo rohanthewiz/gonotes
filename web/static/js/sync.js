@@ -649,6 +649,36 @@
         '<button class="btn btn-secondary" onclick="app.spokeSnooze()">Later</button>' +
       '</span>';
     el.hidden = false;
+    if (offerCompact) describeCompaction(el);
+  }
+
+  // describeCompaction asks the server what compacting would save
+  // (GET /sync/control/compact, a dry run) and puts the answer in the compact
+  // buttons' tooltips: "30 pending changes → 4". Compaction deletes local
+  // history, so how much it buys is worth knowing before choosing it.
+  //
+  // One request per distinct pending count: the banner re-renders on every
+  // status poll, and the answer only changes when the log does. A failed
+  // preview leaves the generic tooltips in place.
+  let compactPreview = null; // { pending, before, after }
+  async function describeCompaction(el) {
+    const pending = spokeStatus.pending_changes;
+    if (!compactPreview || compactPreview.pending !== pending) {
+      try {
+        const resp = await apiRequest('/sync/control/compact', { quiet: true });
+        const c = resp && resp.data ? resp.data.compaction : null;
+        if (!c) return;
+        compactPreview = { pending: pending, before: c.changes_before, after: c.changes_after };
+      } catch (err) {
+        return;
+      }
+    }
+    const p = compactPreview;
+    const gain = p.before > p.after
+      ? `${p.before} pending changes \u2192 ${p.after}`
+      : `${p.before} pending changes, none of which would collapse`;
+    el.querySelectorAll('button[onclick^="app.spokeSyncNow(true)"], button[onclick^="app.spokeCompactChanges"]')
+      .forEach(btn => { btn.title = btn.title.replace(/( \(.*\))?$/, ` (${gain})`); });
   }
 
   window.app.spokeSyncNow = async function(compact) {

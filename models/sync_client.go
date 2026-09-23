@@ -392,6 +392,12 @@ func (sc *SyncClient) Compact() (*CompactionResult, error) {
 	return CompactPendingChanges(sc.peerID, "")
 }
 
+// PreviewCompact is Compact without the writes: what compacting now would
+// save (see PreviewCompaction).
+func (sc *SyncClient) PreviewCompact() (*CompactionResult, error) {
+	return PreviewCompaction(sc.peerID, "")
+}
+
 // SyncOnExit runs the final cycle during shutdown, if one is warranted.
 //
 // This is the half of "prompt or on exit" that needs nobody present: a

@@ -266,6 +266,26 @@ func SyncControlCompact(ctx rweb.Context) error {
 	})
 }
 
+// SyncControlCompactPreview handles GET /api/v1/sync/control/compact: what
+// POST would do right now, with nothing written. The web banner reads it to
+// say how far "Compact" would pack the pending log before the user picks it.
+func SyncControlCompactPreview(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+	client := models.GetSyncClient()
+	if client == nil {
+		return writeError(ctx, http.StatusServiceUnavailable, "sync is not configured")
+	}
+	res, err := client.PreviewCompact()
+	if err != nil {
+		logger.LogErr(serr.Wrap(err, "compaction preview failed"), "user_guid", userGUID)
+		return writeError(ctx, http.StatusInternalServerError, "failed to preview compaction")
+	}
+	return writeSuccess(ctx, http.StatusOK, map[string]any{"compaction": res})
+}
+
 // HubCompactRequest is the optional body of POST /api/v1/admin/sync/compact.
 // QuietHours defaults to models.DefaultHubCompactQuiet; 0 is allowed and
 // means "every entity, however recent".

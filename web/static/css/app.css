@@ -2957,6 +2957,33 @@ mark.note-search-hit-current {
   line-height: 1;
 }
 
+/* The tag's name is its rename control (cats_subcats.js renameSubcategory):
+   a text cursor on hover says "this is editable", and the underline on focus
+   gives keyboard users the same cue. */
+.subcategory-tag-name {
+  cursor: text;
+}
+
+.subcategory-tag-name:hover,
+.subcategory-tag-name:focus-visible {
+  text-decoration: underline;
+  outline: none;
+}
+
+/* Two classes deep to outrank .category-edit-form input, whose full-width,
+   padded field would otherwise make the tag being renamed twice as tall as
+   its neighbours. */
+.subcategory-tag .subcat-rename-input {
+  width: auto;
+  margin: 0;
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0 var(--spacing-xs);
+}
+
 .category-edit-actions {
   display: flex;
   gap: var(--spacing-sm);

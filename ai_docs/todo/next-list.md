@@ -84,8 +84,11 @@ with every item's premise re-checked against the code at `e0c2a39`.
   Non-goals.
 
 - **N-022** · raised `2026-0818-1824-sync-prompt-mode-and-compaction` · value low
-  Compaction is all-or-nothing per peer: there's no "compact just this note"
-  and no dry run that reports what *would* collapse.
+  Compaction is all-or-nothing per peer: there's no "compact just this note".
+  The dry-run half is done (`models.PreviewCompaction`,
+  `GET /api/v1/sync/control/compact`, shown in the web banner's compact-button
+  tooltips, in `2026-0923-1133-next-list-batches`), so this item is now only
+  the per-note part.
 
 - **N-023** · raised `2026-0818-1824-sync-prompt-mode-and-compaction` · value low
   `GetUnsentChangesForPeer` returns operation 9 (relay) rows. First written
@@ -118,12 +121,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
 - **N-034** · raised `2026-0909-1858-advanced-sql-search` · value low
   The web advanced-search query bar isn't wired to the note-link autocomplete
   or to saved/named queries. Query history is per browser (`localStorage`).
-
-- **N-047** · raised `2026-0923-1133-next-list-batches` · value low
-  The web category manager can't rename a subcategory. The TUI's `r` and
-  `POST /api/v1/categories/:id/subcategories/rename` exist, so this needs only
-  a UI. Until then, renaming by removing one and adding another in the web UI
-  leaves notes filed under the old name.
 
 ## Roadmap
 
@@ -192,6 +189,8 @@ session doc marked an item as deferred, so move items here from Open by hand.
   Category and subcategory rename in the TUI. Done: `r` on both screens. A category rename is the whole-object update and refuses a name another category has (case-insensitive). A subcategory rename goes through the new `models.RenameSubcategory` (links first, then the definition, safe to re-run, merges onto an existing name) and `POST /api/v1/categories/:id/subcategories/rename`, so notes filed under the old name follow it. The web UI has no subcategory rename yet.
 - **N-013** · raised `2026-0817-1046-tui-subcategory-support` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
   The TUI subcategory screen showed no note counts. Done: one `SubcategoryNoteCounts` read per screen (the bulk note-category mappings, counted client-side, not a query per row), reloaded after a rename. Rows show nothing until the counts load.
+- **N-047** · raised `2026-0923-1133-next-list-batches` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+  The web category manager couldn't rename a subcategory. Done: click (or Enter on) a tag's name in the manager's edit form to rename it inline. A saved subcategory is renamed at once through the rename endpoint, so its notes are refiled, and the staged list follows. A staged-only one is renamed locally. Found and fixed at the same time: the manager's Save sent no description, so it erased the category's description. Checked in Chrome.
 
 Closures before this file was seeded are recorded in the session docs
 themselves. These were found already done while seeding:
