@@ -100,10 +100,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   today because they don't edit notes, but any bulk note operation added
   there later would need one. Contingent on such an operation existing.
 
-- **N-018** · raised `2026-0818-1739-duplicate-note-dialog` · value low
-  The web duplicate dialog can't be navigated by keyboard beyond Enter: no
-  ↑/↓, and no focus ring beyond the browser default.
-
 - **N-019** · raised `2026-0818-1739-duplicate-note-dialog` · value low
   The TUI duplicate dialog has no "duplicating…" state. Against a slow remote
   hub, nothing shows until the status line arrives.
@@ -146,24 +142,9 @@ with every item's premise re-checked against the code at `e0c2a39`.
   *reappear* later, that is the sync path and needs its own investigation.
   Candidate for Closed if the symptom hasn't come back.
 
-- **N-031** · raised `2026-0821-1626-summarize-ui-web-tui` · value low
-  Summaries made from the web UI are untagged. The web note form has no tags
-  field (`preview_panel.go:103`: "tags removed"), and its save sends
-  `tags: null` (`app.js:497`), so only the TUI's clipboard path applies the
-  `summary` tag.
-
-- **N-032** · raised `2026-0826-1559-summarize-progress-indication` · value low
-  The icon-only summarize toolbar button is dimmed and inert while it works,
-  but not animated. A spinner or an `aria-busy` pulse was the nicer option
-  left undone (option 3 in that doc).
-
 - **N-034** · raised `2026-0909-1858-advanced-sql-search` · value low
   The web advanced-search query bar isn't wired to the note-link autocomplete
   or to saved/named queries. Query history is per browser (`localStorage`).
-
-- **N-046** · raised `2026-0923-1124-medium-next-items` · value low
-  The web note list shows no "being edited elsewhere" badge. The TUI's `✎`
-  reads `GET /api/v1/note-locks`, which the web UI could poll the same way.
 
 ## Roadmap
 
@@ -209,6 +190,14 @@ session doc marked an item as deferred, so move items here from Open by hand.
   The web category input ignored `/` notation. Done: `parseCategorySpec` reads `Work/backend` as the TUI does. A defined subcategory matches case-insensitively and an unknown one is created. An existing category whose whole name contains `/` still matches literally. The batch dialog refuses `/` rather than drop it.
 - **N-045** · raised `2026-0923-1124-medium-next-items` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
   The web batch bar couldn't remove a category. Done: a separate **Remove Category** action. Unknown names are refused, only linked pairs get a DELETE, and a 404 for an already-gone link counts as success. While building it, found and fixed a gap: `DELETE` and `PUT /api/v1/notes/:id/categories/:cid` never checked note ownership, so any signed-in user could unlink or rewrite categories on another user's note by id. `TestRemoveCategoryFromAnotherUsersNote` covers it.
+- **N-018** · raised `2026-0818-1739-duplicate-note-dialog` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+  The web duplicate dialog had no keyboard navigation beyond Enter. Done: ↑/↓ move between the title and the checkbox rows, space toggles, Enter confirms from any row, and the focused row is outlined (`:focus-visible`). Checked in Chrome with real key presses.
+- **N-031** · raised `2026-0821-1626-summarize-ui-web-tui` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+  Web summaries were untagged. Done: the clipboard door tags the new note `summary`, as the TUI does (the body door doesn't, in either UI). Found while doing it: the web form sent `tags: null` on every save and `UpdateNote` writes every column, so **editing a note in the web UI erased its tags**. `state.editTags` now carries a note's tags through the edit. Checked in Chrome: a tagged note keeps `infra,api` after a web edit.
+- **N-032** · raised `2026-0826-1559-summarize-progress-indication` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+  The icon-only summarize button was dimmed but not animated. Done: `busy()` sets `aria-busy` and `app.css` pulses the icon. The animation is off under `prefers-reduced-motion`.
+- **N-046** · raised `2026-0923-1124-medium-next-items` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+  The web note list had no "being edited elsewhere" badge. Done: `refreshNoteLocks` polls `GET /note-locks` every 30s while the tab is visible (and on return) and re-renders only on a change. It skips this tab's own lease, and the tooltip names the holder. Checked in Chrome against a curl-held lease.
 
 Closures before this file was seeded are recorded in the session docs
 themselves. These were found already done while seeding:

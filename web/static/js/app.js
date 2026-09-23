@@ -12,6 +12,12 @@
     currentNote: null,
     selectedNotes: new Set(),
     isEditing: false,
+    // Tags of the note in the edit form. The form has no tags field, so these
+    // are carried through a save rather than typed (see saveNote).
+    editTags: null,
+    // Leases other sessions hold, keyed by note id: { label, since }. Drives
+    // the ✎ badge in the list and nothing else (see refreshNoteLocks).
+    noteLocks: new Map(),
     filters: {
       search: '',
       regex: false,            // when true, search term is treated as a regular expression
@@ -548,6 +554,53 @@
     if (document.visibilityState === 'visible' && lease) renewLease();
   });
 
+  // ---- "Being edited elsewhere" badges --------------------------------------
+  //
+  // The list marks a note with ✎ while another session (a TUI, another tab)
+  // holds its lease, the web twin of the TUI's browse badge. One bulk
+  // GET /note-locks per poll, never one per row.
+  //
+  // It is a hint, not a gate: editNote still asks the server at the moment of
+  // editing, so a badge that is up to a poll interval stale costs nothing but
+  // a moment of surprise. That is what sets the interval: the lease TTL is
+  // 90s, so a 30s poll shows a lock within half a minute and drops a released
+  // one about as fast, for one small request per tab per half minute. Hidden
+  // tabs skip the poll entirely and refresh on return.
+  //
+  // This tab's own lease is left out by session id: the tab knows it is
+  // editing, and badging the note it has open would read as a conflict.
+  const NOTE_LOCK_POLL_MS = 30000;
+
+  async function refreshNoteLocks() {
+    if (document.visibilityState !== 'visible') return;
+    let resp;
+    try {
+      // quiet: a failed poll is not worth a toast; the next one will retry.
+      resp = await apiRequest('/note-locks', { quiet: true });
+    } catch (err) {
+      return;
+    }
+    const next = new Map();
+    for (const l of (resp && resp.data) || []) {
+      if (l.holder && l.holder.session_id === LEASE_SESSION_ID) continue;
+      next.set(l.note_id, {
+        label: (l.holder && l.holder.label) || 'another session',
+        since: l.acquired_at
+      });
+    }
+    // Re-render only on a change. The list can be long, and a redraw every
+    // 30s would also reset hover state for nothing.
+    const sig = m => [...m.entries()].map(([id, l]) => id + ':' + l.label).sort().join('|');
+    if (sig(next) === sig(state.noteLocks)) return;
+    state.noteLocks = next;
+    renderNoteList();
+  }
+
+  setInterval(refreshNoteLocks, NOTE_LOCK_POLL_MS);
+  document.addEventListener('visibilitychange', function() {
+    if (document.visibilityState === 'visible') refreshNoteLocks();
+  });
+
   // ============================================
   // Authentication Functions
   // ============================================
@@ -707,13 +760,20 @@
     const bodyContent = formData.get('body') || null;
 
     // Build note data object
-    // When msgpack is enabled, body goes to body_encoded field instead of body
-    // Tags field is still sent for backward compatibility but we no longer collect it from UI
+    // When msgpack is enabled, body goes to body_encoded field instead of body.
+    //
+    // Tags have no field on this form, but they must still be SENT: an update
+    // writes every column, so a null here would erase tags the TUI, gn-clip.sh
+    // or a Markdown import put on the note. state.editTags carries the note's
+    // tags through the edit untouched (plus any the form itself adds, such as
+    // the summarizer's "summary"). If they changed elsewhere since the list
+    // loaded, the version guard below refuses the save, so a stale tag string
+    // can't overwrite newer tags.
     const noteData = {
       guid: formData.get('guid'),
       title: formData.get('title'),
       description: formData.get('description') || null,
-      tags: null,
+      tags: state.editTags || null,
       is_private: document.getElementById('edit-private').checked,
       is_flagged: state.currentNote ? (state.currentNote.is_flagged || false) : false
     };
@@ -928,12 +988,30 @@
     const titleInput = document.getElementById('dup-title');
     titleInput.value = COPY_PREFIX + note.title;
 
-    // Enter anywhere in the title is the same as clicking Duplicate — this is
-    // a two-field dialog, not a form worth tabbing through.
-    titleInput.addEventListener('keydown', function(e) {
+    // Keyboard: the title and the checkboxes form one vertical list.
+    //
+    //   Title          ↓ → first checkbox
+    //   [x] Categories ↑/↓ move between rows (↑ from the first returns to the title)
+    //   [x] Body       space toggles (native checkbox behaviour)
+    //   [x] Tags       Enter anywhere = Duplicate
+    //
+    // Enter confirms from any row, not only the title: once the user has
+    // arrowed down to untick something, making them go back up to confirm
+    // would be the one step the arrows were meant to save. Tab still works
+    // as usual; this adds to it rather than replacing it.
+    const fields = [titleInput, ...modalBody.querySelectorAll('.dup-checkbox')];
+    modalBody.addEventListener('keydown', function(e) {
+      const at = fields.indexOf(document.activeElement);
+      if (at < 0) return;
       if (e.key === 'Enter') {
         e.preventDefault();
         window.app.confirmModal();
+      } else if (e.key === 'ArrowDown' && at < fields.length - 1) {
+        e.preventDefault();
+        fields[at + 1].focus();
+      } else if (e.key === 'ArrowUp' && at > 0) {
+        e.preventDefault();
+        fields[at - 1].focus();
       }
     });
 
@@ -1252,6 +1330,17 @@
       privacyIcon.title = 'Private note';
       privacyIcon.textContent = '🔒';
       titleRow.appendChild(privacyIcon);
+    }
+    // A pencil, not a padlock: 🔒 already means "private" on this row. Same
+    // glyph and reasoning as the TUI's browse badge (tui/browse.go).
+    const heldBy = state.noteLocks.get(note.id);
+    if (heldBy) {
+      const lockIcon = document.createElement('span');
+      lockIcon.className = 'note-lock-badge';
+      lockIcon.textContent = '✎';
+      lockIcon.title = `Being edited in ${heldBy.label}` +
+        (heldBy.since ? ` (opened ${formatRelativeTime(heldBy.since).toLowerCase()})` : '');
+      titleRow.appendChild(lockIcon);
     }
     const title = document.createElement('span');
     title.className = 'note-title';
@@ -2140,7 +2229,18 @@
   // UI Helpers
   // ============================================
 
+  // addEditTag adds one tag to the note being edited, unless it is already
+  // there (compared case-insensitively, as the query language compares tags).
+  // Tags are the comma-separated column; this keeps that shape.
+  window.app._addEditTag = function(tag) {
+    const tags = (state.editTags || '').split(',').map(t => t.trim()).filter(Boolean);
+    if (!tags.some(t => t.toLowerCase() === tag.toLowerCase())) tags.push(tag);
+    state.editTags = tags.join(',');
+  };
+
   function populateEditForm(note) {
+    // Carried through to saveNote unchanged; see the comment there.
+    state.editTags = note.tags || null;
     document.getElementById('edit-id').value = note.id;
     document.getElementById('edit-guid').value = note.guid;
     document.getElementById('edit-title').value = note.title;
@@ -2157,6 +2257,7 @@
   }
 
   function clearEditForm() {
+    state.editTags = null;
     document.getElementById('edit-id').value = '';
     document.getElementById('edit-guid').value = '';
     document.getElementById('edit-title').value = '';
@@ -2788,6 +2889,8 @@
       window.app._loadCategories(),
       window.app._loadNoteCategoryMappings()
     ]);
+    // Badges for notes open elsewhere; the interval takes it from here.
+    refreshNoteLocks();
     // Re-render after mappings are loaded so categories show in the list
     renderNoteList();
   }

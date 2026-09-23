@@ -548,7 +548,7 @@ l load theirs (drops your edits)   o overwrite theirs   esc decide later
 
 Nothing is lost while that dialog is up: your text stays in the form, and `esc` leaves it there.
 
-The web UI takes part too. **Edit** takes the lease before the form opens and renews it while the tab stays in edit mode. Saving, cancelling, picking another note or closing the tab releases it. If a TUI (or another tab) holds the note, the browser asks whether to take it over.
+The web UI takes part too. **Edit** takes the lease before the form opens and renews it while the tab stays in edit mode. Saving, cancelling, picking another note or closing the tab releases it. If a TUI (or another tab) holds the note, the browser asks whether to take it over. The note list shows the same `✎` badge on notes another session is editing (its tooltip names the holder), refreshed every 30 seconds while the tab is visible.
 
 The same rules apply to anything else writing through the API — the server, not the client, is what enforces them. `X-GoNotes-Lock: <token>` carries a lease on a write; `expected_version` in the body opts a write into the version check. A write that names neither still works, which is what keeps `gn-clip.sh`, the Markdown importer, and sync running unchanged.
 

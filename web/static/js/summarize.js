@@ -92,14 +92,20 @@
   // busy disables a button and says what it is doing, so a second click cannot
   // start a second model call over the same text. The label is restored from
   // what was there, not from a literal, so this cannot rename a button.
+  //
+  // aria-busy is set as well: it tells assistive tech the control is working,
+  // and app.css animates the icon of a busy button, which is the only motion an
+  // icon-only button has to show that a long call is still running.
   function busy(btn, on, label) {
     if (!btn) return;
     if (on) {
       btn.dataset.prevLabel = btn.dataset.prevLabel || btn.textContent;
       btn.disabled = true;
+      btn.setAttribute('aria-busy', 'true');
       if (label && btn.textContent.trim()) btn.textContent = label;
     } else {
       btn.disabled = false;
+      btn.removeAttribute('aria-busy');
       if (btn.dataset.prevLabel) {
         btn.textContent = btn.dataset.prevLabel;
         delete btn.dataset.prevLabel;
@@ -152,11 +158,11 @@
       return;
     }
 
-    // The toolbar button is icon-only, so busy() has nothing to relabel — all
-    // it can show is the disabled state (.btn:disabled in app.css). The toast
+    // The toolbar button is icon-only, so busy() has nothing to relabel — it
+    // shows the disabled state plus a pulsing icon (aria-busy in app.css). The toast
     // carries the rest, and says the same thing the TUI's status line says on
     // ctrl+r. It auto-dismisses after 3s and a model call can outlast that;
-    // past then the dimmed button is what tells the user the wait is real.
+    // past then the pulsing button is what tells the user the wait is real.
     toast('Summarizing the clipboard…', 'info');
     busy(btn, true);
     const res = await requestSummary(text);
@@ -167,6 +173,11 @@
     // one. newNote() clears the form and mints the guid, so everything below is
     // filling in blanks.
     window.app.newNote();
+    // Tagged "summary", as the TUI's clipboard summary is (summarizeTag in
+    // tui/summarize.go), so "which notes did a model condense" stays a query:
+    // tags = 'summary'. The body door doesn't tag, in either UI: it rewrites
+    // a note the user already filed, and its tags are theirs.
+    if (window.app._addEditTag) window.app._addEditTag('summary');
     const title = document.getElementById('edit-title');
     const desc = document.getElementById('edit-description');
     if (title) title.value = res.title || '';

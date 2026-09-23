@@ -829,6 +829,14 @@ input, textarea, select {
   flex-shrink: 0;
 }
 
+/* Another session holds this note's lease (app.js refreshNoteLocks). Error
+   color, matching the TUI's badge: it answers "can I edit this right now?" */
+.note-lock-badge {
+  color: var(--danger);
+  flex-shrink: 0;
+  cursor: help;
+}
+
 .note-title {
   font-weight: 600;
   font-size: var(--font-size-md);
@@ -969,6 +977,26 @@ input, textarea, select {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* Busy state for a button whose work outlasts its toast (the icon-only
+   summarize button: a model call can take tens of seconds). Dimming alone
+   reads as "unavailable"; motion is what says "working". The icon itself
+   pulses rather than spins because this clipboard glyph turned sideways looks
+   broken, not busy. aria-busy is the hook, so the same attribute tells
+   assistive tech and the stylesheet. Users who ask for reduced motion keep
+   just the dimming from .btn:disabled. */
+.btn[aria-busy="true"] svg {
+  animation: btn-busy-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes btn-busy-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.35; transform: scale(0.88); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn[aria-busy="true"] svg { animation: none; }
 }
 
 /* ============================================
@@ -2330,6 +2358,16 @@ mark.note-search-hit-current {
 
 .dup-option:hover {
   background: var(--bg-tertiary);
+}
+
+/* The keyboard position in the dialog. The checkbox's own focus ring is a few
+   pixels around an 18px box and easy to lose; outlining the whole row makes
+   ↑/↓ (see showDuplicateDialog) visibly move a cursor. :focus-visible keeps a
+   mouse click from drawing it. */
+.dup-option:has(.dup-checkbox:focus-visible) {
+  background: var(--bg-tertiary);
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
 }
 
 .dup-checkbox {
