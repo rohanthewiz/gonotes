@@ -471,6 +471,10 @@ Private     [ ]
 
 That files the note under Work's `backend` subcategory and under Personal plainly. `Work/backend/api` selects two subcategories of Work at once; `Work/backend, Work/api` means exactly the same thing (the second form is what a Markdown export writes). `ctrl+s` saves — and anything that does not exist yet is created right there, categories and subcategories alike. It is the same notation as the Markdown frontmatter and `gn-clip.sh -c "Work/backend"`.
 
+The web note form's category box takes the same text: `Work/backend, Personal` adds a Work card with `backend` ticked and a Personal card. Its suggestions follow the name after the last comma, and after a `/` they offer that category's subcategories. One difference remains for older data: if a category already exists whose name contains a `/` (the web form used to allow that), typing its whole name picks it rather than splitting it.
+
+**In bulk (web).** Tick notes in the list and use **Add Category** or **Remove Category** in the batch bar. Both take comma-separated plain names. Add creates unknown names and keeps each note's other categories. Remove refuses a name no category has, and leaves notes that lack it alone. Neither sets subcategories: `Work/backend` is refused there instead of being half-applied.
+
 **Seeing them.** The note view (`enter` on a row) names the filing in its header:
 
 ```

@@ -291,6 +291,17 @@ func UpdateNoteCategory(ctx rweb.Context) error {
 		}
 	}
 
+	// Same guard as RemoveCategoryFromNote: the update is keyed only by the
+	// two ids, so ownership has to be checked here.
+	owned, err := ownsNote(noteID, userGUID)
+	if err != nil {
+		logger.LogErr(serr.Wrap(err, "failed to look up note"), "database error", "note_id", noteID)
+		return writeError(ctx, http.StatusInternalServerError, "failed to update note category")
+	}
+	if !owned {
+		return writeError(ctx, http.StatusNotFound, "note not found")
+	}
+
 	err = models.UpdateNoteCategorySubcategories(noteID, categoryID, req.Subcategories)
 	if err != nil {
 		if err.Error() == "relationship not found" {
@@ -316,9 +327,6 @@ func RemoveCategoryFromNote(ctx rweb.Context) error {
 	if userGUID == "" {
 		return writeError(ctx, http.StatusUnauthorized, "authentication required")
 	}
-	// Note: RemoveCategoryFromNote deletes by note_id + category_id. The note_categories
-	// junction only contains entries that were ownership-verified at creation time.
-	_ = userGUID // ownership was verified when the relationship was created
 
 	noteIDStr := ctx.Request().Param("id")
 	noteID, err := strconv.ParseInt(noteIDStr, 10, 64)
@@ -330,6 +338,21 @@ func RemoveCategoryFromNote(ctx rweb.Context) error {
 	categoryID, err := strconv.ParseInt(categoryIDStr, 10, 64)
 	if err != nil {
 		return writeError(ctx, http.StatusBadRequest, "invalid category id")
+	}
+
+	// The link rows were ownership-checked when they were created, but that
+	// doesn't make deleting them safe: the delete is keyed only by the two ids,
+	// and note ids are sequential, so without this check any signed-in user
+	// could strip categories from anyone's notes. A note the caller doesn't own
+	// answers 404, the same as GetNote, so the status can't be used to find
+	// out which ids exist.
+	owned, err := ownsNote(noteID, userGUID)
+	if err != nil {
+		logger.LogErr(serr.Wrap(err, "failed to look up note"), "database error", "note_id", noteID)
+		return writeError(ctx, http.StatusInternalServerError, "failed to remove category from note")
+	}
+	if !owned {
+		return writeError(ctx, http.StatusNotFound, "note not found")
 	}
 
 	err = models.RemoveCategoryFromNote(noteID, categoryID)

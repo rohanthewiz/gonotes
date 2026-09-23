@@ -161,21 +161,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   The web advanced-search query bar isn't wired to the note-link autocomplete
   or to saved/named queries. Query history is per browser (`localStorage`).
 
-- **N-042** · raised `2026-0923-1043-web-comma-categories-and-next-list-seed` · value low
-  The web category input's `<datalist>` autocomplete matches the whole input
-  value, so once a comma is typed it stops suggesting names for the segment
-  after it. A custom autocomplete keyed on the last comma segment would fix it.
-
-- **N-043** · raised `2026-0923-1043-web-comma-categories-and-next-list-seed` · value low
-  The web category input splits on commas but does not read the `/`
-  subcategory notation (`Work/backend`) that the TUI field and
-  `models.ParseCategorySpecCSV` accept, so the two single-line inputs speak
-  slightly different dialects. Web names containing `/` are still allowed.
-
-- **N-045** · raised `2026-0923-1124-medium-next-items` · value low
-  The web batch bar can add a category to many notes but not remove one. Kept
-  separate on purpose: a bulk remove should be its own named action.
-
 - **N-046** · raised `2026-0923-1124-medium-next-items` · value low
   The web note list shows no "being edited elsewhere" badge. The TUI's `✎`
   reads `GET /api/v1/note-locks`, which the web UI could poll the same way.
@@ -218,6 +203,12 @@ session doc marked an item as deferred, so move items here from Open by hand.
   `gofmt -l` flagged files. Done: the whole tree is gofmt-clean. Two comments were reworded first so gofmt would not turn `''` into a typographic quote or indent a line into a code block.
 - **N-044** · raised `2026-0923-1124-medium-next-items` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
   The spoke compactor placed a compacted category at its LAST timestamp. Done: `compactCategoryGroup` now uses the FIRST (a net delete keeps the last), matching the hub. `TestCompactKeepsARenamedCategoryAheadOfItsNotes` fails with the old placement.
+- **N-042** · raised `2026-0923-1043-web-comma-categories-and-next-list-seed` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+  The web category `<datalist>` stopped suggesting after a comma. Done: `refreshCategorySuggestions` rebuilds the options on each keystroke with the typed prefix in front (`Work, Pe` → `Work, Personal`), and after a `/` it offers the category's subcategories. The option lists were checked in Chrome; whether the native popup shows them was not, because the popup never opened under automation.
+- **N-043** · raised `2026-0923-1043-web-comma-categories-and-next-list-seed` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+  The web category input ignored `/` notation. Done: `parseCategorySpec` reads `Work/backend` as the TUI does. A defined subcategory matches case-insensitively and an unknown one is created. An existing category whose whole name contains `/` still matches literally. The batch dialog refuses `/` rather than drop it.
+- **N-045** · raised `2026-0923-1124-medium-next-items` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+  The web batch bar couldn't remove a category. Done: a separate **Remove Category** action. Unknown names are refused, only linked pairs get a DELETE, and a 404 for an already-gone link counts as success. While building it, found and fixed a gap: `DELETE` and `PUT /api/v1/notes/:id/categories/:cid` never checked note ownership, so any signed-in user could unlink or rewrite categories on another user's note by id. `TestRemoveCategoryFromAnotherUsersNote` covers it.
 
 Closures before this file was seeded are recorded in the session docs
 themselves. These were found already done while seeding:

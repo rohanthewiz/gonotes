@@ -328,6 +328,9 @@
           return null;
         }
         const err = new Error(data.error || 'Request failed');
+        // The status lets a caller tell an expected refusal (a 404 for a link
+        // that is already gone, say) from a real failure.
+        err.status = response.status;
         // A 409 is a conflict, not a failure: either another session has the
         // note open (a GoNotes TUI in a cats pane, say) or somebody saved it
         // while this form was open. Both carry a detail object explaining
@@ -1821,28 +1824,53 @@
   //
   // "Add", not "set": a note's existing categories are kept. Replacing them
   // across a batch would silently strip categories from notes the user cannot
-  // see side by side, which is the wrong default for a bulk action. Removing a
-  // category from many notes would be its own, explicitly named action.
+  // see side by side, which is the wrong default for a bulk action. Taking a
+  // category off many notes is its own, explicitly named action
+  // (removeCategorySelected).
   //
   // The input takes the same comma-separated names as the note form's
   // category field, and a name no category has yet is created, as it is there.
   window.app.addCategorySelected = function() {
+    openBatchCategoryDialog('add');
+  };
+
+  // removeCategorySelected takes one or more categories off every checked
+  // note. Only existing categories can be named; notes that don't carry a
+  // named category are left alone and still count as done.
+  window.app.removeCategorySelected = function() {
+    openBatchCategoryDialog('remove');
+  };
+
+  // openBatchCategoryDialog is the shared dialog behind Add Category and
+  // Remove Category: one comma-separated input, suggesting names from the
+  // note form's datalist.
+  //
+  // The datalist is the note form's (category-datalist), already kept in step
+  // with state.categories. Its options are rebuilt per keystroke so the name
+  // after a comma is suggested too (see refreshCategorySuggestions); the
+  // dialog asks for plain names, since the batch actions don't set
+  // subcategories. The note form rebuilds the list for its own input on its
+  // next keystroke.
+  function openBatchCategoryDialog(mode) {
     const count = state.selectedNotes.size;
     if (count === 0) return;
+    const adding = mode === 'add';
+    const noun = count === 1 ? 'note' : 'notes';
 
-    document.getElementById('modal-title').textContent =
-      `Add category to ${count} ${count === 1 ? 'note' : 'notes'}`;
-    // The datalist is the note form's (category-datalist), already kept in
-    // step with state.categories, so the dialog gets the same suggestions for
-    // free.
+    document.getElementById('modal-title').textContent = adding
+      ? `Add category to ${count} ${noun}`
+      : `Remove category from ${count} ${noun}`;
     document.getElementById('modal-body').innerHTML = `
       <div class="form-group">
         <label class="form-label" for="batch-category">Category</label>
         <input type="text" class="form-input" id="batch-category"
                list="category-datalist" autocomplete="off"
+               autocapitalize="off" autocorrect="off"
                placeholder="Category name (comma-separate several)...">
       </div>
-      <p class="settings-description">Existing categories on these notes are kept.</p>
+      <p class="settings-description">${adding
+        ? 'Existing categories on these notes are kept.'
+        : 'Other categories on these notes are kept.'}</p>
     `;
 
     const input = document.getElementById('batch-category');
@@ -1852,15 +1880,75 @@
         window.app.confirmModal();
       }
     });
+    input.addEventListener('input', function() {
+      if (window.app._refreshCategorySuggestions) window.app._refreshCategorySuggestions(this, false);
+    });
+    if (window.app._refreshCategorySuggestions) window.app._refreshCategorySuggestions(input, false);
 
     document.getElementById('modal-footer').style.display = '';
     const confirmBtn = document.getElementById('modal-confirm');
-    if (confirmBtn) confirmBtn.textContent = 'Add';
-    modalConfirmHandler = performAddCategorySelected;
+    if (confirmBtn) confirmBtn.textContent = adding ? 'Add' : 'Remove';
+    modalConfirmHandler = adding ? performAddCategorySelected : performRemoveCategorySelected;
 
     document.getElementById('modal-overlay').classList.add('open');
     input.focus();
-  };
+  }
+
+  // readBatchCategoryNames returns the distinct names typed in the batch
+  // dialog, or null (after a warning toast) when the input can't be used.
+  //
+  // "Work/backend" is refused rather than half-applied. In the note form that
+  // text means "Work, with backend ticked", but a batch action has no per-note
+  // subcategory selection to merge into, so quietly dropping the "/backend"
+  // would file notes somewhere other than what was typed. An existing category
+  // whose name really contains "/" is still accepted (parseCategorySpec's
+  // exact-match rule).
+  function readBatchCategoryNames() {
+    const input = document.getElementById('batch-category');
+    const segments = (input ? input.value : '').split(',').map(n => n.trim()).filter(Boolean);
+    if (segments.length === 0) {
+      showToast('Enter a category name', 'warning');
+      return null;
+    }
+    const parse = window.app._parseCategorySpec;
+    const withSubcats = parse ? segments.filter(seg => parse(seg).subs.length > 0) : [];
+    if (withSubcats.length > 0) {
+      showToast(`Subcategories can't be set from the batch bar ("${withSubcats[0]}"). ` +
+        'Use the category name alone.', 'warning');
+      return null;
+    }
+    return [...new Set(segments)];
+  }
+
+  function resetBatchConfirm(label) {
+    const confirmBtn = document.getElementById('modal-confirm');
+    if (confirmBtn) {
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = label;
+    }
+  }
+
+  function busyBatchConfirm(label) {
+    const confirmBtn = document.getElementById('modal-confirm');
+    if (confirmBtn) {
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = label;
+    }
+  }
+
+  // refreshAfterBatchCategoryChange reloads what a batch category action
+  // touched. The selection is kept: filing notes doesn't remove them from
+  // view, and the next batch action often goes to the same notes.
+  async function refreshAfterBatchCategoryChange() {
+    await window.app._loadCategories();
+    await window.app._loadNoteCategoryMappings();
+    // The open note's category row would otherwise be stale until reselected.
+    // Not while editing: selectNote leaves edit mode and would drop the form.
+    if (state.currentNote && !state.isEditing && state.selectedNotes.has(state.currentNote.id)) {
+      window.app.selectNote(state.currentNote.id);
+    }
+    renderNoteList();
+  }
 
   // performAddCategorySelected resolves the typed names to category ids
   // (creating unknown ones), then attaches each to each selected note.
@@ -1871,19 +1959,10 @@
   // that already has the category answers 409 "already added", which counts
   // as success because the note ends up filed where the user asked.
   async function performAddCategorySelected() {
-    const input = document.getElementById('batch-category');
-    const names = [...new Set((input ? input.value : '')
-      .split(',').map(n => n.trim()).filter(Boolean))];
-    if (names.length === 0) {
-      showToast('Enter a category name', 'warning');
-      return;
-    }
+    const names = readBatchCategoryNames();
+    if (!names) return;
 
-    const confirmBtn = document.getElementById('modal-confirm');
-    if (confirmBtn) {
-      confirmBtn.disabled = true;
-      confirmBtn.textContent = 'Adding...';
-    }
+    busyBatchConfirm('Adding...');
 
     // Resolve names → ids. Matching is case-insensitive, as in the note form's
     // addCategoryEntry, so "work" files under an existing "Work" instead of
@@ -1914,10 +1993,7 @@
       // apiRequest already toasted the reason. Leave the dialog open so the
       // name can be corrected.
       console.error('Failed to resolve batch categories:', error);
-      if (confirmBtn) {
-        confirmBtn.disabled = false;
-        confirmBtn.textContent = 'Add';
-      }
+      resetBatchConfirm('Add');
       return;
     }
 
@@ -1945,17 +2021,65 @@
       }
     }
 
-    // The selection is kept: filing notes doesn't remove them from view, and
-    // the next batch action often goes to the same notes.
-    await window.app._loadCategories();
-    await window.app._loadNoteCategoryMappings();
-    // The open note's category row would otherwise be stale until reselected.
-    // Not while editing: selectNote leaves edit mode and would drop the form.
-    if (state.currentNote && !state.isEditing && state.selectedNotes.has(state.currentNote.id)) {
-      window.app.selectNote(state.currentNote.id);
-    }
-    renderNoteList();
+    await refreshAfterBatchCategoryChange();
     batchSummary(`filed under ${resolvedNames.join(', ')}`, targets.length, failures);
+  }
+
+  // performRemoveCategorySelected takes the named categories off every
+  // selected note.
+  //
+  // Unlike Add, an unknown name is an error, not a create: there is nothing
+  // to remove, and a typo ("Wrok") should say so rather than report success
+  // on notes it never touched. The dialog stays open to correct it.
+  //
+  // Requests go only to (note, category) pairs the loaded mappings say exist,
+  // so a batch over notes that mostly lack the category costs nothing extra.
+  // If the mappings are stale and the link is already gone, the server's 404
+  // "relationship not found" counts as success: the note ends up without the
+  // category, which is what was asked. Serial, one DELETE per pair, for the
+  // same reasons as the add path.
+  async function performRemoveCategorySelected() {
+    const names = readBatchCategoryNames();
+    if (!names) return;
+
+    const resolved = [];
+    const unknown = [];
+    for (const name of names) {
+      const lower = name.toLowerCase();
+      const existing = state.categories.find(c => c.name.toLowerCase() === lower);
+      if (existing) resolved.push(existing);
+      else unknown.push(name);
+    }
+    if (unknown.length > 0) {
+      showToast(`No category named ${unknown.map(n => `"${n}"`).join(', ')}`, 'warning');
+      return;
+    }
+
+    busyBatchConfirm('Removing...');
+    window.app.closeModal();
+
+    const targets = [...state.selectedNotes];
+    const failures = [];
+    for (const noteId of targets) {
+      const linked = new Set((state.noteCategoryMap[noteId] || []).map(m => m.categoryId));
+      for (const category of resolved) {
+        if (!linked.has(category.id)) continue;
+        try {
+          await apiRequest(`/notes/${noteId}/categories/${category.id}`, {
+            method: 'DELETE',
+            quiet: true
+          });
+        } catch (error) {
+          if (error.status === 404 && /relationship not found/i.test(error.message)) continue;
+          console.error('Failed to remove category from note:', noteId, category.id, error);
+          failures.push({ noteId: noteId, message: error.message });
+          break;
+        }
+      }
+    }
+
+    await refreshAfterBatchCategoryChange();
+    batchSummary(`taken out of ${resolved.map(c => c.name).join(', ')}`, targets.length, failures);
   }
 
   // togglePrivacySelected moves every checked note to the same privacy.

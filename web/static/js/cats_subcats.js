@@ -102,6 +102,91 @@
     ).join('');
   }
 
+  // parseCategorySpec reads one comma segment of a category input into a
+  // category name and the subcategories named after it: "Work/backend/api" is
+  // {name: "Work", subs: ["backend", "api"]}. This is the TUI's notation
+  // (models.ParseCategorySpecs), so both single-line inputs accept the same
+  // text.
+  //
+  // One exception keeps older data reachable: the web input used to take "/"
+  // literally, so a category may already be named "A/B". A segment that equals
+  // an existing category's whole name (case-insensitively) is that category,
+  // not "A" with subcategory "B". A NEW name can no longer contain "/"; the
+  // TUI never allowed one either.
+  function parseCategorySpec(segment) {
+    const trimmed = segment.trim();
+    const lower = trimmed.toLowerCase();
+    if (getState().categories.some(c => c.name.toLowerCase() === lower)) {
+      return { name: trimmed, subs: [] };
+    }
+    const parts = trimmed.split('/').map(p => p.trim());
+    const subs = [];
+    for (const sub of parts.slice(1)) {
+      if (sub && !subs.includes(sub)) subs.push(sub);
+    }
+    return { name: parts[0], subs: subs };
+  }
+
+  // refreshCategorySuggestions rebuilds the shared datalist for what is being
+  // typed in a comma-separated category input.
+  //
+  // A <datalist> filters its options against the input's WHOLE value, so a
+  // plain list of names stops matching as soon as a comma is typed ("Work, Pe"
+  // is a prefix of no category). Rather than replace the native widget with a
+  // custom dropdown, each option is written with the already-typed text in
+  // front of it: typing "Work, Pe" offers "Work, Personal", which the browser
+  // matches as usual, and picking it fills the whole line. Names already
+  // listed earlier in the line are left out.
+  //
+  // With allowSubcats, a segment containing "/" offers that category's defined
+  // subcategories instead ("Work/" → "Work/backend", "Work/api"), skipping
+  // any already named in the segment. The batch dialog passes false: it can't
+  // set subcategories.
+  //
+  //   value:   "Work, Personal/ho"
+  //             └─ prefix ──────┘└ current segment: category "Personal", partial sub "ho"
+  //   options: "Work, Personal/home", "Work, Personal/health", …
+  function refreshCategorySuggestions(input, allowSubcats) {
+    const datalist = document.getElementById('category-datalist');
+    if (!datalist || !input) return;
+
+    const value = input.value;
+    const lastComma = value.lastIndexOf(',');
+    const segment = value.slice(lastComma + 1);
+    // Keep the typed spacing after the comma so every option starts with
+    // exactly what is in the box; otherwise "Work,Pe" would not match
+    // "Work, Personal".
+    const lead = segment.length - segment.trimStart().length;
+    const prefix = value.slice(0, lastComma + 1 + lead);
+    const current = segment.trimStart();
+
+    const categories = getState().categories;
+    let options;
+
+    const slash = current.indexOf('/');
+    if (allowSubcats && slash >= 0) {
+      const catName = current.slice(0, slash).trim().toLowerCase();
+      const cat = categories.find(c => c.name.toLowerCase() === catName);
+      const subs = (cat && cat.subcategories) ? cat.subcategories : [];
+      // Everything up to the last "/" stays as typed; only the partial
+      // subcategory after it is being completed.
+      const head = current.slice(0, current.lastIndexOf('/') + 1);
+      const named = new Set(head.split('/').slice(1).map(p => p.trim().toLowerCase()));
+      options = subs
+        .filter(sub => !named.has(sub.toLowerCase()))
+        .map(sub => prefix + head + sub);
+    } else {
+      const named = new Set(value.slice(0, lastComma + 1).split(',')
+        .map(seg => parseCategorySpec(seg).name.toLowerCase())
+        .filter(Boolean));
+      options = categories
+        .filter(c => !named.has(c.name.toLowerCase()))
+        .map(c => prefix + c.name);
+    }
+
+    datalist.innerHTML = options.map(v => `<option value="${escapeHtml(v)}">`).join('');
+  }
+
   // ============================================
   // Search Bar Category Filtering
   // ============================================
@@ -268,7 +353,7 @@
 
     // The input accepts a comma-separated list (see addCategoryEntry), so the
     // indicator describes the name currently being typed: the last segment.
-    const trimmedName = categoryName.split(',').pop().trim();
+    const trimmedName = parseCategorySpec(categoryName.split(',').pop()).name;
     if (!trimmedName) {
       if (newIndicator) newIndicator.style.display = 'none';
       return;
@@ -294,51 +379,99 @@
   // A comma is therefore not allowed inside a category name — the same
   // restriction the TUI and Markdown frontmatter already impose.
   //
+  // Each name may carry subcategories in the same notation: "Work/backend"
+  // adds (or reuses) the Work card and ticks backend on it. A subcategory the
+  // category doesn't define yet is added as a new one, as the card's own
+  // "Add subcategory" box would. See parseCategorySpec for the one case where
+  // "/" is read literally.
+  //
   // Empty segments (trailing or doubled commas) are dropped rather than
-  // rejected: they are typos with an obvious intent. Names already on the note,
-  // or repeated within the same input, are skipped; the warning toast only
-  // fires when nothing at all was added, so "Work, Work, Personal" quietly
-  // yields two cards instead of an error.
+  // rejected: they are typos with an obvious intent. A name already on the
+  // note is not added twice, but its subcategories are still applied, so
+  // "Work/api" on a note that has Work ticks api. The warning toast only fires
+  // when nothing at all changed, so "Work, Work, Personal" quietly yields two
+  // cards instead of an error.
   window.app.addCategoryEntry = function() {
     const input = document.getElementById('edit-category');
     if (!input) return;
 
-    const rawNames = input.value.split(',').map(n => n.trim()).filter(Boolean);
-    if (rawNames.length === 0) {
+    const specs = input.value.split(',').map(parseCategorySpec).filter(spec => spec.name);
+    if (specs.length === 0) {
       showToast('Enter a category name', 'warning');
       return;
     }
 
-    let added = 0;
-    for (const rawName of rawNames) {
-      const key = rawName.toLowerCase();
-      if (categoryEntries.has(key)) continue;
+    let changed = 0;
+    // Cards that already existed and gained a subcategory; re-rendered once
+    // at the end so the new ticks show.
+    const touched = new Set();
+    for (const spec of specs) {
+      const key = spec.name.toLowerCase();
+      let entry = categoryEntries.get(key);
+      const isNewCard = !entry;
 
-      // Look up existing category to get id and subcategories
-      const existing = getState().categories.find(c => c.name.toLowerCase() === key);
+      if (isNewCard) {
+        // Look up existing category to get id and subcategories
+        const existing = getState().categories.find(c => c.name.toLowerCase() === key);
+        entry = {
+          categoryId: existing ? existing.id : null,
+          categoryName: existing ? existing.name : spec.name,
+          selectedSubcats: [],
+          newSubcategories: [],
+          isNew: !existing
+        };
+        categoryEntries.set(key, entry);
+      }
 
-      const entry = {
-        categoryId: existing ? existing.id : null,
-        categoryName: existing ? existing.name : rawName,
-        selectedSubcats: [],
-        newSubcategories: [],
-        isNew: !existing
-      };
-
-      categoryEntries.set(key, entry);
-      renderCategoryEntry(key, entry);
-      added++;
+      const subsAdded = applySpecSubcats(key, entry, spec.subs);
+      if (isNewCard) {
+        renderCategoryEntry(key, entry);
+        changed++;
+      } else if (subsAdded > 0) {
+        touched.add(key);
+        changed++;
+      }
     }
 
-    if (added === 0) {
-      showToast(rawNames.length > 1 ? 'Categories already added' : 'Category already added', 'warning');
+    if (touched.size > 0) renderAllCategoryEntries();
+
+    if (changed === 0) {
+      showToast(specs.length > 1 ? 'Categories already added' : 'Category already added', 'warning');
       return;
     }
 
     input.value = '';
+    refreshCategorySuggestions(input, true);
     const newIndicator = document.getElementById('new-category-indicator');
     if (newIndicator) newIndicator.style.display = 'none';
   };
+
+  // applySpecSubcats ticks the subcategories a spec named on a card, returning
+  // how many were newly ticked. A name the category already defines is matched
+  // case-insensitively and ticked under its stored spelling, so "Work/API"
+  // doesn't create a second "api". An unknown name becomes a new subcategory,
+  // saved into the category's definition with the note (saveCategoryAssignments).
+  function applySpecSubcats(key, entry, subs) {
+    if (!subs || subs.length === 0) return 0;
+    const catDef = getState().categories.find(c => c.name.toLowerCase() === key);
+    const defined = (catDef && catDef.subcategories) ? catDef.subcategories : [];
+
+    let added = 0;
+    for (const sub of subs) {
+      const lower = sub.toLowerCase();
+      let canonical = defined.find(d => d.toLowerCase() === lower)
+        || entry.newSubcategories.find(d => d.toLowerCase() === lower);
+      if (!canonical) {
+        canonical = sub;
+        entry.newSubcategories.push(sub);
+      }
+      if (!entry.selectedSubcats.includes(canonical)) {
+        entry.selectedSubcats.push(canonical);
+        added++;
+      }
+    }
+    return added;
+  }
 
   // removeCategoryEntry - Remove from Map and DOM
   window.app.removeCategoryEntry = function(key) {
@@ -911,6 +1044,9 @@
     if (categoryInput) {
       let categoryDebounceTimer;
       categoryInput.addEventListener('input', function() {
+        // Not debounced: the datalist must match what is in the box by the
+        // time the browser draws its dropdown for this keystroke.
+        refreshCategorySuggestions(this, true);
         clearTimeout(categoryDebounceTimer);
         categoryDebounceTimer = setTimeout(() => {
           window.app.onCategoryChange(this.value);
@@ -946,5 +1082,7 @@
   window.app._loadEditNoteCategories = loadEditNoteCategories;
   window.app._saveCategoryAssignments = saveCategoryAssignments;
   window.app._initCategoryHandlers = initCategoryHandlers;
+  window.app._refreshCategorySuggestions = refreshCategorySuggestions;
+  window.app._parseCategorySpec = parseCategorySpec;
 
 })();

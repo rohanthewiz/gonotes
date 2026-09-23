@@ -293,6 +293,10 @@ leave anyway, `esc` keep working). Leaving a dirty form raises a three-way
 dialog — `s`/`enter` save & exit, `d` discard, `esc` keep editing. The note form's
 Categories field takes the same `Name/Sub` notation as the frontmatter and
 `gn-clip -c`, creating unknown categories and subcategories on save.
+The web note form's category box reads the same notation (`parseCategorySpec`
+in `cats_subcats.js`; an existing category whose whole name contains `/` still
+matches literally). The web batch bar's Add / Remove Category take plain names
+only.
 
 `D` (browse or detail) opens the duplicate dialog: an editable title prefilled
 `COPY <title>`, then a checkbox per part the copy can carry over — categories
@@ -471,6 +475,7 @@ Categories are attached separately, after the note exists:
 POST /api/v1/categories                              {"name":"Work"}
 POST /api/v1/notes/<note_id>/categories/<cat_id>     {"subcategories":["backend"]}
 PUT  /api/v1/notes/<note_id>/categories              {"categories":[{"category_id":1,"subcategories":["backend"]}]}   # replace the whole set in one call
+DELETE /api/v1/notes/<note_id>/categories/<cat_id>                        # unlink one (404 for a note you don't own)
 PUT  /api/v1/notes/<note_id>/privacy                 {"is_private":true}   # moves the note between databases, nothing else changes
 ```
 

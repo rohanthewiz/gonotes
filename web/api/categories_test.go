@@ -954,3 +954,85 @@ func TestHubCompactAPI(t *testing.T) {
 		t.Errorf("negative quiet_hours: status %d, want 400", resp.StatusCode)
 	}
 }
+
+// TestRemoveCategoryFromAnotherUsersNote checks that PUT and DELETE on
+// /notes/:id/categories/:cid are refused (404) for a note the caller doesn't
+// own, and that the link survives unchanged.
+func TestRemoveCategoryFromAnotherUsersNote(t *testing.T) {
+	t.Setenv("GONOTES_REGISTRATION_SECRET", "test-reg-secret")
+	server, cleanup := setupCategoryTestServer(t)
+	defer cleanup()
+	server.registerAndLogin(t)
+
+	noteBody, _ := json.Marshal(models.NoteInput{GUID: "owned-note", Title: "Mine"})
+	resp, err := server.doAuthPost(server.baseURL+"/api/v1/notes", noteBody)
+	if err != nil {
+		t.Fatalf("create note: %v", err)
+	}
+	var created api.APIResponse
+	json.NewDecoder(resp.Body).Decode(&created)
+	resp.Body.Close()
+	noteID := int64(created.Data.(map[string]interface{})["id"].(float64))
+
+	catBody, _ := json.Marshal(models.CategoryInput{Name: "Kept"})
+	resp, err = server.doAuthPost(server.baseURL+"/api/v1/categories", catBody)
+	if err != nil {
+		t.Fatalf("create category: %v", err)
+	}
+	json.NewDecoder(resp.Body).Decode(&created)
+	resp.Body.Close()
+	catID := int64(created.Data.(map[string]interface{})["id"].(float64))
+
+	link := fmt.Sprintf("%s/api/v1/notes/%d/categories/%d", server.baseURL, noteID, catID)
+	resp, err = server.doAuthPost(link, nil)
+	if err != nil || resp.StatusCode != http.StatusCreated {
+		t.Fatalf("link category: %v (status %v)", err, resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// A second account (registration needs the secret once a user exists).
+	regBody, _ := json.Marshal(map[string]string{
+		"username": "intruder", "password": "testpassword123",
+		"registration_secret": "test-reg-secret",
+	})
+	resp, err = http.Post(server.baseURL+"/api/v1/auth/register", "application/json", bytes.NewBuffer(regBody))
+	if err != nil || resp.StatusCode != http.StatusCreated {
+		t.Fatalf("register second user: %v (status %v)", err, resp.StatusCode)
+	}
+	var reg api.APIResponse
+	json.NewDecoder(resp.Body).Decode(&reg)
+	resp.Body.Close()
+	ownerToken := server.authToken
+	server.authToken = reg.Data.(map[string]interface{})["token"].(string)
+
+	putBody, _ := json.Marshal(map[string][]string{"subcategories": {"hijacked"}})
+	resp, err = server.doAuthPut(link, putBody)
+	if err != nil {
+		t.Fatalf("put as intruder: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("changing subcategories on another user's note returned %d, want 404", resp.StatusCode)
+	}
+
+	resp, err = server.doAuthDelete(link)
+	if err != nil {
+		t.Fatalf("delete as intruder: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("removing a category from another user's note returned %d, want 404", resp.StatusCode)
+	}
+
+	server.authToken = ownerToken
+	details, err := models.GetNoteCategoryDetails(noteID, "")
+	if err != nil {
+		t.Fatalf("read links: %v", err)
+	}
+	if len(details) != 1 {
+		t.Fatalf("the note has %d category links after the refused delete, want 1", len(details))
+	}
+	if len(details[0].SelectedSubcategories) != 0 {
+		t.Errorf("the refused PUT still changed the selection to %v", details[0].SelectedSubcategories)
+	}
+}

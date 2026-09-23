@@ -15,6 +15,10 @@ func (n NoteList) Render(b *element.Builder) any {
 			// app.addCategorySelected for why a bulk replace is the wrong default).
 			b.ButtonClass("btn", "onclick", "app.addCategorySelected()",
 				"title", "File the selected notes under a category, keeping their current ones").T("Add Category"),
+			// A separate, named action rather than a mode of Add: taking a category
+			// off many notes should never happen by accident.
+			b.ButtonClass("btn", "onclick", "app.removeCategorySelected()",
+				"title", "Take a category off the selected notes, keeping their others").T("Remove Category"),
 			// Converges a mixed selection: any public → all private, else all public.
 			b.ButtonClass("btn", "onclick", "app.togglePrivacySelected()",
 				"title", "Make the selected notes private (or public, if they already all are)").T("Toggle Privacy"),
