@@ -87,7 +87,7 @@ with every item's premise re-checked against the code at `e0c2a39`.
   Compaction is all-or-nothing per peer: there's no "compact just this note".
   The dry-run half is done (`models.PreviewCompaction`,
   `GET /api/v1/sync/control/compact`, shown in the web banner's compact-button
-  tooltips, in `2026-0923-1133-next-list-batches`), so this item is now only
+  tooltips, in `2026-0923-1203-next-list-batches`), so this item is now only
   the per-note part.
 
 - **N-023** · raised `2026-0818-1824-sync-prompt-mode-and-compaction` · value low
@@ -137,7 +137,7 @@ session doc marked an item as deferred, so move items here from Open by hand.
   query "…"` CLI subcommand. It would have to open the databases directly, so
   it would only work with the server stopped. The TUI's HTTP fallback is the
   better route and already exists.
-- **N-008** · declined `2026-0923-1133-next-list-batches` — Mouse support in the TUI agent picker and
+- **N-008** · declined `2026-0923-1203-next-list-batches` — Mouse support in the TUI agent picker and
   confirm dialog. `tui/mouse.go` already records this as deliberate: they are a
   few rows in a `lipgloss.Place`d box, so hit-testing means repeating the
   centering math, and a two-choice dialog doesn't earn that. Raised in
@@ -157,39 +157,39 @@ session doc marked an item as deferred, so move items here from Open by hand.
   Batch failures stacked one toast per note. Done: `apiRequest` takes `quiet: true`; the batch loops use it and summarise once.
 - **N-029** · raised `2026-0819-1410-web-batch-delete` · closed 2026-09-23, `2026-0923-1124-medium-next-items` —
   The batch **Set Category** / **Toggle Privacy** buttons threw TypeErrors. Done: **Add Category** (keeps existing categories, comma-separated, creates unknown names) and **Toggle Privacy** (a mixed selection converges, via new `PUT /api/v1/notes/:id/privacy`).
-- **N-006** · raised `2026-0812-1306-monaco-editor-option` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+- **N-006** · raised `2026-0812-1306-monaco-editor-option` · closed 2026-09-23, `2026-0923-1203-next-list-batches` —
   `scripts/download_vendor.sh` was stale. Done: deleted. It wrote to a directory that no longer exists, msgpack loads from the CDN, and `vendor_monaco.sh` covers Monaco.
-- **N-017** · raised `2026-0817-1420-gonotes-note-locks` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+- **N-017** · raised `2026-0817-1420-gonotes-note-locks` · closed 2026-09-23, `2026-0923-1203-next-list-batches` —
   `ReleaseNoteLocksForSession` had no HTTP door. Done: `DELETE /api/v1/note-locks?session_id=…` (user-scoped via `models.ReleaseNoteLocksForUserSession`, since a session id is not secret). The TUI HTTP store uses it on shutdown and falls back to per-note releases on an older server.
-- **N-033** · raised `2026-0827-1640-bytdb-v0.11-bump-notnull-version` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+- **N-033** · raised `2026-0827-1640-bytdb-v0.11-bump-notnull-version` · closed 2026-09-23, `2026-0923-1203-next-list-batches` —
   `gofmt -l` flagged files. Done: the whole tree is gofmt-clean. Two comments were reworded first so gofmt would not turn `''` into a typographic quote or indent a line into a code block.
-- **N-044** · raised `2026-0923-1124-medium-next-items` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+- **N-044** · raised `2026-0923-1124-medium-next-items` · closed 2026-09-23, `2026-0923-1203-next-list-batches` —
   The spoke compactor placed a compacted category at its LAST timestamp. Done: `compactCategoryGroup` now uses the FIRST (a net delete keeps the last), matching the hub. `TestCompactKeepsARenamedCategoryAheadOfItsNotes` fails with the old placement.
-- **N-042** · raised `2026-0923-1043-web-comma-categories-and-next-list-seed` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+- **N-042** · raised `2026-0923-1043-web-comma-categories-and-next-list-seed` · closed 2026-09-23, `2026-0923-1203-next-list-batches` —
   The web category `<datalist>` stopped suggesting after a comma. Done: `refreshCategorySuggestions` rebuilds the options on each keystroke with the typed prefix in front (`Work, Pe` → `Work, Personal`), and after a `/` it offers the category's subcategories. The option lists were checked in Chrome; whether the native popup shows them was not, because the popup never opened under automation.
-- **N-043** · raised `2026-0923-1043-web-comma-categories-and-next-list-seed` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+- **N-043** · raised `2026-0923-1043-web-comma-categories-and-next-list-seed` · closed 2026-09-23, `2026-0923-1203-next-list-batches` —
   The web category input ignored `/` notation. Done: `parseCategorySpec` reads `Work/backend` as the TUI does. A defined subcategory matches case-insensitively and an unknown one is created. An existing category whose whole name contains `/` still matches literally. The batch dialog refuses `/` rather than drop it.
-- **N-045** · raised `2026-0923-1124-medium-next-items` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+- **N-045** · raised `2026-0923-1124-medium-next-items` · closed 2026-09-23, `2026-0923-1203-next-list-batches` —
   The web batch bar couldn't remove a category. Done: a separate **Remove Category** action. Unknown names are refused, only linked pairs get a DELETE, and a 404 for an already-gone link counts as success. While building it, found and fixed a gap: `DELETE` and `PUT /api/v1/notes/:id/categories/:cid` never checked note ownership, so any signed-in user could unlink or rewrite categories on another user's note by id. `TestRemoveCategoryFromAnotherUsersNote` covers it.
-- **N-018** · raised `2026-0818-1739-duplicate-note-dialog` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+- **N-018** · raised `2026-0818-1739-duplicate-note-dialog` · closed 2026-09-23, `2026-0923-1203-next-list-batches` —
   The web duplicate dialog had no keyboard navigation beyond Enter. Done: ↑/↓ move between the title and the checkbox rows, space toggles, Enter confirms from any row, and the focused row is outlined (`:focus-visible`). Checked in Chrome with real key presses.
-- **N-031** · raised `2026-0821-1626-summarize-ui-web-tui` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+- **N-031** · raised `2026-0821-1626-summarize-ui-web-tui` · closed 2026-09-23, `2026-0923-1203-next-list-batches` —
   Web summaries were untagged. Done: the clipboard door tags the new note `summary`, as the TUI does (the body door doesn't, in either UI). Found while doing it: the web form sent `tags: null` on every save and `UpdateNote` writes every column, so **editing a note in the web UI erased its tags**. `state.editTags` now carries a note's tags through the edit. Checked in Chrome: a tagged note keeps `infra,api` after a web edit.
-- **N-032** · raised `2026-0826-1559-summarize-progress-indication` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+- **N-032** · raised `2026-0826-1559-summarize-progress-indication` · closed 2026-09-23, `2026-0923-1203-next-list-batches` —
   The icon-only summarize button was dimmed but not animated. Done: `busy()` sets `aria-busy` and `app.css` pulses the icon. The animation is off under `prefers-reduced-motion`.
-- **N-046** · raised `2026-0923-1124-medium-next-items` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+- **N-046** · raised `2026-0923-1124-medium-next-items` · closed 2026-09-23, `2026-0923-1203-next-list-batches` —
   The web note list had no "being edited elsewhere" badge. Done: `refreshNoteLocks` polls `GET /note-locks` every 30s while the tab is visible (and on return) and re-renders only on a change. It skips this tab's own lease, and the tooltip names the holder. Checked in Chrome against a curl-held lease.
-- **N-010** · raised `2026-0817-0015-tui-mouse-filter-and-store-identity` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+- **N-010** · raised `2026-0817-0015-tui-mouse-filter-and-store-identity` · closed 2026-09-23, `2026-0923-1203-next-list-batches` —
   The TUI never said *why* an HTTP request failed mid-session. In fact it did, but as Go's raw transport error (`Put "http://…": dial tcp …: connection refused`), and the one-line status bar truncated it before the cause. Done: `errReason` (`tui/errreason.go`) names refused, timed out, unknown host, dropped connection, 5xx and 401 in a few words, and `statusErr` uses it. Tested against real failures from the HTTP store.
-- **N-011** · raised `2026-0817-1046-tui-subcategory-support` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+- **N-011** · raised `2026-0817-1046-tui-subcategory-support` · closed 2026-09-23, `2026-0923-1203-next-list-batches` —
   `ctrl+g` capture filed notes with no category. Its form always had an editable Categories field; what was missing was a default. Done: the field is preset to the list's category filter (`Work/backend`), and left empty when the list is unfiltered or a query is in force. A preset alone doesn't make the form dirty.
-- **N-019** · raised `2026-0818-1739-duplicate-note-dialog` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+- **N-019** · raised `2026-0818-1739-duplicate-note-dialog` · closed 2026-09-23, `2026-0923-1203-next-list-batches` —
   The TUI duplicate dialog showed nothing while the copy was made. Done: `confirm` sequences pop → "Duplicating…" → the create, and the result's status replaces it.
-- **N-001** · raised `2026-0710-1656-tui-implementation` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+- **N-001** · raised `2026-0710-1656-tui-implementation` · closed 2026-09-23, `2026-0923-1203-next-list-batches` —
   Category and subcategory rename in the TUI. Done: `r` on both screens. A category rename is the whole-object update and refuses a name another category has (case-insensitive). A subcategory rename goes through the new `models.RenameSubcategory` (links first, then the definition, safe to re-run, merges onto an existing name) and `POST /api/v1/categories/:id/subcategories/rename`, so notes filed under the old name follow it. The web UI has no subcategory rename yet.
-- **N-013** · raised `2026-0817-1046-tui-subcategory-support` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+- **N-013** · raised `2026-0817-1046-tui-subcategory-support` · closed 2026-09-23, `2026-0923-1203-next-list-batches` —
   The TUI subcategory screen showed no note counts. Done: one `SubcategoryNoteCounts` read per screen (the bulk note-category mappings, counted client-side, not a query per row), reloaded after a rename. Rows show nothing until the counts load.
-- **N-047** · raised `2026-0923-1133-next-list-batches` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+- **N-047** · raised `2026-0923-1203-next-list-batches` · closed 2026-09-23, `2026-0923-1203-next-list-batches` —
   The web category manager couldn't rename a subcategory. Done: click (or Enter on) a tag's name in the manager's edit form to rename it inline. A saved subcategory is renamed at once through the rename endpoint, so its notes are refiled, and the staged list follows. A staged-only one is renamed locally. Found and fixed at the same time: the manager's Save sent no description, so it erased the category's description. Checked in Chrome.
 
 Closures before this file was seeded are recorded in the session docs
