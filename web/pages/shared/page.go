@@ -7,10 +7,11 @@ package shared
 // Any struct that embeds Page will inherit its fields and methods
 //
 // Example usage:
-//   type Home struct {
-//       shared.Page  // Embedded field - Home now has Title and all Page methods
-//       Heading string
-//   }
+//
+//	type Home struct {
+//	    shared.Page  // Embedded field - Home now has Title and all Page methods
+//	    Heading string
+//	}
 type Page struct {
 	// Title is an exported field (starts with capital letter)
 	// Exported fields are accessible from other packages

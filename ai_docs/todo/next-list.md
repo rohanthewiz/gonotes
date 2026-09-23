@@ -63,11 +63,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   `nls.messages.*` (~1.7MB) could be dropped from the vendor dir if "full"
   mode is ever relaxed.
 
-- **N-006** · raised `2026-0812-1306-monaco-editor-option` · value low
-  `scripts/download_vendor.sh` is stale. Still true: it targets
-  `server/static/vendor` and says Monaco needs a manual download.
-  `vendor_monaco.sh` replaced it for Monaco. Fix it or delete it.
-
 - **N-007** · raised `2026-0812-1306-monaco-editor-option` · value low
   The Monaco surface has never been exercised end to end in a browser: typing,
   toggling mid-edit, and image paste inside Monaco. The CDP harness (see
@@ -104,11 +99,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   The category and subcategory screens have no lock gate. Nothing is at risk
   today because they don't edit notes, but any bulk note operation added
   there later would need one. Contingent on such an operation existing.
-
-- **N-017** · raised `2026-0817-1420-gonotes-note-locks` · value low
-  `ReleaseNoteLocksForSession` (`models/lock.go:380`) has no HTTP door. The
-  HTTP store releases by iterating its own token map instead, which has the
-  same effect with more requests.
 
 - **N-018** · raised `2026-0818-1739-duplicate-note-dialog` · value low
   The web duplicate dialog can't be navigated by keyboard beyond Enter: no
@@ -167,10 +157,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   but not animated. A spinner or an `aria-busy` pulse was the nicer option
   left undone (option 3 in that doc).
 
-- **N-033** · raised `2026-0827-1640-bytdb-v0.11-bump-notnull-version` · value low
-  `gofmt -l models/` flags `category.go` and `store.go` (still true). The
-  formatting problem predates that session.
-
 - **N-034** · raised `2026-0909-1858-advanced-sql-search` · value low
   The web advanced-search query bar isn't wired to the note-link autocomplete
   or to saved/named queries. Query history is per browser (`localStorage`).
@@ -185,13 +171,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   subcategory notation (`Work/backend`) that the TUI field and
   `models.ParseCategorySpecCSV` accept, so the two single-line inputs speak
   slightly different dialects. Web names containing `/` are still allowed.
-
-- **N-044** · raised `2026-0923-1124-medium-next-items` · value low
-  The spoke compactor (`compactCategoryGroup`) puts a compacted category at its
-  group's LAST timestamp. If a pending tail holds a category create, then a note
-  mapped to it, then a rename, the push sends the note mapping before the
-  category exists on the hub, and the mapping is dropped. The hub compactor uses
-  the FIRST timestamp for this reason. Not observed in practice.
 
 - **N-045** · raised `2026-0923-1124-medium-next-items` · value low
   The web batch bar can add a category to many notes but not remove one. Kept
@@ -231,6 +210,14 @@ session doc marked an item as deferred, so move items here from Open by hand.
   Batch failures stacked one toast per note. Done: `apiRequest` takes `quiet: true`; the batch loops use it and summarise once.
 - **N-029** · raised `2026-0819-1410-web-batch-delete` · closed 2026-09-23, `2026-0923-1124-medium-next-items` —
   The batch **Set Category** / **Toggle Privacy** buttons threw TypeErrors. Done: **Add Category** (keeps existing categories, comma-separated, creates unknown names) and **Toggle Privacy** (a mixed selection converges, via new `PUT /api/v1/notes/:id/privacy`).
+- **N-006** · raised `2026-0812-1306-monaco-editor-option` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+  `scripts/download_vendor.sh` was stale. Done: deleted. It wrote to a directory that no longer exists, msgpack loads from the CDN, and `vendor_monaco.sh` covers Monaco.
+- **N-017** · raised `2026-0817-1420-gonotes-note-locks` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+  `ReleaseNoteLocksForSession` had no HTTP door. Done: `DELETE /api/v1/note-locks?session_id=…` (user-scoped via `models.ReleaseNoteLocksForUserSession`, since a session id is not secret). The TUI HTTP store uses it on shutdown and falls back to per-note releases on an older server.
+- **N-033** · raised `2026-0827-1640-bytdb-v0.11-bump-notnull-version` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+  `gofmt -l` flagged files. Done: the whole tree is gofmt-clean. Two comments were reworded first so gofmt would not turn `''` into a typographic quote or indent a line into a code block.
+- **N-044** · raised `2026-0923-1124-medium-next-items` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+  The spoke compactor placed a compacted category at its LAST timestamp. Done: `compactCategoryGroup` now uses the FIRST (a net delete keeps the last), matching the hub. `TestCompactKeepsARenamedCategoryAheadOfItsNotes` fails with the old placement.
 
 Closures before this file was seeded are recorded in the session docs
 themselves. These were found already done while seeding:

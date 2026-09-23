@@ -42,6 +42,11 @@ type fakeAPI struct {
 	token      string // the token currently considered valid
 	loginCount int    // how many times credentials were exchanged for a token
 	rejectAuth bool   // when true, every bearer token is rejected with 401
+
+	// Lock-release bookkeeping, for the shutdown-release tests.
+	noBulkRelease  bool           // when true, the bulk route answers 404 like an older server
+	bulkReleases   []string       // session ids sent to DELETE /api/v1/note-locks
+	singleReleases map[int64]bool // note ids sent to DELETE /api/v1/notes/{id}/lock
 }
 
 const fakeAPIPassword = "test-password-123"
@@ -306,6 +311,45 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 	mux.HandleFunc("GET /api/v1/categories/{id}/notes", auth(func(w http.ResponseWriter, r *http.Request) {
 		notes, _ := api.data.GetCategoryNotes(pathID(r, "id"), api.user.GUID)
 		writeOK(w, http.StatusOK, noteOutputs(notes))
+	}))
+
+	// Note locks, backed by the real in-process registry (models.*NoteLock),
+	// which is what web/api/locks.go wraps.
+	mux.HandleFunc("POST /api/v1/notes/{id}/lock", auth(func(w http.ResponseWriter, r *http.Request) {
+		var body lockAcquireBody
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		lock, err := models.AcquireNoteLock(pathID(r, "id"), api.user.GUID,
+			models.LockHolder{SessionID: body.SessionID, Label: body.Label, Client: body.Client}, false)
+		if err != nil {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeOK(w, http.StatusOK, lock)
+	}))
+	mux.HandleFunc("DELETE /api/v1/notes/{id}/lock", auth(func(w http.ResponseWriter, r *http.Request) {
+		id := pathID(r, "id")
+		api.mu.Lock()
+		if api.singleReleases == nil {
+			api.singleReleases = map[int64]bool{}
+		}
+		api.singleReleases[id] = true
+		api.mu.Unlock()
+		released := models.ReleaseNoteLock(id, r.Header.Get(lockHeaderName))
+		writeOK(w, http.StatusOK, map[string]bool{"released": released})
+	}))
+	mux.HandleFunc("DELETE /api/v1/note-locks", auth(func(w http.ResponseWriter, r *http.Request) {
+		api.mu.Lock()
+		disabled := api.noBulkRelease
+		if !disabled {
+			api.bulkReleases = append(api.bulkReleases, r.URL.Query().Get("session_id"))
+		}
+		api.mu.Unlock()
+		if disabled {
+			writeErr(w, http.StatusNotFound, "not found")
+			return
+		}
+		n := models.ReleaseNoteLocksForUserSession(api.user.GUID, r.URL.Query().Get("session_id"))
+		writeOK(w, http.StatusOK, map[string]int{"released": n})
 	}))
 
 	api.srv = httptest.NewServer(mux)
@@ -1053,5 +1097,71 @@ func TestHTTPStoreSummarizeUsesTheSlowClient(t *testing.T) {
 	}
 	if store.hcSlow.Timeout < time.Minute {
 		t.Fatalf("slow timeout %v is too short for a model call", store.hcSlow.Timeout)
+	}
+}
+
+// TestReleaseAllNoteLocksUsesTheBulkRoute checks the shutdown release: two
+// held leases go back in ONE request naming the session, not one per note.
+func TestReleaseAllNoteLocksUsesTheBulkRoute(t *testing.T) {
+	models.ResetNoteLocksForTest()
+	api := newFakeAPI(t)
+	st := api.store(t)
+	if _, err := st.AuthenticateUser("api_user", fakeAPIPassword); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	holder := models.LockHolder{SessionID: "sess-bulk", Label: "test", Client: "tui"}
+	for _, id := range []int64{11, 12} {
+		if _, err := st.AcquireNoteLock(id, "", holder, false); err != nil {
+			t.Fatalf("acquire %d: %v", id, err)
+		}
+	}
+
+	if err := st.ReleaseAllNoteLocks(); err != nil {
+		t.Fatalf("release all: %v", err)
+	}
+	api.mu.Lock()
+	bulk, single := api.bulkReleases, len(api.singleReleases)
+	api.mu.Unlock()
+	if len(bulk) != 1 || bulk[0] != "sess-bulk" {
+		t.Errorf("bulk releases = %v, want one for sess-bulk", bulk)
+	}
+	if single != 0 {
+		t.Errorf("%d per-note releases were sent alongside the bulk one", single)
+	}
+	if models.GetNoteLock(11) != nil || models.GetNoteLock(12) != nil {
+		t.Error("a lease survived the bulk release")
+	}
+}
+
+// TestReleaseAllNoteLocksFallsBackPerNote covers a server without the bulk
+// route (404): every held lease is still released, one request each.
+func TestReleaseAllNoteLocksFallsBackPerNote(t *testing.T) {
+	models.ResetNoteLocksForTest()
+	api := newFakeAPI(t)
+	api.noBulkRelease = true
+	st := api.store(t)
+	if _, err := st.AuthenticateUser("api_user", fakeAPIPassword); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	holder := models.LockHolder{SessionID: "sess-old", Label: "test", Client: "tui"}
+	for _, id := range []int64{21, 22} {
+		if _, err := st.AcquireNoteLock(id, "", holder, false); err != nil {
+			t.Fatalf("acquire %d: %v", id, err)
+		}
+	}
+
+	if err := st.ReleaseAllNoteLocks(); err != nil {
+		t.Fatalf("release all: %v", err)
+	}
+	api.mu.Lock()
+	single := api.singleReleases
+	api.mu.Unlock()
+	if !single[21] || !single[22] {
+		t.Errorf("per-note releases = %v, want both 21 and 22", single)
+	}
+	if models.GetNoteLock(21) != nil || models.GetNoteLock(22) != nil {
+		t.Error("a lease survived the fallback release")
 	}
 }

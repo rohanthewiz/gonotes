@@ -70,8 +70,8 @@ var errPoll = errors.New("pane.list failed")
 // pane.list looking exactly like a target.
 func TestAgentPanesExcludesSelfAndPlainShells(t *testing.T) {
 	cs := tier1State("/nonexistent.sock", []cats.PaneInfo{
-		{Pane: 3, Handle: "w1:p3"},                                              // a plain shell
-		{Pane: 7, Handle: "w1:p7", Agent: "gonotes"},                            // us
+		{Pane: 3, Handle: "w1:p3"},                   // a plain shell
+		{Pane: 7, Handle: "w1:p7", Agent: "gonotes"}, // us
 		{Pane: 9, Handle: "w1:p9", Agent: "claude", AgentState: cats.StateIdle},
 		{Pane: 4, Handle: "w1:p4", Agent: "codex", AgentState: cats.StateBlocked},
 		{Pane: 5, Handle: "w1:p5", Agent: "ced", AgentState: cats.StateWorking},
@@ -556,9 +556,9 @@ func TestCaptureLandsInAPrefilledForm(t *testing.T) {
 	// stream, so a second call would start reading from wherever the first
 	// stopped. The three strings span the three stages — picker, title, body.
 	waitForAll(t, tm,
-		"claude",                            // the picker offered the sibling pane
+		"claude",                             // the picker offered the sibling pane
 		"Capture: claude — 2026-08-14 15:04", // the form opened, titled
-		answer,                              // carrying what the pane printed
+		answer,                               // carrying what the pane printed
 	)
 
 	tm.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})

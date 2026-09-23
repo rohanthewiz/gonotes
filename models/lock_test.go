@@ -251,3 +251,22 @@ func TestAcquireRequiresASessionID(t *testing.T) {
 		t.Fatal("a lease was granted to a holder with no session id; nothing could ever release it")
 	}
 }
+
+// The HTTP door releases by session id, which is not a secret, so it must not
+// reach another user's leases even when the session ids collide.
+func TestReleaseForUserSessionStaysWithinTheUser(t *testing.T) {
+	ResetNoteLocksForTest()
+
+	AcquireNoteLock(1, "user-1", holder("a"), false)
+	AcquireNoteLock(2, "user-2", holder("a"), false)
+
+	if n := ReleaseNoteLocksForUserSession("user-1", "a"); n != 1 {
+		t.Fatalf("released %d leases, want 1", n)
+	}
+	if GetNoteLock(1) != nil {
+		t.Fatal("the caller's own lease survived")
+	}
+	if GetNoteLock(2) == nil {
+		t.Fatal("another user's lease with the same session id was released")
+	}
+}

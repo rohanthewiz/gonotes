@@ -88,6 +88,29 @@ func sessionIdentity() models.LockHolder {
 type lockTokens struct {
 	mu     sync.Mutex
 	byNote map[int64]string
+
+	// session is the holder session id the leases were taken under. The HTTP
+	// store uses it to release everything in one request on shutdown
+	// (DELETE /api/v1/note-locks?session_id=…). One TUI process is one
+	// session, so the last id seen is the only one.
+	session string
+}
+
+// setSession records the session id leases are being taken under.
+func (t *lockTokens) setSession(id string) {
+	if id == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.session = id
+}
+
+// sessionID returns the recorded session id, or "" if no lease was ever taken.
+func (t *lockTokens) sessionID() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.session
 }
 
 func newLockTokens() *lockTokens { return &lockTokens{byNote: map[int64]string{}} }

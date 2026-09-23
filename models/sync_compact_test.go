@@ -396,3 +396,63 @@ func TestCountUnsentChangesExcludesSyncOperations(t *testing.T) {
 		t.Errorf("pending count = %d, want 0 — a synced-in change is owed to nobody", count)
 	}
 }
+
+// TestCompactKeepsARenamedCategoryAheadOfItsNotes covers a category created,
+// then mapped to a note, then renamed, all before a push. The compacted
+// category must still sort before the note that names it; if it took the
+// rename's timestamp, the hub would read the note mapping first, find no such
+// category, and drop the mapping.
+func TestCompactKeepsARenamedCategoryAheadOfItsNotes(t *testing.T) {
+	setupCompactTestDB(t)
+
+	category, err := models.CreateCategory(models.CategoryInput{Name: "Before"}, compactUserGUID)
+	if err != nil {
+		t.Fatalf("failed to create category: %v", err)
+	}
+	note, err := models.CreateNote(models.NoteInput{GUID: "compact-renamed-cat", Title: "Filed"}, compactUserGUID)
+	if err != nil {
+		t.Fatalf("failed to create note: %v", err)
+	}
+	if err := models.AddCategoryToNote(note.ID, category.ID, compactUserGUID); err != nil {
+		t.Fatalf("failed to link category: %v", err)
+	}
+	// Sleep so the rename is strictly later than the mapping; the ordering
+	// bug only shows when the timestamps differ.
+	time.Sleep(5 * time.Millisecond)
+	if _, err := models.UpdateCategory(category.ID, models.CategoryInput{Name: "After"}, compactUserGUID); err != nil {
+		t.Fatalf("failed to rename category: %v", err)
+	}
+
+	if _, err := models.CompactPendingChanges("hub", ""); err != nil {
+		t.Fatalf("compaction failed: %v", err)
+	}
+
+	pull, err := models.GetUnifiedChangesForPeer("hub", "", 100)
+	if err != nil {
+		t.Fatalf("failed to read the compacted stream: %v", err)
+	}
+	categoryAt, noteAt := -1, -1
+	for i, c := range pull.Changes {
+		if c.EntityType == "category" && categoryAt < 0 {
+			categoryAt = i
+		}
+		if c.EntityType == "note" && noteAt < 0 {
+			noteAt = i
+		}
+	}
+	if categoryAt < 0 || noteAt < 0 {
+		t.Fatalf("stream lacks a category (%d) or a note (%d) change", categoryAt, noteAt)
+	}
+	if categoryAt > noteAt {
+		t.Errorf("category change at %d sorts after the note change at %d that maps to it", categoryAt, noteAt)
+	}
+
+	cats, err := models.GetUnsentCategoryChangesForPeer("hub", "", 0)
+	if err != nil || len(cats) != 1 {
+		t.Fatalf("expected 1 compacted category change, got %d (%v)", len(cats), err)
+	}
+	frag, err := models.GetCategoryFragment(cats[0].CategoryFragmentID.Int64)
+	if err != nil || frag == nil || frag.Name.String != "After" {
+		t.Errorf("compacted category fragment = %+v (%v), want the renamed row", frag, err)
+	}
+}

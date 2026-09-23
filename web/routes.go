@@ -84,11 +84,12 @@ func setupRoutes(s *rweb.Server) {
 	// One note's lease is acquired, renewed, and released on the same path
 	// with three different verbs; the collection read is separate because a
 	// list screen wants every lease in one call. See web/api/locks.go.
-	s.Post("/api/v1/notes/:id/lock", api.AcquireNoteLock)   // Claim a note for editing (?steal=true to force)
-	s.Put("/api/v1/notes/:id/lock", api.RenewNoteLock)      // Heartbeat: extend the lease
-	s.Delete("/api/v1/notes/:id/lock", api.ReleaseNoteLock) // Give the note back
-	s.Get("/api/v1/notes/:id/lock", api.GetNoteLock)        // Who holds this note (404 = nobody)
-	s.Get("/api/v1/note-locks", api.ListNoteLocks)          // Bulk: every live lease, for list badges
+	s.Post("/api/v1/notes/:id/lock", api.AcquireNoteLock)       // Claim a note for editing (?steal=true to force)
+	s.Put("/api/v1/notes/:id/lock", api.RenewNoteLock)          // Heartbeat: extend the lease
+	s.Delete("/api/v1/notes/:id/lock", api.ReleaseNoteLock)     // Give the note back
+	s.Get("/api/v1/notes/:id/lock", api.GetNoteLock)            // Who holds this note (404 = nobody)
+	s.Get("/api/v1/note-locks", api.ListNoteLocks)              // Bulk: every live lease, for list badges
+	s.Delete("/api/v1/note-locks", api.ReleaseSessionNoteLocks) // Bulk: ?session_id=… drops that session's leases
 
 	// Categories CRUD endpoints following RESTful conventions
 	s.Post("/api/v1/categories", api.CreateCategory)       // Create a new category

@@ -543,10 +543,28 @@ func groupCategoryChanges(changes []CategoryChange) ([]string, map[string][]Cate
 
 // compactCategoryGroup replaces one category's pending changes with a single
 // change built from its current row.
+//
+// Placement: a live category's replacement takes the group's FIRST timestamp,
+// not its last. The push is ordered by timestamp, and the hub can map a note
+// only to a category it already has. With a pending tail of
+//
+//	t1 category create → t2 note mapped to it → t3 category rename
+//
+// the last timestamp would put the category (t3) after the note (t2), and the
+// hub would drop the mapping. The first timestamp keeps it ahead of every
+// mapping that names it, and the replacement still carries the current row
+// (the rename included). A net delete keeps the last timestamp: it has to
+// follow those mappings, not precede them. CompactHubChangeLog places its
+// categories the same way.
 func compactCategoryGroup(categoryGUID string, grp []CategoryChange) (bool, error) {
+	operation := netCategoryOperation(grp)
+	createdAt := grp[0].CreatedAt
+	if operation == OperationDelete {
+		createdAt = grp[len(grp)-1].CreatedAt
+	}
 	return compactCategoryGroupAs(categoryGUID, grp, groupPlan{
-		operation: netCategoryOperation(grp),
-		createdAt: grp[len(grp)-1].CreatedAt,
+		operation: operation,
+		createdAt: createdAt,
 	})
 }
 

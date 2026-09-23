@@ -834,6 +834,7 @@ func (s *httpStore) AcquireNoteLock(noteID int64, _ string, holder models.LockHo
 	}
 
 	s.tokens.set(noteID, lock.Token)
+	s.tokens.setSession(holder.SessionID)
 	return &lock, nil
 }
 
@@ -879,12 +880,26 @@ func (s *httpStore) ReleaseNoteLock(noteID int64) error {
 // ReleaseAllNoteLocks tells the server about every lease this session still
 // holds, in one pass, on the way out.
 //
-// Sequential rather than concurrent: this runs during shutdown with the
-// terminal already handed back, the count is the number of notes one user had
-// open at once (one, in practice), and a goroutine fan-out here would trade
-// nothing for a race against process exit.
+// First choice is the bulk door, DELETE /api/v1/note-locks?session_id=…: one
+// request however many leases are held. If that fails (most likely an older server without the route,
+// answering 404), it falls back to releasing each held token.
+//
+// The fallback is sequential rather than concurrent: this runs during
+// shutdown with the terminal already handed back, the count is the number of
+// notes one user had open at once (one, in practice), and a goroutine fan-out
+// here would trade nothing for a race against process exit.
 func (s *httpStore) ReleaseAllNoteLocks() error {
-	for noteID, token := range s.tokens.drain() {
+	held := s.tokens.drain()
+	if len(held) == 0 {
+		return nil
+	}
+	if session := s.tokens.sessionID(); session != "" {
+		err := s.request(http.MethodDelete, "/api/v1/note-locks?session_id="+url.QueryEscape(session), nil, nil)
+		if err == nil {
+			return nil
+		}
+	}
+	for noteID, token := range held {
 		_ = s.requestH(http.MethodDelete, "/api/v1/notes/"+strconv.FormatInt(noteID, 10)+"/lock",
 			nil, nil, map[string]string{lockHeaderName: token})
 	}

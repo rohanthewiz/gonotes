@@ -427,7 +427,7 @@ func typeErr(want string, src any) error {
 
 // rebind rewrites '?' positional placeholders to bytdb's $1,$2,… form,
 // leaving any '?' inside single-quoted string literals untouched. SQL
-// escapes a quote by doubling it ('') — handled so the literal scan
+// escapes a quote by doubling it (two single quotes in a row) — handled so the literal scan
 // stays correct.
 func rebind(query string) string {
 	var b strings.Builder

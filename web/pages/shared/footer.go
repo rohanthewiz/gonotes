@@ -13,8 +13,8 @@ type Footer struct{}
 //
 // METHOD with VALUE RECEIVER
 // (f Footer) - even though Footer is empty, we still use a receiver for consistency
-// (b *element.Builder) - pointer to the builder (note: parameter name is 'b' not 'builder')
-//   Different parameter names are fine - the type is what matters for the interface
+// (b *element.Builder) - pointer to the builder (note: parameter name is 'b' not 'builder').
+// Different parameter names are fine - the type is what matters for the interface
 func (f Footer) Render(b *element.Builder) any {
 	// METHOD CHAINING to build HTML structure
 	// b.Div() creates a <div> tag with inline CSS styling

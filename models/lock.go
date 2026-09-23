@@ -378,6 +378,19 @@ func ReleaseNoteLock(noteID int64, token string) bool {
 // note locked for the rest of the TTL just because the user pressed q instead
 // of esc.
 func ReleaseNoteLocksForSession(sessionID string) int {
+	return ReleaseNoteLocksForUserSession("", sessionID)
+}
+
+// ReleaseNoteLocksForUserSession is ReleaseNoteLocksForSession scoped to one
+// user's leases, which is the form the HTTP door uses.
+//
+// The scoping matters because a session id is not a secret: it identifies a
+// holder and appears in conflict messages. Without the user filter, anyone
+// who read another user's session id off a 409 could drop that user's
+// leases. Within one user, releasing by session id grants nothing a steal
+// doesn't already allow. An empty userGUID matches every user, the same
+// convention ListNoteLocks follows, and is only reachable in-process.
+func ReleaseNoteLocksForUserSession(userGUID, sessionID string) int {
 	if sessionID == "" {
 		return 0
 	}
@@ -387,10 +400,14 @@ func ReleaseNoteLocksForSession(sessionID string) int {
 
 	n := 0
 	for id, l := range noteLocks.locks {
-		if l.Holder.SessionID == sessionID {
-			delete(noteLocks.locks, id)
-			n++
+		if l.Holder.SessionID != sessionID {
+			continue
 		}
+		if userGUID != "" && l.UserGUID != "" && l.UserGUID != userGUID {
+			continue
+		}
+		delete(noteLocks.locks, id)
+		n++
 	}
 	return n
 }

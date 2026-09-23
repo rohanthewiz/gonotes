@@ -850,8 +850,8 @@ func GetNotesByCategoryAndSubcategories(categoryName string, subcategories []str
 	// Fetch notes joined with their link's selected subcategories, per
 	// database, then filter in Go.
 	type notePlusSubs struct {
-		note      Note
-		selected  map[string]struct{}
+		note     Note
+		selected map[string]struct{}
 	}
 
 	collected, err := queryBothNotes(func(en *dbEngine) ([]notePlusSubs, error) {

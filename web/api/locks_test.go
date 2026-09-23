@@ -352,3 +352,39 @@ func TestDeleteReleasesTheLock(t *testing.T) {
 		t.Fatal("the lease outlived the note it was protecting")
 	}
 }
+
+// DELETE /api/v1/note-locks?session_id=… drops that session's leases and no
+// one else's, and refuses a request that names no session.
+func TestReleaseSessionNoteLocks(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	models.ResetNoteLocksForTest()
+	ts := newTestServer(t)
+	defer ts.cleanup()
+
+	one, _ := seedLockNote(t, ts, "sess-lock-1", "First")
+	two, _ := seedLockNote(t, ts, "sess-lock-2", "Second")
+	three, _ := seedLockNote(t, ts, "sess-lock-3", "Third")
+	acquire(ts, one, "alpha", false)
+	acquire(ts, two, "alpha", false)
+	acquire(ts, three, "beta", false)
+
+	if status, _ := ts.request("DELETE", "/api/v1/note-locks", nil); status != http.StatusBadRequest {
+		t.Errorf("a release with no session_id returned %d, want 400", status)
+	}
+
+	status, resp := ts.request("DELETE", "/api/v1/note-locks?session_id=alpha", nil)
+	if status != http.StatusOK {
+		t.Fatalf("session release returned %d, want 200", status)
+	}
+	if n := resp["data"].(map[string]interface{})["released"].(float64); n != 2 {
+		t.Errorf("released %v leases, want 2", n)
+	}
+	if models.GetNoteLock(one) != nil || models.GetNoteLock(two) != nil {
+		t.Error("a lease of session alpha survived")
+	}
+	if models.GetNoteLock(three) == nil {
+		t.Error("session beta's lease was released too")
+	}
+}

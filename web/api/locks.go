@@ -258,6 +258,41 @@ func ListNoteLocks(ctx rweb.Context) error {
 	return writeSuccess(ctx, http.StatusOK, models.ListNoteLocks(userGUID))
 }
 
+// ReleaseSessionNoteLocks handles DELETE /api/v1/note-locks?session_id=…,
+// dropping every lease the calling user's session holds, in one request.
+//
+// This is the shutdown path for a client holding several leases: one call
+// instead of one DELETE per note, and it also clears leases whose tokens the
+// client has lost track of (for example after a crash that skipped the
+// per-note releases but kept the session id). Authorization is by user, not
+// by token: the session id is not secret, so the release is confined to the
+// caller's own leases (see models.ReleaseNoteLocksForUserSession).
+//
+// The session id travels in the query string rather than a body because some
+// HTTP clients and proxies drop bodies on DELETE. Like the single-note
+// release, it answers 200 with a count even when nothing was held.
+func ReleaseSessionNoteLocks(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
+	values, err := url.ParseQuery(ctx.Request().Query())
+	if err != nil {
+		return writeError(ctx, http.StatusBadRequest, "malformed query string")
+	}
+	sessionID := values.Get("session_id")
+	if sessionID == "" {
+		return writeError(ctx, http.StatusBadRequest, "session_id is required")
+	}
+
+	n := models.ReleaseNoteLocksForUserSession(userGUID, sessionID)
+	if n > 0 {
+		logger.Info("Note locks released for session", "session", sessionID, "count", n)
+	}
+	return writeSuccess(ctx, http.StatusOK, map[string]int{"released": n})
+}
+
 // ---- Enforcement helpers, used by the note write handlers -------------------
 
 // lockToken reads the presented token off the request, matching the header

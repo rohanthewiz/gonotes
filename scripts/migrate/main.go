@@ -108,12 +108,12 @@ func migrateUsers(old *sql.DB) error {
 	count := 0
 	for rows.Next() {
 		var (
-			id                              int64
-			guid, username, passwordHash    string
-			email, displayName              sql.NullString
-			isActive, isAdmin               bool
-			createdAt, updatedAt            time.Time
-			lastLoginAt                     sql.NullTime
+			id                           int64
+			guid, username, passwordHash string
+			email, displayName           sql.NullString
+			isActive, isAdmin            bool
+			createdAt, updatedAt         time.Time
+			lastLoginAt                  sql.NullTime
 		)
 		if err := rows.Scan(&id, &guid, &username, &email, &passwordHash, &displayName,
 			&isActive, &isAdmin, &createdAt, &updatedAt, &lastLoginAt); err != nil {
@@ -198,13 +198,13 @@ func migrateNotes(old *sql.DB) (map[int64]noteRef, error) {
 	count, decrypted := 0, 0
 	for rows.Next() {
 		var (
-			id                                         int64
-			guid, title                                string
-			description, body, tags                    sql.NullString
-			isPrivate, isFlagged                       bool
-			encryptionIV, createdBy, updatedBy         sql.NullString
-			createdAt, updatedAt                       time.Time
-			authoredAt, syncedAt, deletedAt            sql.NullTime
+			id                                 int64
+			guid, title                        string
+			description, body, tags            sql.NullString
+			isPrivate, isFlagged               bool
+			encryptionIV, createdBy, updatedBy sql.NullString
+			createdAt, updatedAt               time.Time
+			authoredAt, syncedAt, deletedAt    sql.NullTime
 		)
 		if err := rows.Scan(&id, &guid, &title, &description, &body, &tags, &isPrivate, &isFlagged,
 			&encryptionIV, &createdBy, &updatedBy, &createdAt, &updatedAt, &authoredAt, &syncedAt, &deletedAt); err != nil {

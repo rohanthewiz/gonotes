@@ -407,6 +407,9 @@ heartbeat that renews leases and reports when one is lost.
   released in `showPreviewMode` / `newNote` / `pagehide` (keepalive fetch).
   `apiRequest` attaches `X-GoNotes-Lock` to any `/notes/<leased id>…` request.
 - `GET /api/v1/note-locks` — every live lease in one call, for list badges.
+- `DELETE /api/v1/note-locks?session_id=…` — drop every lease the caller's
+  session holds (user-scoped). The TUI HTTP store uses it on shutdown and
+  falls back to per-note DELETEs against a server without the route.
 - Contention dialog (`tui/locked.go`): `r`/`enter` open read-only, `t` take over,
   `g` go to their pane, `esc` never mind. Waiting is deliberately not offered — a
   renewed lease never lapses.
