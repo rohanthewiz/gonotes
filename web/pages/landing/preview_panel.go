@@ -138,7 +138,7 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 								// the name nobody can correct after the fact.) spellcheck stays on:
 								// it only draws a squiggle, it never rewrites what was typed.
 								b.Input("type", "text", "class", "edit-input", "id", "edit-category",
-									"placeholder", "Type or select category...",
+									"placeholder", "Type or select category (comma-separate several)...",
 									"list", "category-datalist", "autocomplete", "off",
 									"autocapitalize", "off", "autocorrect", "off"),
 								b.DataList("id", "category-datalist").R(

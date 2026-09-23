@@ -266,7 +266,13 @@
       return;
     }
 
-    const trimmedName = categoryName.trim();
+    // The input accepts a comma-separated list (see addCategoryEntry), so the
+    // indicator describes the name currently being typed: the last segment.
+    const trimmedName = categoryName.split(',').pop().trim();
+    if (!trimmedName) {
+      if (newIndicator) newIndicator.style.display = 'none';
+      return;
+    }
     const category = getState().categories.find(c =>
       c.name.toLowerCase() === trimmedName.toLowerCase()
     );
@@ -281,36 +287,53 @@
   // Multi-Category Entry Functions
   // ============================================
 
-  // addCategoryEntry - Read the add-input, validate, add to Map, render card
+  // addCategoryEntry - Read the add-input, validate, add to Map, render card.
+  //
+  // The input takes a comma-separated list ("Work, Personal") and adds one card
+  // per name, matching the TUI's category field (models.ParseCategorySpecCSV).
+  // A comma is therefore not allowed inside a category name — the same
+  // restriction the TUI and Markdown frontmatter already impose.
+  //
+  // Empty segments (trailing or doubled commas) are dropped rather than
+  // rejected: they are typos with an obvious intent. Names already on the note,
+  // or repeated within the same input, are skipped; the warning toast only
+  // fires when nothing at all was added, so "Work, Work, Personal" quietly
+  // yields two cards instead of an error.
   window.app.addCategoryEntry = function() {
     const input = document.getElementById('edit-category');
     if (!input) return;
 
-    const rawName = input.value.trim();
-    if (!rawName) {
+    const rawNames = input.value.split(',').map(n => n.trim()).filter(Boolean);
+    if (rawNames.length === 0) {
       showToast('Enter a category name', 'warning');
       return;
     }
 
-    const key = rawName.toLowerCase();
-    if (categoryEntries.has(key)) {
-      showToast('Category already added', 'warning');
-      return;
+    let added = 0;
+    for (const rawName of rawNames) {
+      const key = rawName.toLowerCase();
+      if (categoryEntries.has(key)) continue;
+
+      // Look up existing category to get id and subcategories
+      const existing = getState().categories.find(c => c.name.toLowerCase() === key);
+
+      const entry = {
+        categoryId: existing ? existing.id : null,
+        categoryName: existing ? existing.name : rawName,
+        selectedSubcats: [],
+        newSubcategories: [],
+        isNew: !existing
+      };
+
+      categoryEntries.set(key, entry);
+      renderCategoryEntry(key, entry);
+      added++;
     }
 
-    // Look up existing category to get id and subcategories
-    const existing = getState().categories.find(c => c.name.toLowerCase() === key);
-
-    const entry = {
-      categoryId: existing ? existing.id : null,
-      categoryName: existing ? existing.name : rawName,
-      selectedSubcats: [],
-      newSubcategories: [],
-      isNew: !existing
-    };
-
-    categoryEntries.set(key, entry);
-    renderCategoryEntry(key, entry);
+    if (added === 0) {
+      showToast(rawNames.length > 1 ? 'Categories already added' : 'Category already added', 'warning');
+      return;
+    }
 
     input.value = '';
     const newIndicator = document.getElementById('new-category-indicator');
