@@ -309,9 +309,9 @@ func TestDuplicateReportsAPartialCopy(t *testing.T) {
 	loadCats(t, s, sess, note)
 	p, _ := s.plan()
 
-	// Name the same category twice: the second attach is refused by the junction
-	// exactly as the real one refuses a duplicate link.
-	cats := append(p.cats, p.cats[0])
+	// Add a category that does not exist: the set is refused exactly as the
+	// real one refuses an unknown or foreign category id.
+	cats := append(p.cats, models.NoteCategoryDetailOutput{ID: 999999, Name: "Gone"})
 	msg := duplicateNoteCmd(fs, p.input, cats, user.GUID)().(noteDuplicatedMsg)
 
 	if msg.err == nil {

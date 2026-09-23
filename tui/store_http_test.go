@@ -198,6 +198,24 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		writeOK(w, http.StatusOK, details)
 	}))
 
+	mux.HandleFunc("PUT /api/v1/notes/{id}/categories", auth(func(w http.ResponseWriter, r *http.Request) {
+		noteID := pathID(r, "id")
+		var req struct {
+			Categories *[]models.NoteCategoryAssignment `json:"categories"`
+		}
+		body, _ := readAll(r)
+		if err := json.Unmarshal(body, &req); err != nil || req.Categories == nil {
+			writeErr(w, http.StatusBadRequest, `"categories" is required`)
+			return
+		}
+		if err := api.data.SetNoteCategories(noteID, *req.Categories, api.user.GUID); err != nil {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
+		details, _ := api.data.GetNoteCategoryDetails(noteID, api.user.GUID)
+		writeOK(w, http.StatusOK, details)
+	}))
+
 	mux.HandleFunc("POST /api/v1/notes/{id}/categories/{cid}", auth(func(w http.ResponseWriter, r *http.Request) {
 		noteID, catID := pathID(r, "id"), pathID(r, "cid")
 		// The real handler decodes the body only when there is one and treats a

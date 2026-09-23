@@ -375,6 +375,68 @@ func GetNoteCategories(ctx rweb.Context) error {
 	return writeSuccess(ctx, http.StatusOK, details)
 }
 
+// SetNoteCategoriesRequest is the body of PUT /api/v1/notes/:id/categories.
+//
+// Categories is a pointer so that a missing field can be told apart from an
+// empty list. `{"categories": []}` deliberately clears every link. A body
+// without the field (a typo, or the wrong endpoint) must not do the same, so
+// it gets a 400.
+type SetNoteCategoriesRequest struct {
+	Categories *[]models.NoteCategoryAssignment `json:"categories"`
+}
+
+// SetNoteCategories handles PUT /api/v1/notes/:id/categories.
+// Replaces the note's complete set of category links in one request; see
+// models.SetNoteCategories for the diff it performs. It answers with the
+// resulting category details (the GET shape), so the caller can refresh from
+// the response without a second request.
+//
+// The per-link POST/PUT/DELETE routes stay: gn-clip.sh and older clients use
+// them, and attaching one category is still simplest with a single POST.
+func SetNoteCategories(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
+	noteID, err := strconv.ParseInt(ctx.Request().Param("id"), 10, 64)
+	if err != nil {
+		return writeError(ctx, http.StatusBadRequest, "invalid note id")
+	}
+
+	var req SetNoteCategoriesRequest
+	if err := json.Unmarshal(ctx.Request().Body(), &req); err != nil {
+		logger.LogErr(serr.Wrap(err, "failed to decode request body"), "invalid JSON")
+		return writeError(ctx, http.StatusBadRequest, "invalid JSON body")
+	}
+	if req.Categories == nil {
+		return writeError(ctx, http.StatusBadRequest, `"categories" is required (send [] to clear)`)
+	}
+
+	changed, err := models.SetNoteCategories(noteID, *req.Categories, userGUID)
+	if err != nil {
+		// Same string-matched sentinels as AddCategoryToNote: the models layer
+		// reports ownership misses as plain "not found" errors.
+		switch err.Error() {
+		case "note not found":
+			return writeError(ctx, http.StatusNotFound, "note not found")
+		case "category not found":
+			return writeError(ctx, http.StatusNotFound, "category not found")
+		}
+		logger.LogErr(serr.Wrap(err, "failed to set note categories"), "database error")
+		return writeError(ctx, http.StatusInternalServerError, "failed to set note categories")
+	}
+
+	details, err := models.GetNoteCategoryDetails(noteID, userGUID)
+	if err != nil {
+		logger.LogErr(serr.Wrap(err, "failed to reload note categories"), "database error")
+		return writeError(ctx, http.StatusInternalServerError, "database error")
+	}
+
+	logger.Info("Note categories set", "note_id", noteID, "count", len(*req.Categories), "changed", changed)
+	return writeSuccess(ctx, http.StatusOK, details)
+}
+
 // GetNoteCategoryMappings handles GET /api/v1/note-category-mappings
 // Returns all note-category relationships for the authenticated user in a single bulk
 // response. The client uses this to build a lookup map so category filtering in the

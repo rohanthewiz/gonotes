@@ -265,3 +265,53 @@ func SyncControlCompact(ctx rweb.Context) error {
 		"status":     client.GetStatus(),
 	})
 }
+
+// HubCompactRequest is the optional body of POST /api/v1/admin/sync/compact.
+// QuietHours defaults to models.DefaultHubCompactQuiet; 0 is allowed and
+// means "every entity, however recent".
+type HubCompactRequest struct {
+	QuietHours *float64 `json:"quiet_hours,omitempty"`
+}
+
+// HubCompact handles POST /api/v1/admin/sync/compact
+// Collapses the hub's change log (see models.CompactHubChangeLog).
+//
+// Admin only, because unlike the spoke's compact it is global: it rewrites
+// the history every user's spokes read from. It is refused on a spoke (a
+// server with a sync client). A spoke's log is its pending tail to one hub,
+// and the spoke compactor above is the right tool for that. Hub compaction's
+// operation-9 snapshots would drop out of the spoke's pending count, which
+// skips operation 9.
+func HubCompact(ctx rweb.Context) error {
+	if !IsAdmin(ctx) {
+		return writeError(ctx, http.StatusForbidden, "admin access required")
+	}
+	if models.GetSyncClient() != nil {
+		return writeError(ctx, http.StatusConflict,
+			"this server is a sync spoke; use /api/v1/sync/control/compact")
+	}
+
+	quiet := models.DefaultHubCompactQuiet
+	if body := ctx.Request().Body(); len(body) > 0 {
+		var req HubCompactRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			return writeError(ctx, http.StatusBadRequest, "invalid JSON body")
+		}
+		if req.QuietHours != nil {
+			if *req.QuietHours < 0 {
+				return writeError(ctx, http.StatusBadRequest, "quiet_hours cannot be negative")
+			}
+			quiet = time.Duration(*req.QuietHours * float64(time.Hour))
+		}
+	}
+
+	res, err := models.CompactHubChangeLog(quiet)
+	if err != nil {
+		logger.LogErr(serr.Wrap(err, "hub change log compaction failed"))
+		return writeError(ctx, http.StatusInternalServerError, "failed to compact the hub change log")
+	}
+	return writeSuccess(ctx, http.StatusOK, map[string]any{
+		"compaction":  res,
+		"quiet_hours": quiet.Hours(),
+	})
+}

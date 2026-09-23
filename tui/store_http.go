@@ -1051,6 +1051,22 @@ func (s *httpStore) SetNoteCategorySubcategories(noteID, categoryID int64, subca
 	return nil
 }
 
+// SetNoteCategories is one PUT on the note's category collection. The body
+// always carries the field, even when the list is empty: the handler rejects a
+// body without it so that a malformed request cannot wipe a note's categories,
+// and an explicit [] is how "remove them all" is said.
+func (s *httpStore) SetNoteCategories(noteID int64, assignments []models.NoteCategoryAssignment, _ string) error {
+	path := "/api/v1/notes/" + strconv.FormatInt(noteID, 10) + "/categories"
+	if assignments == nil {
+		assignments = []models.NoteCategoryAssignment{}
+	}
+	body := map[string]any{"categories": assignments}
+	if err := s.request(http.MethodPut, path, body, nil); err != nil {
+		return serr.Wrap(err, "failed to set note categories")
+	}
+	return nil
+}
+
 func (s *httpStore) RemoveCategoryFromNote(noteID, categoryID int64) error {
 	path := "/api/v1/notes/" + strconv.FormatInt(noteID, 10) +
 		"/categories/" + strconv.FormatInt(categoryID, 10)

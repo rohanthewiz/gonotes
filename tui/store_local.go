@@ -185,6 +185,12 @@ func (s *localStore) SetNoteCategorySubcategories(noteID, categoryID int64, subc
 	return models.UpdateNoteCategorySubcategories(noteID, categoryID, subcategories)
 }
 
+func (s *localStore) SetNoteCategories(noteID int64, assignments []models.NoteCategoryAssignment, userGUID string) error {
+	// The changed flag only matters to the HTTP handler's log line.
+	_, err := models.SetNoteCategories(noteID, assignments, userGUID)
+	return err
+}
+
 func (s *localStore) RemoveCategoryFromNote(noteID, categoryID int64) error {
 	return models.RemoveCategoryFromNote(noteID, categoryID)
 }

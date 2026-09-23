@@ -166,6 +166,14 @@ type Store interface {
 	// when the link was created.
 	RemoveCategoryFromNote(noteID, categoryID int64) error
 
+	// SetNoteCategories makes the note's links exactly `assignments` in one
+	// call: missing links are added, unlisted ones removed, changed selections
+	// rewritten, identical ones left alone. Over HTTP it is one PUT instead of
+	// one request per link, and it records one sync change instead of one per
+	// link. The form save and the duplicate command use it, and the per-link
+	// methods above stay for the subcategory screen's single toggles.
+	SetNoteCategories(noteID int64, assignments []models.NoteCategoryAssignment, userGUID string) error
+
 	// ---- Note locks --------------------------------------------------------
 	//
 	// The mutual-exclusion protocol between editing sessions. A screen about to

@@ -582,3 +582,92 @@ func TestNotesCategoryFiltering(t *testing.T) {
 		}
 	})
 }
+
+// TestSetNotePrivacyAPI covers PUT /api/v1/notes/:id/privacy, the batch bar's
+// privacy action. A privacy change moves the note to the other database, so
+// the checks are that everything else survives the move (body, category
+// links) and that setting the current value writes nothing.
+func TestSetNotePrivacyAPI(t *testing.T) {
+	server, cleanup := setupCategoryTestServer(t)
+	defer cleanup()
+	server.registerAndLogin(t)
+
+	body := "keep me"
+	noteBody, _ := json.Marshal(models.NoteInput{GUID: "privacy-api", Title: "Privacy", Body: &body})
+	resp, err := server.doAuthPost(server.baseURL+"/api/v1/notes", noteBody)
+	if err != nil {
+		t.Fatalf("create note: %v", err)
+	}
+	var created struct {
+		Data models.NoteOutput `json:"data"`
+	}
+	json.NewDecoder(resp.Body).Decode(&created)
+	resp.Body.Close()
+	noteID := created.Data.ID
+
+	catBody, _ := json.Marshal(models.CategoryInput{Name: "Travels", Subcategories: []string{"x"}})
+	resp, err = server.doAuthPost(server.baseURL+"/api/v1/categories", catBody)
+	if err != nil {
+		t.Fatalf("create category: %v", err)
+	}
+	var cat struct {
+		Data models.CategoryOutput `json:"data"`
+	}
+	json.NewDecoder(resp.Body).Decode(&cat)
+	resp.Body.Close()
+	resp, _ = server.doAuthPost(fmt.Sprintf("%s/api/v1/notes/%d/categories/%d", server.baseURL, noteID, cat.Data.ID),
+		[]byte(`{"subcategories":["x"]}`))
+	resp.Body.Close()
+
+	url := fmt.Sprintf("%s/api/v1/notes/%d/privacy", server.baseURL, noteID)
+	set := func(t *testing.T, payload string) (int, models.NoteOutput) {
+		t.Helper()
+		resp, err := server.doAuthPut(url, []byte(payload))
+		if err != nil {
+			t.Fatalf("PUT: %v", err)
+		}
+		defer resp.Body.Close()
+		var r struct {
+			Data models.NoteOutput `json:"data"`
+		}
+		json.NewDecoder(resp.Body).Decode(&r)
+		return resp.StatusCode, r.Data
+	}
+
+	status, note := set(t, `{"is_private":true}`)
+	if status != http.StatusOK || !note.IsPrivate {
+		t.Fatalf("make private: status %d, is_private %v", status, note.IsPrivate)
+	}
+	if note.Body == nil || *note.Body != body {
+		t.Errorf("body did not survive the move: %v", note.Body)
+	}
+	if note.ID != noteID {
+		t.Errorf("id changed across the move: %d → %d", noteID, note.ID)
+	}
+
+	// Category links follow the note into the private database.
+	resp, _ = server.doAuthGet(fmt.Sprintf("%s/api/v1/notes/%d/categories", server.baseURL, noteID))
+	var cats struct {
+		Data []models.NoteCategoryDetailOutput `json:"data"`
+	}
+	json.NewDecoder(resp.Body).Decode(&cats)
+	resp.Body.Close()
+	if len(cats.Data) != 1 || !models.SameSubcategories(cats.Data[0].SelectedSubcategories, []string{"x"}) {
+		t.Errorf("category link lost in the move: %+v", cats.Data)
+	}
+
+	// Setting the value it already has is a no-op: same version back.
+	status, again := set(t, `{"is_private":true}`)
+	if status != http.StatusOK || again.Version != note.Version {
+		t.Errorf("idempotent set: status %d, version %d → %d", status, note.Version, again.Version)
+	}
+
+	if status, _ := set(t, `{}`); status != http.StatusBadRequest {
+		t.Errorf("missing is_private: status %d, want 400", status)
+	}
+
+	status, note = set(t, `{"is_private":false}`)
+	if status != http.StatusOK || note.IsPrivate {
+		t.Errorf("make public: status %d, is_private %v", status, note.IsPrivate)
+	}
+}

@@ -271,7 +271,19 @@
     localStorage.removeItem('token');
   }
 
+  // apiRequest wraps fetch with auth, msgpack decoding and error handling.
+  //
+  // By default a failure is toasted here, so the one-off call sites (save,
+  // flag, load) need no error UI of their own. Batch loops opt out with
+  // `quiet: true`: fifty locked notes would otherwise stack fifty toasts under
+  // a summary toast that already says the same thing once. A quiet request
+  // still logs and still throws, so the caller keeps the error and its
+  // server-supplied message for that summary.
   async function apiRequest(endpoint, options = {}) {
+    // `quiet` is ours, not fetch's, so it is peeled off before the options reach
+    // fetch rather than riding along as an unknown RequestInit key.
+    const { quiet = false, ...fetchOptions } = options;
+    options = fetchOptions;
     const token = getAuthToken();
     const headers = {
       'Content-Type': 'application/json',
@@ -287,6 +299,17 @@
 
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    // While this tab holds a note's lease, every request about that note
+    // presents the token. Without it, the server's lock gate would refuse this
+    // tab's own save, flag or delete, because the lease looks like somebody
+    // else's to a request that doesn't prove otherwise. Matching on the
+    // endpoint here covers every writer (form save, batch bar, flag button)
+    // without each one having to know that leases exist.
+    const leaseHeader = leaseHeaderFor(endpoint);
+    if (leaseHeader) {
+      headers[LEASE_HEADER] = leaseHeader;
     }
 
     try {
@@ -331,10 +354,196 @@
       return data;
     } catch (error) {
       console.error('API request error:', error);
-      showToast(error.message, 'error');
+      if (!quiet) showToast(error.message, 'error');
       throw error;
     }
   }
+
+  // ============================================
+  // Note Leases (edit locks)
+  // ============================================
+  //
+  // A lease tells other sessions (a GoNotes TUI in a cats pane, another
+  // browser tab) that this tab has a note open for editing, so they are
+  // refused before they start instead of colliding at save time. The server
+  // keeps the registry (models/lock.go, web/api/locks.go); this is the web
+  // client's side of it:
+  //
+  //   editNote ──► POST /notes/:id/lock ─┬─ granted ──► edit, renew every 30s
+  //                                      └─ 409 held ─► confirm "take over?"
+  //                                                      ├─ yes ► POST ?steal=true
+  //                                                      └─ no  ► stay in preview
+  //   leaving edit mode / new note / closing the tab ──► DELETE /notes/:id/lock
+  //
+  // The version guard (expected_version on save) stays in force underneath.
+  // A lease stops a second editor from starting; the guard stops a second
+  // write from landing if a lease lapses or is taken. The lease is therefore
+  // best-effort: if taking one fails for any reason other than "someone else
+  // has it", editing goes ahead and the guard still protects the save.
+
+  // LEASE_HEADER must match api.LockHeaderName.
+  const LEASE_HEADER = 'X-GoNotes-Lock';
+
+  // Renew at models.LockHeartbeat (a third of the 90s TTL), so two missed
+  // renewals still leave the lease alive. A background tab's timers are
+  // throttled to about once a minute, which is still inside the TTL, and the
+  // visibilitychange handler renews immediately when the tab comes back.
+  const LEASE_HEARTBEAT_MS = 30000;
+
+  // One session per page load, deliberately not kept in sessionStorage.
+  // Duplicating a tab copies its sessionStorage, and two tabs sharing a
+  // session id would share one lease, which is the case leases exist to
+  // prevent. A reload therefore gets a new session, and the pagehide
+  // release below frees the old one's lease so the reloaded tab can take it.
+  const LEASE_SESSION_ID = generateGUID();
+
+  // lease is the one lease this tab holds, or null. A tab edits one note at a
+  // time, so one slot is all there is.
+  let lease = null; // { noteId, token, timer }
+
+  // leaseHolder is how this tab introduces itself. The server shows it to
+  // whoever is turned away ("note is locked by web browser since 2m
+  // ago"), so it has to be recognisable to a person.
+  function leaseHolder() {
+    return { session_id: LEASE_SESSION_ID, label: 'web browser', client: 'web' };
+  }
+
+  // leaseHeaderFor returns the token to send with a request for `endpoint`,
+  // or '' when the request isn't about the leased note. It matches
+  // /notes/42 and /notes/42/anything, but not /notes/421.
+  function leaseHeaderFor(endpoint) {
+    if (!lease || !lease.token) return '';
+    const prefix = `/notes/${lease.noteId}`;
+    const path = endpoint.split('?')[0];
+    return (path === prefix || path.startsWith(prefix + '/')) ? lease.token : '';
+  }
+
+  // requestLease asks for the note's lease. It resolves to
+  //   { granted: true, token }                 the lease is ours
+  //   { granted: false, message }              somebody else holds it
+  //   { granted: false, message, error: true } the request itself failed
+  async function requestLease(noteId, steal) {
+    try {
+      const resp = await apiRequest(`/notes/${noteId}/lock${steal ? '?steal=true' : ''}`, {
+        method: 'POST',
+        quiet: true,
+        body: JSON.stringify(leaseHolder())
+      });
+      return { granted: true, token: resp && resp.data ? resp.data.token : '' };
+    } catch (error) {
+      if (error.isConflict) return { granted: false, message: error.message };
+      return { granted: false, message: error.message, error: true };
+    }
+  }
+
+  // beginEditLease takes the lease for noteId before the edit form opens.
+  // It resolves to true when editing should go ahead and false when the user
+  // chose to leave the note to its current holder.
+  async function beginEditLease(noteId) {
+    // Re-entering edit on the note already leased (a second click on Edit)
+    // keeps the lease as it is.
+    if (lease && lease.noteId === noteId) return true;
+    releaseLease();
+
+    let result = await requestLease(noteId, false);
+    if (!result.granted && !result.error) {
+      // confirm() rather than a custom dialog: this is a yes/no question with
+      // a consequence for someone else, and it has to block until answered.
+      const takeOver = confirm(
+        `${result.message}.\n\nTake over editing? If they save afterwards, their save will be refused.`);
+      if (!takeOver) return false;
+      result = await requestLease(noteId, true);
+    }
+
+    if (!result.granted) {
+      // Not a conflict: the lock request itself failed. Edit anyway; the
+      // version guard still stops a save from overwriting someone else's.
+      console.error('Could not lease note for editing:', noteId, result.message);
+      showToast('Could not reserve this note for editing — saves are still checked for conflicts', 'warning');
+      return true;
+    }
+
+    lease = { noteId: noteId, token: result.token, timer: null };
+    lease.timer = setInterval(renewLease, LEASE_HEARTBEAT_MS);
+    return true;
+  }
+
+  // renewLease is the heartbeat. When a renewal fails, it tries to take the
+  // lease again: a lease that merely lapsed (laptop asleep, network blip, a
+  // throttled background tab) is taken back without bothering the user. Only
+  // when someone else now holds the note is the user told, while they are
+  // still typing rather than when they press Save.
+  async function renewLease() {
+    if (!lease) return;
+    const held = lease;
+    try {
+      await apiRequest(`/notes/${held.noteId}/lock`, { method: 'PUT', quiet: true });
+      return;
+    } catch (error) {
+      // Fall through to the re-acquire below.
+    }
+    if (lease !== held) return; // released while the request was in flight
+
+    const result = await requestLease(held.noteId, false);
+    if (lease !== held) return;
+    if (result.granted) {
+      held.token = result.token;
+      return;
+    }
+    if (result.error) return; // server unreachable; the next tick tries again
+
+    // Someone else has it. Stop renewing and drop the token, so this tab's
+    // next save goes to the lock gate without it and gets the holder named in
+    // the refusal, and the form keeps the user's text either way.
+    clearInterval(held.timer);
+    lease = null;
+    showToast(`Your hold on this note was taken over — ${result.message}. Saving will be refused until they finish.`, 'warning');
+  }
+
+  // releaseLease gives the lease back. Safe to call with no lease held, so
+  // every path out of edit mode can call it without checking first.
+  function releaseLease() {
+    if (!lease) return;
+    const held = lease;
+    lease = null;
+    clearInterval(held.timer);
+    // The token is sent explicitly: the lease slot is already cleared, so
+    // apiRequest's automatic header would not add it.
+    apiRequest(`/notes/${held.noteId}/lock`, {
+      method: 'DELETE',
+      quiet: true,
+      headers: { [LEASE_HEADER]: held.token }
+    }).catch(() => {
+      // Nothing to do: an unreleased lease lapses on its own within the TTL.
+    });
+  }
+
+  // A tab that is closed or navigated away can't await a request, so the
+  // release goes out as a keepalive fetch, which the browser finishes after
+  // the page is gone. If even that fails, the lease lapses within the TTL.
+  window.addEventListener('pagehide', function() {
+    if (!lease) return;
+    const token = getAuthToken();
+    try {
+      fetch(`${API_BASE}/notes/${lease.noteId}/lock`, {
+        method: 'DELETE',
+        keepalive: true,
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : '',
+          [LEASE_HEADER]: lease.token
+        }
+      });
+    } catch (err) {
+      // Nothing to report to a page that is going away.
+    }
+    lease = null;
+  });
+
+  // A tab coming back to the foreground renews at once, rather than waiting
+  // for a throttled timer that may be most of a TTL away.
+  document.addEventListener('visibilitychange', function() {
+    if (document.visibilityState === 'visible' && lease) renewLease();
+  });
 
   // ============================================
   // Authentication Functions
@@ -444,6 +653,8 @@
   }
 
   window.app.newNote = function() {
+    // A new note has no id to lease; whatever this tab was editing is done.
+    releaseLease();
     state.currentNote = null;
     state.isEditing = true;
     clearEditForm();
@@ -454,6 +665,11 @@
   window.app.editNote = async function(noteId) {
     const note = state.notes.find(n => n.id === noteId);
     if (note) {
+      // Lease first, form second. Opening the form before knowing whether
+      // someone else has the note open would let the user start typing into an
+      // edit they might then be asked to abandon.
+      if (!(await beginEditLease(noteId))) return;
+
       state.currentNote = note;
       state.isEditing = true;
       populateEditForm(note);
@@ -787,22 +1003,29 @@
 
       const newNoteId = response.data.id;
 
-      if (copyCategories) {
-        // Category links are created one at a time, after the note exists.
-        // The POST body carries this note's own subcategory selection, so the
-        // copy keeps not just the categories but which subcategories were
-        // ticked for the original — that pairing is the point of the feature.
-        for (const cat of noteCategories) {
-          try {
-            await apiRequest(`/notes/${newNoteId}/categories/${cat.id}`, {
-              method: 'POST',
-              body: JSON.stringify({ subcategories: cat.selected_subcategories || [] })
-            });
-          } catch (catError) {
-            // Secondary to the note itself: keep the copy, name what it lost.
-            console.error('Failed to copy category to duplicate:', catError);
-            showToast(`Could not copy category "${cat.name}"`, 'warning');
-          }
+      if (copyCategories && noteCategories.length > 0) {
+        // All links in one PUT, after the note exists. Each entry carries the
+        // original's own subcategory selection, so the copy keeps not just the
+        // categories but which subcategories were ticked for the original —
+        // that pairing is the point of the feature.
+        try {
+          await apiRequest(`/notes/${newNoteId}/categories`, {
+            method: 'PUT',
+            // quiet: the warning below says the same thing in context.
+            quiet: true,
+            body: JSON.stringify({
+              categories: noteCategories.map(cat => ({
+                category_id: cat.id,
+                subcategories: cat.selected_subcategories || []
+              }))
+            })
+          });
+        } catch (catError) {
+          // Secondary to the note itself: keep the copy, say what it lost.
+          // The server validates the whole set before writing, so a failure
+          // means the copy has none of the categories rather than some.
+          console.error('Failed to copy categories to duplicate:', catError);
+          showToast(`Could not copy categories: ${catError.message}`, 'warning');
         }
       }
 
@@ -1548,7 +1771,8 @@
 
     for (const noteId of targets) {
       try {
-        await apiRequest(`/notes/${noteId}`, { method: 'DELETE' });
+        // quiet: the summary toast below reports failures once, not per note.
+        await apiRequest(`/notes/${noteId}`, { method: 'DELETE', quiet: true });
         state.selectedNotes.delete(noteId);
         // The preview pane may be showing a note that no longer exists.
         if (state.currentNote && state.currentNote.id === noteId) {
@@ -1556,9 +1780,9 @@
           clearPreview();
         }
       } catch (error) {
-        // apiRequest has already toasted the server's own wording ("note is
-        // locked by pane w1:p3 since 2m ago"); keep it so the summary can
-        // repeat the first one instead of the useless "some failed".
+        // Keep the server's own wording ("note is locked by pane w1:p3 since
+        // 2m ago") so the summary can repeat the first one instead of the
+        // useless "some failed".
         console.error('Failed to delete note:', noteId, error);
         failures.push({ noteId: noteId, message: error.message });
       }
@@ -1576,6 +1800,216 @@
         `Deleted ${total - failures.length} of ${total}; ${failures.length} still selected — ${failures[0].message}`,
         'error');
     }
+  };
+
+  // batchSummary builds the closing toast for a batch action that leaves the
+  // selection in place (add category, privacy). One toast per batch, never one
+  // per note, and it repeats the first failure's server wording ("note is
+  // locked by pane w1:p3…") because that tells the user what to do next.
+  function batchSummary(verbPast, total, failures) {
+    if (failures.length === 0) {
+      showToast(total === 1 ? `1 note ${verbPast}` : `${total} notes ${verbPast}`, 'success');
+    } else if (failures.length === total) {
+      showToast(`No notes ${verbPast} — ${failures[0].message}`, 'error');
+    } else {
+      showToast(`${total - failures.length} of ${total} notes ${verbPast}; ` +
+        `${failures.length} failed — ${failures[0].message}`, 'error');
+    }
+  }
+
+  // addCategorySelected files every checked note under one or more categories.
+  //
+  // "Add", not "set": a note's existing categories are kept. Replacing them
+  // across a batch would silently strip categories from notes the user cannot
+  // see side by side, which is the wrong default for a bulk action. Removing a
+  // category from many notes would be its own, explicitly named action.
+  //
+  // The input takes the same comma-separated names as the note form's
+  // category field, and a name no category has yet is created, as it is there.
+  window.app.addCategorySelected = function() {
+    const count = state.selectedNotes.size;
+    if (count === 0) return;
+
+    document.getElementById('modal-title').textContent =
+      `Add category to ${count} ${count === 1 ? 'note' : 'notes'}`;
+    // The datalist is the note form's (category-datalist), already kept in
+    // step with state.categories, so the dialog gets the same suggestions for
+    // free.
+    document.getElementById('modal-body').innerHTML = `
+      <div class="form-group">
+        <label class="form-label" for="batch-category">Category</label>
+        <input type="text" class="form-input" id="batch-category"
+               list="category-datalist" autocomplete="off"
+               placeholder="Category name (comma-separate several)...">
+      </div>
+      <p class="settings-description">Existing categories on these notes are kept.</p>
+    `;
+
+    const input = document.getElementById('batch-category');
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        window.app.confirmModal();
+      }
+    });
+
+    document.getElementById('modal-footer').style.display = '';
+    const confirmBtn = document.getElementById('modal-confirm');
+    if (confirmBtn) confirmBtn.textContent = 'Add';
+    modalConfirmHandler = performAddCategorySelected;
+
+    document.getElementById('modal-overlay').classList.add('open');
+    input.focus();
+  };
+
+  // performAddCategorySelected resolves the typed names to category ids
+  // (creating unknown ones), then attaches each to each selected note.
+  //
+  // One POST per (note, category), serial, for the same reasons as
+  // deleteSelected: every write goes through one store and one sync log, so
+  // parallel requests gain nothing and scramble the failure order. A note
+  // that already has the category answers 409 "already added", which counts
+  // as success because the note ends up filed where the user asked.
+  async function performAddCategorySelected() {
+    const input = document.getElementById('batch-category');
+    const names = [...new Set((input ? input.value : '')
+      .split(',').map(n => n.trim()).filter(Boolean))];
+    if (names.length === 0) {
+      showToast('Enter a category name', 'warning');
+      return;
+    }
+
+    const confirmBtn = document.getElementById('modal-confirm');
+    if (confirmBtn) {
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Adding...';
+    }
+
+    // Resolve names → ids. Matching is case-insensitive, as in the note form's
+    // addCategoryEntry, so "work" files under an existing "Work" instead of
+    // creating a near-duplicate.
+    const categoryIds = [];
+    // The names as stored, for the summary toast: "work" typed against an
+    // existing "Work" is reported as "Work".
+    const resolvedNames = [];
+    try {
+      for (const name of names) {
+        const lower = name.toLowerCase();
+        const existing = state.categories.find(c => c.name.toLowerCase() === lower);
+        if (existing) {
+          categoryIds.push(existing.id);
+          resolvedNames.push(existing.name);
+          continue;
+        }
+        const resp = await apiRequest('/categories', {
+          method: 'POST',
+          body: JSON.stringify({ name: name, subcategories: [] })
+        });
+        if (resp && resp.data) {
+          categoryIds.push(resp.data.id);
+          resolvedNames.push(resp.data.name || name);
+        }
+      }
+    } catch (error) {
+      // apiRequest already toasted the reason. Leave the dialog open so the
+      // name can be corrected.
+      console.error('Failed to resolve batch categories:', error);
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Add';
+      }
+      return;
+    }
+
+    window.app.closeModal();
+
+    const targets = [...state.selectedNotes];
+    const failures = [];
+    for (const noteId of targets) {
+      for (const categoryId of categoryIds) {
+        try {
+          await apiRequest(`/notes/${noteId}/categories/${categoryId}`, {
+            method: 'POST',
+            quiet: true,
+            body: JSON.stringify({})
+          });
+        } catch (error) {
+          if (error.isConflict && /already added/i.test(error.message)) continue;
+          console.error('Failed to add category to note:', noteId, categoryId, error);
+          failures.push({ noteId: noteId, message: error.message });
+          // One failure per note is enough for the summary. The remaining
+          // categories would probably fail the same way (the note is gone, or
+          // the category is), so they are skipped.
+          break;
+        }
+      }
+    }
+
+    // The selection is kept: filing notes doesn't remove them from view, and
+    // the next batch action often goes to the same notes.
+    await window.app._loadCategories();
+    await window.app._loadNoteCategoryMappings();
+    // The open note's category row would otherwise be stale until reselected.
+    // Not while editing: selectNote leaves edit mode and would drop the form.
+    if (state.currentNote && !state.isEditing && state.selectedNotes.has(state.currentNote.id)) {
+      window.app.selectNote(state.currentNote.id);
+    }
+    renderNoteList();
+    batchSummary(`filed under ${resolvedNames.join(', ')}`, targets.length, failures);
+  }
+
+  // togglePrivacySelected moves every checked note to the same privacy.
+  //
+  // For a mixed selection, "toggle" means: if any selected note is public,
+  // make them all private; if all are already private, make them all public.
+  // Flipping each note independently would turn a mixed selection into a
+  // different mixed selection, which nobody asks for. Private wins the tie
+  // because it is the safer direction to err in, and the confirm names the
+  // direction before anything moves.
+  //
+  // Each note is one PUT /notes/:id/privacy naming the target value, not a
+  // toggle, so a retried request cannot flip a note back. The server keeps
+  // every other field as stored.
+  window.app.togglePrivacySelected = async function() {
+    const targets = [...state.selectedNotes];
+    if (targets.length === 0) return;
+
+    const byId = new Map(state.notes.map(n => [n.id, n]));
+    const anyPublic = targets.some(id => {
+      const note = byId.get(id);
+      return note && !note.is_private;
+    });
+    const makePrivate = anyPublic;
+    const word = makePrivate ? 'private' : 'public';
+    const noun = targets.length === 1 ? 'note' : 'notes';
+    if (!confirm(`Make ${targets.length} ${noun} ${word}?`)) return;
+
+    const failures = [];
+    for (const noteId of targets) {
+      const note = byId.get(noteId);
+      // Already where it needs to be: skip the request. The server would
+      // no-op anyway, but a large batch shouldn't pay a round trip per note.
+      if (note && note.is_private === makePrivate) continue;
+      try {
+        await apiRequest(`/notes/${noteId}/privacy`, {
+          method: 'PUT',
+          quiet: true,
+          body: JSON.stringify({ is_private: makePrivate })
+        });
+      } catch (error) {
+        console.error('Failed to set note privacy:', noteId, error);
+        failures.push({ noteId: noteId, message: error.message });
+      }
+    }
+
+    await loadNotes();
+    // The preview's privacy badge and the edit form's checkbox read
+    // state.currentNote, which loadNotes has just replaced in state.notes.
+    // Not while editing: selectNote leaves edit mode and would drop the form.
+    if (state.currentNote && !state.isEditing && state.selectedNotes.has(state.currentNote.id)) {
+      window.app.selectNote(state.currentNote.id);
+    }
+    batchSummary(`made ${word}`, targets.length, failures);
   };
 
   // ============================================
@@ -1627,6 +2061,9 @@
   }
 
   function showPreviewMode() {
+    // Every way out of edit mode comes through here (save, cancel, picking
+    // another note), so this is where the lease is given back.
+    releaseLease();
     document.getElementById('edit-mode').classList.remove('active');
     document.getElementById('preview-mode').classList.remove('hidden');
   }

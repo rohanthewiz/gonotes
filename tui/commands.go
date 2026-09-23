@@ -216,88 +216,77 @@ func saveNoteCmd(st Store, noteID int64, input models.NoteInput, categoriesCSV s
 // "Name/sub1/sub2" — see models.ParseCategorySpecs, which the Markdown importer
 // uses for the same notation.
 //
-// There are three writes it can make per category, and the order matters:
+// It works in two phases:
 //
-//	                    ┌ not named any more ─────────────→ remove the link
-//	current link ───────┤
-//	                    └ named, selection changed ───────→ update the link
-//	no link yet ─────────→ find-or-create the category ──→ attach with subs
+//	resolve   each typed name → category id
+//	          (already linked: reuse · known: look up · unknown: create)
+//	          and merge never-seen subcategories into that category's
+//	          DEFINITION
+//	   │
+//	   ▼
+//	set       one SetNoteCategories call with the full desired set; the
+//	          store diffs it against the stored links (add / re-select /
+//	          remove) and leaves identical links untouched
 //
-// and one more that is not about this note at all: a subcategory nobody has used
-// before is merged into the category's DEFINITION, so the web UI's chips and the
-// TUI's subcategory screen offer it from then on. That merge is what makes
-// "type it and it exists" work for subcategories the way it already did for
-// categories. It only ever adds names — another note may be filed under a name
-// this form never mentioned.
+// Resolving cannot be folded into the set: creating a category and widening its
+// definition are catalog writes, not writes to this note's links. The
+// definition merge is what makes "type it and it exists" work for
+// subcategories the way it already did for categories. It only ever adds
+// names, because another note may be filed under a name this form never
+// mentioned.
 //
-// Unchanged links are left completely alone (no rewrite of an identical
-// selection), which keeps a plain re-save from producing a sync change record
-// per category.
+// The set used to be one request per link (remove, update, attach). As one
+// call it costs a single round trip over HTTP and a single sync change record.
+// An unchanged re-save still writes nothing.
 func syncNoteCategories(st Store, noteID int64, categoriesCSV string, userGUID string) error {
 	names, subsByName := models.ParseCategorySpecCSV(categoriesCSV)
-	desired := map[string]bool{}
-	for _, name := range names {
-		desired[name] = true
-	}
 
-	// The detail shape rather than GetNoteCategories: reconciling a selection
-	// requires knowing what is currently selected.
+	// Current links are read in the detail shape so that a name already on the
+	// note resolves without a GetCategoryByName round trip, and so that the
+	// definition merge has the category's fields to carry through.
 	current, err := st.GetNoteCategoryDetails(noteID, userGUID)
 	if err != nil {
 		return serr.Wrap(err, "failed to load current note categories")
 	}
-
 	linked := map[string]models.NoteCategoryDetailOutput{}
 	for _, c := range current {
 		linked[c.Name] = c
-		if desired[c.Name] {
-			continue
-		}
-		if err = st.RemoveCategoryFromNote(noteID, c.ID); err != nil {
-			return serr.Wrap(err, "failed to remove category "+c.Name)
-		}
 	}
 
-	// Iterate the parsed order, not the map: the writes then happen in the order
-	// the user typed, which is the order any error message will name them in.
+	// Resolve in the parsed order, not map order: the writes then happen in
+	// the order the user typed, which is the order any error names them in.
+	assignments := make([]models.NoteCategoryAssignment, 0, len(names))
 	for _, name := range names {
 		subs := subsByName[name]
 
+		var cat models.Category
 		if existing, ok := linked[name]; ok {
-			// Already attached. Rewrite the selection only if it actually
-			// differs — see SameSubcategories for why order does not count.
-			if !models.SameSubcategories(existing.SelectedSubcategories, subs) {
-				if err = st.SetNoteCategorySubcategories(noteID, existing.ID, subs); err != nil {
-					return serr.Wrap(err, "failed to update subcategories on "+name)
-				}
-			}
 			// categoryFromDetail is the existing detail→Category mapping (see
 			// store_http.go); the definition merge needs a Category to carry the
 			// fields the update must not blank.
-			if err = registerSubcategories(st, categoryFromDetail(existing), subs, userGUID); err != nil {
-				return err
+			cat = categoryFromDetail(existing)
+		} else {
+			found, err := st.GetCategoryByName(name, userGUID)
+			if err != nil {
+				return serr.Wrap(err, "failed to look up category "+name)
 			}
-			continue
+			if found == nil {
+				found, err = st.CreateCategory(name, userGUID)
+				if err != nil {
+					return serr.Wrap(err, "failed to create category "+name)
+				}
+			}
+			cat = *found
 		}
 
-		cat, err := st.GetCategoryByName(name, userGUID)
-		if err != nil {
-			return serr.Wrap(err, "failed to look up category "+name)
-		}
-		if cat == nil {
-			cat, err = st.CreateCategory(name, userGUID)
-			if err != nil {
-				return serr.Wrap(err, "failed to create category "+name)
-			}
-		}
-		if err = registerSubcategories(st, *cat, subs, userGUID); err != nil {
+		if err = registerSubcategories(st, cat, subs, userGUID); err != nil {
 			return err
 		}
-		// One call with the selection rather than attach-then-update: the API
-		// and the models layer both take subcategories on the insert.
-		if err = st.AddCategoryToNoteWithSubcategories(noteID, cat.ID, subs, userGUID); err != nil {
-			return serr.Wrap(err, "failed to attach category "+name)
-		}
+		assignments = append(assignments, models.NoteCategoryAssignment{CategoryID: cat.ID, Subcategories: subs})
+	}
+
+	if err = st.SetNoteCategories(noteID, assignments, userGUID); err != nil {
+		return serr.Wrap(err, "failed to save note categories")
 	}
 	return nil
 }
@@ -332,10 +321,9 @@ type noteDuplicatedMsg struct {
 //
 // It takes the category DETAILS rather than ids because a copy has to reproduce
 // the note's selection within each category ("Work/backend", not "Work"), and
-// the detail struct is the only shape that carries both. Attaching happens in
-// one call per category — AddCategoryToNoteWithSubcategories is the same door
-// the form's category sync uses for a new link, and it records the selection on
-// the insert rather than needing an update afterwards.
+// the detail struct is the only shape that carries both. All links are
+// attached in one SetNoteCategories call, the same one the form's category
+// sync ends with, so a copy with many categories costs one request.
 //
 // The GUID is generated here for the same reason saveNoteCmd generates one:
 // both stores require the caller to supply it, matching the web API.
@@ -350,18 +338,21 @@ func duplicateNoteCmd(st Store, input models.NoteInput, cats []models.NoteCatego
 			return noteDuplicatedMsg{err: serr.New("the copy was not created")}
 		}
 
+		if len(cats) == 0 {
+			return noteDuplicatedMsg{note: note}
+		}
+		assignments := make([]models.NoteCategoryAssignment, 0, len(cats))
 		for _, c := range cats {
-			if err = st.AddCategoryToNoteWithSubcategories(
-				note.ID, c.ID, c.SelectedSubcategories, userGUID); err != nil {
-				// Stop at the first failure and name the category in the error
-				// text itself — serr.Wrap's message is context for the log, not
-				// part of Error(), and this string is going straight into the
-				// status bar. The copy is real and is returned regardless; what
-				// it means that note is non-nil here is the receiving screen's
-				// to phrase.
-				return noteDuplicatedMsg{note: note,
-					err: serr.Wrap(err, "failed to attach category "+c.Name+" to the copy")}
-			}
+			assignments = append(assignments,
+				models.NoteCategoryAssignment{CategoryID: c.ID, Subcategories: c.SelectedSubcategories})
+		}
+		if err = st.SetNoteCategories(note.ID, assignments, userGUID); err != nil {
+			// The copy is real and is returned regardless; what it means that
+			// note is non-nil here is the receiving screen's to phrase. The set
+			// is validated before any write, so a failure here means the copy
+			// has none of the categories, not some of them.
+			return noteDuplicatedMsg{note: note,
+				err: serr.Wrap(err, "failed to attach categories to the copy")}
 		}
 		return noteDuplicatedMsg{note: note}
 	}

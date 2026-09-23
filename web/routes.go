@@ -78,6 +78,7 @@ func setupRoutes(s *rweb.Server) {
 	s.Put("/api/v1/notes/:id", api.UpdateNote)                    // Update a note by ID
 	s.Delete("/api/v1/notes/:id", api.DeleteNote)                 // Soft delete a note by ID
 	s.Put("/api/v1/notes/:id/flag", api.ToggleNoteFlag)           // Toggle flag on a note
+	s.Put("/api/v1/notes/:id/privacy", api.SetNotePrivacy)        // Set is_private (moves the note between databases)
 
 	// Note locks — the mutual-exclusion protocol between editing sessions.
 	// One note's lease is acquired, renewed, and released on the same path
@@ -101,6 +102,7 @@ func setupRoutes(s *rweb.Server) {
 	s.Delete("/api/v1/notes/:id/categories/:category_id", api.RemoveCategoryFromNote) // Remove a category from a note
 	s.Put("/api/v1/notes/:id/categories/:category_id", api.UpdateNoteCategory)        // Update subcategories for a note-category relationship
 	s.Get("/api/v1/notes/:id/categories", api.GetNoteCategories)                      // Get all categories for a note
+	s.Put("/api/v1/notes/:id/categories", api.SetNoteCategories)                      // Replace a note's whole category set in one request
 	s.Get("/api/v1/categories/:id/notes", api.GetCategoryNotes)                       // Get all notes for a category
 	s.Get("/api/v1/note-category-mappings", api.GetNoteCategoryMappings)              // Bulk: all note-category mappings for search bar
 
@@ -110,6 +112,7 @@ func setupRoutes(s *rweb.Server) {
 	s.Post("/api/v1/admin/invites", api.CreateInviteToken)             // Create invite token
 	s.Get("/api/v1/admin/invites", api.ListInviteTokens)               // List invite tokens
 	s.Post("/api/v1/admin/export-spoke-config", api.ExportSpokeConfig) // Export spoke config file
+	s.Post("/api/v1/admin/sync/compact", api.HubCompact)               // Collapse the hub's change log (global)
 
 	// =========================================
 	// Spoke setup endpoints — no auth (first-run)

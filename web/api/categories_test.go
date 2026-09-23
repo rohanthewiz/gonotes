@@ -768,3 +768,189 @@ func TestNoteCategoryRelationshipAPI(t *testing.T) {
 		}
 	})
 }
+
+// TestSetNoteCategoriesAPI covers PUT /api/v1/notes/:id/categories, the
+// replace-the-whole-set endpoint both UIs use to save a note's categories in
+// one request. Each subtest builds on the state the previous one left, which
+// is the point: it walks one note through add, reshuffle and clear.
+func TestSetNoteCategoriesAPI(t *testing.T) {
+	server, cleanup := setupCategoryTestServer(t)
+	defer cleanup()
+	server.registerAndLogin(t)
+
+	// ---- fixtures: one note, three categories --------------------------------
+	noteBody, _ := json.Marshal(models.NoteInput{GUID: "test-note-set-cats", Title: "Set categories"})
+	resp, err := server.doAuthPost(server.baseURL+"/api/v1/notes", noteBody)
+	if err != nil {
+		t.Fatalf("create note: %v", err)
+	}
+	var created api.APIResponse
+	json.NewDecoder(resp.Body).Decode(&created)
+	resp.Body.Close()
+	noteID := int64(created.Data.(map[string]interface{})["id"].(float64))
+
+	catIDs := make([]int64, 3)
+	for i := range catIDs {
+		body, _ := json.Marshal(models.CategoryInput{
+			Name:          fmt.Sprintf("SetCat %d", i),
+			Subcategories: []string{"a", "b"},
+		})
+		resp, err := server.doAuthPost(server.baseURL+"/api/v1/categories", body)
+		if err != nil {
+			t.Fatalf("create category: %v", err)
+		}
+		var r api.APIResponse
+		json.NewDecoder(resp.Body).Decode(&r)
+		resp.Body.Close()
+		catIDs[i] = int64(r.Data.(map[string]interface{})["id"].(float64))
+	}
+
+	url := fmt.Sprintf("%s/api/v1/notes/%d/categories", server.baseURL, noteID)
+
+	// put sends a raw body and returns the status plus the resulting
+	// category-id → selected-subcategories map from the response.
+	put := func(t *testing.T, body string) (int, map[int64][]string) {
+		t.Helper()
+		resp, err := server.doAuthPut(url, []byte(body))
+		if err != nil {
+			t.Fatalf("PUT: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return resp.StatusCode, nil
+		}
+		var r struct {
+			Data []models.NoteCategoryDetailOutput `json:"data"`
+		}
+		json.NewDecoder(resp.Body).Decode(&r)
+		got := map[int64][]string{}
+		for _, d := range r.Data {
+			got[d.ID] = d.SelectedSubcategories
+		}
+		return resp.StatusCode, got
+	}
+
+	// linked reads the note's categories back through the GET endpoint, so each
+	// assertion checks what was stored, not just what the PUT reported.
+	linked := func(t *testing.T) map[int64][]string {
+		t.Helper()
+		resp, err := server.doAuthGet(url)
+		if err != nil {
+			t.Fatalf("GET: %v", err)
+		}
+		defer resp.Body.Close()
+		var r struct {
+			Data []models.NoteCategoryDetailOutput `json:"data"`
+		}
+		json.NewDecoder(resp.Body).Decode(&r)
+		got := map[int64][]string{}
+		for _, d := range r.Data {
+			got[d.ID] = d.SelectedSubcategories
+		}
+		return got
+	}
+
+	t.Run("sets several categories in one request", func(t *testing.T) {
+		status, got := put(t, fmt.Sprintf(
+			`{"categories":[{"category_id":%d,"subcategories":["a"]},{"category_id":%d}]}`,
+			catIDs[0], catIDs[1]))
+		if status != http.StatusOK {
+			t.Fatalf("status %d", status)
+		}
+		if len(got) != 2 || !models.SameSubcategories(got[catIDs[0]], []string{"a"}) || len(got[catIDs[1]]) != 0 {
+			t.Fatalf("unexpected result: %v", got)
+		}
+	})
+
+	t.Run("adds, updates and removes in one request", func(t *testing.T) {
+		// cat0 dropped, cat1 gains a selection, cat2 is new.
+		status, _ := put(t, fmt.Sprintf(
+			`{"categories":[{"category_id":%d,"subcategories":["b","a"]},{"category_id":%d}]}`,
+			catIDs[1], catIDs[2]))
+		if status != http.StatusOK {
+			t.Fatalf("status %d", status)
+		}
+		got := linked(t)
+		if _, still := got[catIDs[0]]; still {
+			t.Errorf("category %d should have been removed: %v", catIDs[0], got)
+		}
+		if !models.SameSubcategories(got[catIDs[1]], []string{"a", "b"}) {
+			t.Errorf("category %d selection = %v, want [a b]", catIDs[1], got[catIDs[1]])
+		}
+		if _, ok := got[catIDs[2]]; !ok {
+			t.Errorf("category %d should have been added: %v", catIDs[2], got)
+		}
+	})
+
+	t.Run("unknown category changes nothing", func(t *testing.T) {
+		before := linked(t)
+		status, _ := put(t, fmt.Sprintf(
+			`{"categories":[{"category_id":%d},{"category_id":999999}]}`, catIDs[0]))
+		if status != http.StatusNotFound {
+			t.Fatalf("status %d, want 404", status)
+		}
+		// Validation runs before any write, so cat0 must not have been
+		// attached and cat1/cat2 must not have been removed.
+		if after := linked(t); len(after) != len(before) {
+			t.Errorf("links changed on a rejected request: before %v, after %v", before, after)
+		}
+	})
+
+	t.Run("missing categories field is rejected", func(t *testing.T) {
+		if status, _ := put(t, `{}`); status != http.StatusBadRequest {
+			t.Fatalf("status %d, want 400", status)
+		}
+		if len(linked(t)) == 0 {
+			t.Error("a body without the field must not clear the note")
+		}
+	})
+
+	t.Run("empty list clears", func(t *testing.T) {
+		if status, _ := put(t, `{"categories":[]}`); status != http.StatusOK {
+			t.Fatalf("status %d", status)
+		}
+		if got := linked(t); len(got) != 0 {
+			t.Errorf("expected no categories, got %v", got)
+		}
+	})
+}
+
+// TestHubCompactAPI covers POST /api/v1/admin/sync/compact: the first user
+// (an admin) can run it, the body's quiet_hours is honoured, and a negative
+// value is rejected. The compaction logic itself is tested in models.
+func TestHubCompactAPI(t *testing.T) {
+	server, cleanup := setupCategoryTestServer(t)
+	defer cleanup()
+	server.registerAndLogin(t)
+
+	url := server.baseURL + "/api/v1/admin/sync/compact"
+
+	resp, err := server.doAuthPost(url, []byte(`{"quiet_hours": 0}`))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	var r struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Compaction models.HubCompactionResult `json:"compaction"`
+			QuietHours float64                    `json:"quiet_hours"`
+		} `json:"data"`
+	}
+	json.NewDecoder(resp.Body).Decode(&r)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !r.Success {
+		t.Fatalf("status %d, success %v", resp.StatusCode, r.Success)
+	}
+	if r.Data.QuietHours != 0 {
+		t.Errorf("quiet_hours = %v, want the 0 that was sent", r.Data.QuietHours)
+	}
+
+	resp, err = server.doAuthPost(url, []byte(`{"quiet_hours": -1}`))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("negative quiet_hours: status %d, want 400", resp.StatusCode)
+	}
+}

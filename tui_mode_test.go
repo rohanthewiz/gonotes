@@ -209,3 +209,58 @@ func TestSameDirResolvesSpellings(t *testing.T) {
 		t.Error("two different directories compared equal")
 	}
 }
+
+// TestParseStoreForceRejectsBoth pins that the flag pair is exclusive: a
+// launch told both "never a server" and "never local" has no right answer,
+// so it must fail rather than silently pick one.
+func TestParseStoreForceRejectsBoth(t *testing.T) {
+	if _, err := parseStoreForce(true, true); err == nil {
+		t.Fatal("--local --remote together was accepted")
+	}
+	cases := []struct {
+		local, remote bool
+		want          storeForce
+	}{
+		{false, false, forceNone},
+		{true, false, forceLocal},
+		{false, true, forceRemote},
+	}
+	for _, c := range cases {
+		got, err := parseStoreForce(c.local, c.remote)
+		if err != nil || got != c.want {
+			t.Errorf("parseStoreForce(%v, %v) = %v, %v; want %v", c.local, c.remote, got, err, c.want)
+		}
+	}
+}
+
+// TestDecideForcedStoreNeverFallsBack is the point of the flags: each one
+// either gets the store it names or fails. Neither may end on the other one,
+// which is the silent switch decideStore makes for interactive launches.
+func TestDecideForcedStoreNeverFallsBack(t *testing.T) {
+	const url = "http://localhost:8444"
+
+	// --local with a server answering: still local. (runTui skips the probe
+	// under --local, but the decision must not depend on that.)
+	useHTTP, mode, err := decideForcedStore(forceLocal, true, url, "/tmp/scratch")
+	if err != nil || useHTTP {
+		t.Fatalf("--local chose HTTP (err %v)", err)
+	}
+	if mode.Badge == "" {
+		t.Error("--local launch has no badge")
+	}
+
+	// --remote with nothing answering: an error, not local notes.
+	useHTTP, _, err = decideForcedStore(forceRemote, false, url, "/tmp/scratch")
+	if err == nil {
+		t.Fatalf("--remote with no server fell back (useHTTP=%v) instead of failing", useHTTP)
+	}
+
+	// --remote with a server: HTTP, labelled with the server.
+	useHTTP, mode, err = decideForcedStore(forceRemote, true, url, "/tmp/scratch")
+	if err != nil || !useHTTP {
+		t.Fatalf("--remote with a server: useHTTP=%v err=%v", useHTTP, err)
+	}
+	if mode.Badge != "localhost:8444" {
+		t.Errorf("--remote badge = %q", mode.Badge)
+	}
+}

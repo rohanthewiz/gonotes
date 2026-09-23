@@ -11,8 +11,13 @@ func (n NoteList) Render(b *element.Builder) any {
 		// Batch actions bar (hidden by default)
 		b.Div("class", "batch-actions", "id", "batch-actions").R(
 			b.ButtonClass("btn", "onclick", "app.deleteSelected()").T("Delete"),
-			b.ButtonClass("btn", "onclick", "app.categorySelected()").T("Set Category"),
-			b.ButtonClass("btn", "onclick", "app.togglePrivacySelected()").T("Toggle Privacy"),
+			// "Add", not "Set": existing categories on each note are kept (see
+			// app.addCategorySelected for why a bulk replace is the wrong default).
+			b.ButtonClass("btn", "onclick", "app.addCategorySelected()",
+				"title", "File the selected notes under a category, keeping their current ones").T("Add Category"),
+			// Converges a mixed selection: any public → all private, else all public.
+			b.ButtonClass("btn", "onclick", "app.togglePrivacySelected()",
+				"title", "Make the selected notes private (or public, if they already all are)").T("Toggle Privacy"),
 			b.Span("class", "batch-count", "id", "batch-count").T("0 selected"),
 		),
 

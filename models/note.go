@@ -2,6 +2,7 @@ package models
 
 import (
 	"database/sql"
+	"errors"
 	"sort"
 	"strconv"
 	"time"
@@ -703,6 +704,70 @@ func ToggleNoteFlag(id int64, userGUID string) (*Note, error) {
 	}
 
 	return GetNoteByID(id, userGUID)
+}
+
+// SetNotePrivacy moves a note to the given privacy and leaves every other
+// field as stored. It returns (nil, nil) when the note is not found or not
+// owned by userGUID. A note already at the requested privacy is returned
+// untouched: no version bump, no sync change.
+//
+// The web batch bar uses it. UpdateNote alone cannot do the job, because it
+// rewrites every field from its input, and the web list does not hold a
+// faithful copy of each note to send back (bodies may arrive msgpack-encoded,
+// and a note can change after the list loaded). The complete input is built
+// here, from a fresh read, instead.
+//
+// That read-then-write pair is guarded by the note's version. If an edit lands
+// between the two, UpdateNote refuses with ErrStaleWrite. The note is then
+// re-read and the move retried a few times, since the caller asked only about
+// privacy and has no stale state to reconcile. Retrying is always safe: each
+// attempt rebuilds its input from the newest stored note, so it never writes
+// back an older body.
+func SetNotePrivacy(id int64, isPrivate bool, userGUID string) (*Note, error) {
+	const attempts = 3
+	var lastErr error
+	for range attempts {
+		existing, err := GetNoteByID(id, userGUID)
+		if err != nil {
+			return nil, err
+		}
+		if existing == nil {
+			return nil, nil
+		}
+		if existing.IsPrivate == isPrivate {
+			return existing, nil
+		}
+
+		input := NoteInput{
+			GUID:            existing.GUID,
+			Title:           existing.Title,
+			Description:     fromNullString(existing.Description),
+			Body:            fromNullString(existing.Body),
+			Tags:            fromNullString(existing.Tags),
+			IsPrivate:       isPrivate,
+			IsFlagged:       existing.IsFlagged,
+			ExpectedVersion: existing.Version,
+		}
+		note, err := UpdateNote(id, input, userGUID)
+		if err == nil {
+			return note, nil
+		}
+		if !errors.Is(err, ErrStaleWrite) {
+			return nil, err
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+// fromNullString is toNullString's inverse: NULL becomes a nil pointer, so a
+// note rebuilt into a NoteInput keeps "no description" distinct from "".
+func fromNullString(ns sql.NullString) *string {
+	if !ns.Valid {
+		return nil
+	}
+	v := ns.String
+	return &v
 }
 
 // toNullString converts a *string to sql.NullString for database

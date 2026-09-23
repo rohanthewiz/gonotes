@@ -687,6 +687,59 @@ func (f *fakeStore) SetNoteCategorySubcategories(noteID, categoryID int64, subca
 	return serr.New("relationship not found")
 }
 
+// SetNoteCategories mirrors models.SetNoteCategories closely enough for the
+// tests that count writes: linkWrites goes up once per link actually added,
+// removed or re-selected, so an identical re-save still counts zero.
+func (f *fakeStore) SetNoteCategories(noteID int64, assignments []models.NoteCategoryAssignment, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	desired := map[int64][]string{}
+	var order []int64
+	for _, a := range assignments {
+		if _, seen := desired[a.CategoryID]; !seen {
+			order = append(order, a.CategoryID)
+		}
+		desired[a.CategoryID] = a.Subcategories
+	}
+
+	// Validate every id before touching a link, as the models function does,
+	// so a rejected set leaves the note exactly as it was.
+	for _, id := range order {
+		if !slices.ContainsFunc(f.cats, func(c models.Category) bool { return c.ID == id }) {
+			return serr.New("category not found")
+		}
+	}
+
+	current := map[int64][]string{}
+	var kept []fakeLink
+	for _, l := range f.links[noteID] {
+		if _, keep := desired[l.catID]; !keep {
+			f.linkWrites++
+			continue
+		}
+		current[l.catID] = l.subs
+		kept = append(kept, l)
+	}
+	for _, id := range order {
+		have, linked := current[id]
+		switch {
+		case !linked:
+			kept = append(kept, fakeLink{catID: id, subs: slices.Clone(desired[id])})
+			f.linkWrites++
+		case !models.SameSubcategories(have, desired[id]):
+			for i := range kept {
+				if kept[i].catID == id {
+					kept[i].subs = slices.Clone(desired[id])
+				}
+			}
+			f.linkWrites++
+		}
+	}
+	f.links[noteID] = kept
+	return nil
+}
+
 func (f *fakeStore) RemoveCategoryFromNote(noteID, categoryID int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

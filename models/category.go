@@ -437,6 +437,141 @@ func RemoveCategoryFromNote(noteID, categoryID int64) error {
 	return nil
 }
 
+// NoteCategoryAssignment is one entry in the complete category set
+// SetNoteCategories gives a note: the category, plus which of its
+// subcategories this note is filed under.
+type NoteCategoryAssignment struct {
+	CategoryID    int64    `json:"category_id"`
+	Subcategories []string `json:"subcategories,omitempty"`
+}
+
+// SetNoteCategories makes the note's category links exactly `assignments`.
+// Links not listed are removed, listed ones not yet linked are added, and
+// links whose subcategory selection changed are rewritten.
+//
+// This lets a UI replace a note's category set in one request instead of one
+// POST/PUT/DELETE per link. A note saved with ten categories used to cost ten
+// round trips, and a line of comma-separated categories in the web form made
+// that common.
+//
+// Design choices:
+//
+//   - A declarative "this is the full set" rather than a bulk add. Both callers
+//     (the web save and the TUI form sync) already hold the desired end state.
+//     With a full set, the add/update/remove diff happens once, here, next to
+//     the data, instead of in each UI against a snapshot that may be stale.
+//   - Every category is validated before anything is written. There is no
+//     transaction across these statements (the per-link functions have none
+//     either), so failing validation up front means a bad id leaves the note
+//     untouched instead of half-updated.
+//   - Unchanged links are not rewritten, and exactly one sync mapping change is
+//     recorded, and only when something changed. A plain re-save then adds
+//     nothing to the change log, and a ten-category edit adds one entry rather
+//     than ten. The mapping fragment is a full snapshot of the note's links
+//     (see recordNoteCategoryMappingChange), so one record carries the whole
+//     result.
+//   - A category listed twice is merged, and the later entry's selection wins.
+//     That is simpler than a 400 for a request whose meaning is unambiguous.
+//
+// It returns whether anything changed, so callers can skip follow-up work.
+func SetNoteCategories(noteID int64, assignments []NoteCategoryAssignment, userGUID string) (changed bool, err error) {
+	en := engineForOwnedNote(noteID, userGUID)
+	if en == nil {
+		return false, serr.New("note not found")
+	}
+
+	// Collapse duplicates, keeping the first-seen order so that an error names
+	// categories in the order the caller sent them.
+	desired := map[int64][]string{}
+	var order []int64
+	for _, a := range assignments {
+		if _, seen := desired[a.CategoryID]; !seen {
+			order = append(order, a.CategoryID)
+		}
+		desired[a.CategoryID] = a.Subcategories
+	}
+
+	// Validate ownership and existence before the first write (see above).
+	for _, id := range order {
+		if _, err := GetCategory(id, userGUID); err != nil {
+			return false, err
+		}
+	}
+
+	current, err := noteLinks(noteID)
+	if err != nil {
+		return false, serr.Wrap(err, "failed to read current note categories")
+	}
+	linked := make(map[int64]noteCategoryLink, len(current))
+	for _, l := range current {
+		linked[l.CategoryID] = l
+	}
+
+	// Remove links that are no longer wanted.
+	for _, l := range current {
+		if _, keep := desired[l.CategoryID]; keep {
+			continue
+		}
+		if _, err := en.Exec(`DELETE FROM note_categories WHERE note_id = ? AND category_id = ?`,
+			noteID, l.CategoryID); err != nil {
+			return changed, serr.Wrap(err, "failed to remove category from note")
+		}
+		changed = true
+	}
+
+	// Add new links and rewrite changed selections, in request order.
+	for _, id := range order {
+		subs := desired[id]
+		subcatsJSON, err := subcategoriesColumn(subs)
+		if err != nil {
+			return changed, err
+		}
+
+		existing, isLinked := linked[id]
+		if !isLinked {
+			if _, err := en.Exec(`INSERT INTO note_categories (note_id, category_id, subcategories, created_at)
+				VALUES (?, ?, ?, CURRENT_TIMESTAMP)`, noteID, id, subcatsJSON); err != nil {
+				return changed, serr.Wrap(err, "failed to add category to note")
+			}
+			changed = true
+			continue
+		}
+
+		// Compare as sets: SameSubcategories ignores order, so ["b","a"] vs
+		// ["a","b"] is not a change and writes nothing.
+		var have []string
+		if existing.Subcategories.Valid && existing.Subcategories.String != "" {
+			_ = json.Unmarshal([]byte(existing.Subcategories.String), &have)
+		}
+		if SameSubcategories(have, subs) {
+			continue
+		}
+		if _, err := en.Exec(`UPDATE note_categories SET subcategories = ? WHERE note_id = ? AND category_id = ?`,
+			subcatsJSON, noteID, id); err != nil {
+			return changed, serr.Wrap(err, "failed to update subcategories")
+		}
+		changed = true
+	}
+
+	if changed {
+		recordNoteCategoryMappingChange(noteID)
+	}
+	return changed, nil
+}
+
+// subcategoriesColumn encodes a selection the way every link writer stores
+// it: NULL for none, otherwise a JSON array.
+func subcategoriesColumn(subcategories []string) (sql.NullString, error) {
+	if len(subcategories) == 0 {
+		return sql.NullString{}, nil
+	}
+	jsonBytes, err := json.Marshal(subcategories)
+	if err != nil {
+		return sql.NullString{}, serr.Wrap(err, "failed to marshal subcategories")
+	}
+	return sql.NullString{String: string(jsonBytes), Valid: true}, nil
+}
+
 // noteCategoryLink is a raw link row from note_categories.
 type noteCategoryLink struct {
 	CategoryID    int64

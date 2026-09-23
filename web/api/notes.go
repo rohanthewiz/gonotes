@@ -491,6 +491,62 @@ func ToggleNoteFlag(ctx rweb.Context) error {
 	return writeSuccess(ctx, http.StatusOK, note.ToOutput())
 }
 
+// SetNotePrivacyRequest is the body of PUT /api/v1/notes/:id/privacy.
+// IsPrivate is a pointer so a missing field is a 400 rather than a silent
+// "make it public".
+type SetNotePrivacyRequest struct {
+	IsPrivate *bool `json:"is_private"`
+}
+
+// SetNotePrivacy handles PUT /api/v1/notes/:id/privacy.
+// Moves one note to the requested privacy and changes nothing else about it;
+// see models.SetNotePrivacy. The web batch bar calls it once per selected
+// note.
+//
+// The body names the target value rather than asking for a toggle. A batch
+// over a mixed selection has to converge on one answer, and a retried request
+// must not flip the note back. Both need an idempotent "set", which a toggle
+// is not.
+func SetNotePrivacy(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+
+	id, err := strconv.ParseInt(ctx.Request().Param("id"), 10, 64)
+	if err != nil {
+		return writeError(ctx, http.StatusBadRequest, "invalid note id")
+	}
+
+	var req SetNotePrivacyRequest
+	if err := json.Unmarshal(ctx.Request().Body(), &req); err != nil || req.IsPrivate == nil {
+		return writeError(ctx, http.StatusBadRequest, `"is_private" (true or false) is required`)
+	}
+
+	// Moving a note between databases is a write like any other, so an open
+	// editor's lease wins, exactly as it does for flag and delete.
+	if errResp, ok := authorizeNoteWrite(ctx, id); !ok {
+		return errResp
+	}
+
+	note, err := models.SetNotePrivacy(id, *req.IsPrivate, userGUID)
+	if err != nil {
+		// Still stale after the models layer's retries means the note is being
+		// edited continuously. Report it as the conflict it is.
+		var stale *models.StaleWriteError
+		if errors.As(err, &stale) {
+			return writeStaleConflict(ctx, stale)
+		}
+		logger.LogErr(serr.Wrap(err, "failed to set note privacy"), "database error")
+		return writeError(ctx, http.StatusInternalServerError, "failed to set privacy")
+	}
+	if note == nil {
+		return writeError(ctx, http.StatusNotFound, "note not found")
+	}
+
+	return writeSuccess(ctx, http.StatusOK, note.ToOutput())
+}
+
 // DeleteNote handles DELETE /api/v1/notes/:id
 // Performs a soft delete on the note (sets deleted_at timestamp).
 // Only deletes notes owned by the authenticated user.

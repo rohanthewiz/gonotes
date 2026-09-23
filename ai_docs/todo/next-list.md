@@ -31,7 +31,7 @@ with every item's premise re-checked against the code at `e0c2a39`.
 - Open and Roadmap stay in ID order. Edit an item's text in place when its
   premise changes; keep its ID and `raised`.
 
-**Next ID:** N-044
+**Next ID:** N-047
 
 ## Open
 
@@ -76,12 +76,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
 - **N-008** · raised `2026-0817-0015-tui-mouse-filter-and-store-identity` · value low
   The TUI agent picker and confirm dialog remain keyboard-only.
 
-- **N-009** · raised `2026-0817-0015-tui-mouse-filter-and-store-identity` · value medium
-  An explicit `--local` / `--remote` flag pair for the TUI. Today the
-  workaround is pointing `GONOTES_URL` at a dead port, and scripted or test
-  TUI runs have to remember it or they edit the live server's notes. Because
-  that workaround is in active use, this is rated medium rather than low.
-
 - **N-010** · raised `2026-0817-0015-tui-mouse-filter-and-store-identity` · value low
   The TUI never shows *why* an HTTP request failed mid-session. Only the
   startup local/remote decision is labelled.
@@ -97,13 +91,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
 - **N-013** · raised `2026-0817-1046-tui-subcategory-support` · value low
   The TUI subcategory screen shows no note counts per row (each would cost a
   query).
-
-- **N-014** · raised `2026-0817-1420-gonotes-note-locks` · value medium
-  The web UI respects note leases but doesn't take them. It sends
-  `expected_version` and shows refusals, but it never acquires a lease or
-  sends heartbeats (no lock calls in `web/static/js/`). A TUI can block a
-  browser tab but not the reverse, and two tabs fall back to the version
-  guard alone.
 
 - **N-015** · raised `2026-0817-1420-gonotes-note-locks` · value low
   cats-mobile parity. The same app came up three times: unaware of note locks
@@ -131,13 +118,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   The TUI duplicate dialog has no "duplicating…" state. Against a slow remote
   hub, nothing shows until the status line arrives.
 
-- **N-020** · raised `2026-0818-1739-duplicate-note-dialog` · value medium
-  Categories are attached to a note one request at a time: a POST per link in
-  both UIs (`web/static/js/cats_subcats.js` `saveCategoryAssignments`), so ten
-  categories means ten round trips. An `AddCategoriesToNote` bulk endpoint
-  would fix both UIs at once. It matters more now that the web category input
-  accepts a comma-separated list (2026-09-23).
-
 - **N-021** · raised `2026-0818-1739-duplicate-note-dialog` · value low
   Whether a note's follow-up flag should carry over to a duplicate is left to
   a row in the dialog. If nobody ever ticks that row, changing its default is
@@ -155,12 +135,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   the hub then skips by GUID, wasting one entry per batch. Filter per
   direction only if it shows up in a profile.
 
-- **N-024** · raised `2026-0818-1859-sync-relay-convergence-and-followups` · value medium
-  The hub's own change log is never compacted. Compaction runs on the spoke
-  (`SyncClient.Compact`, `models/sync_compact.go`) and skips operation 9,
-  which is almost everything a hub holds, so a long-lived hub's log only
-  grows.
-
 - **N-025** · raised `2026-0818-1934-spoke-user-guid-alignment` · value low
   A local account named differently from `GONOTES_SYNC_USERNAME` is diagnosed
   but can't be fixed in the app. There's no merge or rename affordance; the
@@ -171,24 +145,10 @@ with every item's premise re-checked against the code at `e0c2a39`.
   Spokes synced to more than one hub are untested. `hubIdentityForUsername`
   takes the first `sync_state` row that matches. The design assumes one hub.
 
-- **N-027** · raised `2026-0819-1410-web-batch-delete` · value medium
-  `apiRequest` shows a toast on every failure (`web/static/js/app.js`, its
-  `catch` block). A batch where fifty notes are locked stacks fifty toasts
-  plus the summary, which already makes them redundant.
-
 - **N-028** · raised `2026-0819-1410-web-batch-delete` · value low
   The web UI loads the whole library, with no limit and no "very large
   library" signal. If this ever matters, the answer is real server-side
   search and paging, not a silent cap.
-
-- **N-029** · raised `2026-0819-1410-web-batch-delete` · value medium
-  **The premise was wrong; this is worse than it was written.** Raised as
-  "the batch bar's `categorySelected` and `togglePrivacySelected` may swallow
-  failures like Delete did." In fact neither function exists anywhere in
-  `web/static/js/`. The **Set Category** and **Toggle Privacy** buttons
-  (`web/pages/landing/note_list.go:14-15`) throw a TypeError on click, and
-  have since the first landing-page commit (`e1540fd`). Implement them or
-  remove the buttons.
 
 - **N-030** · raised `2026-0819-1410-web-batch-delete` · value low
   It was never confirmed that the batch-delete fix addressed the user's actual
@@ -226,6 +186,21 @@ with every item's premise re-checked against the code at `e0c2a39`.
   `models.ParseCategorySpecCSV` accept, so the two single-line inputs speak
   slightly different dialects. Web names containing `/` are still allowed.
 
+- **N-044** · raised `2026-0923-1124-medium-next-items` · value low
+  The spoke compactor (`compactCategoryGroup`) puts a compacted category at its
+  group's LAST timestamp. If a pending tail holds a category create, then a note
+  mapped to it, then a rename, the push sends the note mapping before the
+  category exists on the hub, and the mapping is dropped. The hub compactor uses
+  the FIRST timestamp for this reason. Not observed in practice.
+
+- **N-045** · raised `2026-0923-1124-medium-next-items` · value low
+  The web batch bar can add a category to many notes but not remove one. Kept
+  separate on purpose: a bulk remove should be its own named action.
+
+- **N-046** · raised `2026-0923-1124-medium-next-items` · value low
+  The web note list shows no "being edited elsewhere" badge. The TUI's `✎`
+  reads `GET /api/v1/note-locks`, which the web UI could poll the same way.
+
 ## Roadmap
 
 Wanted, but deliberately not next. Parked, not declined. Seeded empty: no
@@ -243,6 +218,19 @@ session doc marked an item as deferred, so move items here from Open by hand.
   better route and already exists.
 
 ## Closed
+
+- **N-009** · raised `2026-0817-0015-tui-mouse-filter-and-store-identity` · closed 2026-09-23, `2026-0923-1124-medium-next-items` —
+  TUI `--local` / `--remote`. Done: `gonotes tui --local` skips the probe and fails rather than use a server; `--remote` fails rather than use local notes (`decideForcedStore`, `main.go`).
+- **N-014** · raised `2026-0817-1420-gonotes-note-locks` · closed 2026-09-23, `2026-0923-1124-medium-next-items` —
+  The web UI didn't take leases. Done: `app.js` "Note Leases" acquires in `editNote` (asking before taking over), renews every 30s and on tab focus, releases on preview/new note/`pagehide`. `apiRequest` sends the token for the leased note. Checked in Chrome against a scratch server.
+- **N-020** · raised `2026-0818-1739-duplicate-note-dialog` · closed 2026-09-23, `2026-0923-1124-medium-next-items` —
+  One request per category link. Done: `PUT /api/v1/notes/:id/categories` replaces the whole set (`models.SetNoteCategories`: validate first, diff, one sync change). The web save, web duplicate, TUI form sync and TUI duplicate all use it.
+- **N-024** · raised `2026-0818-1859-sync-relay-convergence-and-followups` · closed 2026-09-23, `2026-0923-1124-medium-next-items` —
+  The hub's change log was never compacted. Done: `models.CompactHubChangeLog` (`sync_hub_compact.go`) collapses quiet entities to full op-9 snapshots and tombstones the superseded GUIDs. Admin `POST /api/v1/admin/sync/compact` or `GONOTES_HUB_COMPACT_INTERVAL`.
+- **N-027** · raised `2026-0819-1410-web-batch-delete` · closed 2026-09-23, `2026-0923-1124-medium-next-items` —
+  Batch failures stacked one toast per note. Done: `apiRequest` takes `quiet: true`; the batch loops use it and summarise once.
+- **N-029** · raised `2026-0819-1410-web-batch-delete` · closed 2026-09-23, `2026-0923-1124-medium-next-items` —
+  The batch **Set Category** / **Toggle Privacy** buttons threw TypeErrors. Done: **Add Category** (keeps existing categories, comma-separated, creates unknown names) and **Toggle Privacy** (a mixed selection converges, via new `PUT /api/v1/notes/:id/privacy`).
 
 Closures before this file was seeded are recorded in the session docs
 themselves. These were found already done while seeding:

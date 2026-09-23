@@ -65,9 +65,26 @@ func main() {
 						Value:   defaultDir,
 						Usage:   "working directory for data and config",
 					},
+					// --local / --remote turn the automatic local-vs-server choice
+					// into an order. They exist for scripted and test runs, which
+					// must never quietly land on the other store. Without them, a
+					// test TUI next to a live server has to point GONOTES_URL at a
+					// dead port to keep off the real notes. See storeForce.
+					&cli.BoolFlag{
+						Name:  "local",
+						Usage: "open the notes in --dir directly; never use a server (fails if a server holds them)",
+					},
+					&cli.BoolFlag{
+						Name:  "remote",
+						Usage: "use the server at GONOTES_URL (default http://localhost:8444); never fall back to local notes",
+					},
 				},
 				Action: func(c *cli.Context) error {
-					return runTui(c.String("dir"))
+					force, err := parseStoreForce(c.Bool("local"), c.Bool("remote"))
+					if err != nil {
+						return err
+					}
+					return runTui(c.String("dir"), force)
 				},
 			},
 			{
@@ -194,7 +211,7 @@ const tuiProbeTimeout = 2 * time.Second
 // the sync control API), while in local mode this process starts it, because
 // otherwise nothing on this machine would know how long these notes have gone
 // unsynced or be able to do anything about it.
-func runTui(dir string) error {
+func runTui(dir string, force storeForce) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return serr.Wrap(err, "failed to create directory", "dir", dir)
 	}
@@ -220,18 +237,43 @@ func runTui(dir string) error {
 	// ./data land from where I am standing".
 	dataDir := models.ResolvedDataDir()
 	serverURL := tui.ServerURL()
-	info, up := tui.ProbeServer(serverURL, tuiProbeTimeout)
+
+	// The probe is skipped under --local. The answer could not change the
+	// outcome, and a launch that has been told to stay local should not reach
+	// out to the network at all.
+	var info tui.ServerInfo
+	var up bool
+	if force != forceLocal {
+		info, up = tui.ProbeServer(serverURL, tuiProbeTimeout)
+	}
 
 	// HTTP mode. Note the early return: no InitDB, no CloseDB, no encryption
 	// setup. The server holds the key and bytdb encrypts whole databases at
 	// rest, so it decrypts private bodies on read — which is why HTTP mode
 	// shows the same note text local mode does rather than ciphertext.
-	useHTTP, mode := decideStore(up, info, serverURL, dir, dataDir)
+	var useHTTP bool
+	var mode tui.Mode
+	if force == forceNone {
+		useHTTP, mode = decideStore(up, info, serverURL, dir, dataDir)
+	} else {
+		var err error
+		if useHTTP, mode, err = decideForcedStore(force, up, serverURL, dir); err != nil {
+			return err
+		}
+	}
 	if useHTTP {
 		return tui.Run(tui.NewHTTPStore(serverURL), mode)
 	}
 
 	if err := models.InitDB(); err != nil {
+		// --local means local or nothing. The usual cause is a server that
+		// already holds these files (bytdb is single-process). Say so, rather
+		// than handing over to that server, which is the one move --local rules
+		// out.
+		if force == forceLocal {
+			return serr.Wrap(err, "--local: could not open the notes in "+dir+
+				" (is a GoNotes server running against it?)")
+		}
 		// Insurance for the case the identity check is supposed to make
 		// impossible. Choosing local mode over a live server is a bet that the
 		// server locked a DIFFERENT directory, so these files are free; if the
@@ -339,6 +381,62 @@ func decideStore(up bool, info tui.ServerInfo, serverURL, dir, dataDir string) (
 	}
 }
 
+// storeForce is what --local / --remote asked for. forceNone keeps the
+// automatic choice in decideStore.
+type storeForce int
+
+const (
+	forceNone storeForce = iota
+	forceLocal
+	forceRemote
+)
+
+// parseStoreForce turns the two flags into one value and rejects the
+// contradiction instead of choosing a winner.
+func parseStoreForce(local, remote bool) (storeForce, error) {
+	switch {
+	case local && remote:
+		return forceNone, serr.New("--local and --remote cannot be used together")
+	case local:
+		return forceLocal, nil
+	case remote:
+		return forceRemote, nil
+	}
+	return forceNone, nil
+}
+
+// decideForcedStore is decideStore's counterpart for --local and --remote.
+//
+// The difference is that a forced choice has no fallback. decideStore's
+// fallbacks exist so an interactive launch always opens something. For a
+// script or a test that is exactly the danger: a test that meant to run
+// against a throwaway local directory, and silently got the live server
+// because one was running, edits real notes. So each flag either does
+// what it says or fails before the UI starts.
+//
+//	--local    local store, always. The data-directory check is skipped: it
+//	           decides between the two stores, and there is no choice to make.
+//	           (A server holding the files shows up later, as an InitDB error.)
+//	--remote   the server at GONOTES_URL / the default URL, taken as named: no
+//	           data-directory check, the same trust an explicit GONOTES_URL
+//	           gets. Not answering is an error, not a switch to local notes.
+//
+// The badge is always set: a forced store is an unusual launch by definition,
+// and the badge is the persistent answer to "which notes are these?".
+func decideForcedStore(force storeForce, up bool, serverURL, dir string) (useHTTP bool, mode tui.Mode, err error) {
+	switch force {
+	case forceLocal:
+		return false, tui.Mode{Badge: localBadge(dir, true)}, nil
+	case forceRemote:
+		if !up {
+			return false, tui.Mode{}, serr.New("--remote: no GoNotes server answering at " + serverURL +
+				" (set GONOTES_URL to choose another)")
+		}
+		return true, tui.Mode{Badge: badgeForURL(serverURL)}, nil
+	}
+	return false, tui.Mode{}, serr.New("decideForcedStore called without a forced store")
+}
+
 // badgeForURL is the persistent label for HTTP mode: the server, minus the
 // scheme, which is noise once it is the only thing on the line.
 func badgeForURL(serverURL string) string {
@@ -420,6 +518,11 @@ func serve(dir, port string) error {
 	// Initialize sync client if configured via environment variables.
 	client := initSyncClient()
 
+	// Opt-in periodic hub compaction. Stopped before the exit sync and
+	// CloseDB below, so a pass can never be mid-rewrite when the databases
+	// close.
+	stopHubCompaction := startHubCompaction(client)
+
 	// Start server
 	srv := web.NewServer(port)
 	logger.Info("Starting GoNotes Web", "port", port)
@@ -431,6 +534,8 @@ func serve(dir, port string) error {
 	// race the deferred CloseDB above for the databases the exit sync needs.
 	runErr := web.Run(srv)
 
+	stopHubCompaction()
+
 	// The exit sync, before CloseDB unwinds. A server has nobody to prompt, so
 	// this is the only unattended cycle prompt mode leaves it: without it,
 	// stopping a spoke that has been in prompt mode all afternoon carries the
@@ -438,6 +543,65 @@ func serve(dir, port string) error {
 	syncBeforeExit(client)
 
 	return runErr
+}
+
+// hubCompactIntervalEnv opts a hub into periodic change-log compaction, as a
+// Go duration ("24h"). Unset means never; an admin can still compact on demand
+// through POST /api/v1/admin/sync/compact.
+const hubCompactIntervalEnv = "GONOTES_HUB_COMPACT_INTERVAL"
+
+// startHubCompaction runs models.CompactHubChangeLog every
+// GONOTES_HUB_COMPACT_INTERVAL, when that is set and this server is a hub.
+// It returns a stop function that waits for a running pass to finish.
+//
+// Opt-in for the same reason as the spoke's GONOTES_SYNC_COMPACT: compaction
+// deletes history, and nothing should do that without being asked. The quiet
+// period is models.DefaultHubCompactQuiet, so an entity edited within the last
+// day is never rewritten, whatever the interval.
+//
+// A server with a sync client is a spoke and is skipped (see api.HubCompact).
+// The first pass waits one interval rather than running at startup, so a
+// restart loop cannot turn into a compaction loop.
+func startHubCompaction(client *models.SyncClient) (stop func()) {
+	noop := func() {}
+	raw := os.Getenv(hubCompactIntervalEnv)
+	if raw == "" {
+		return noop
+	}
+	interval, err := time.ParseDuration(raw)
+	if err != nil || interval <= 0 {
+		logger.Warn("Ignoring invalid "+hubCompactIntervalEnv+"; expected a positive duration like 24h",
+			"value", raw)
+		return noop
+	}
+	if client != nil {
+		logger.Warn(hubCompactIntervalEnv + " is set on a sync spoke; hub compaction only runs on a hub")
+		return noop
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if _, err := models.CompactHubChangeLog(models.DefaultHubCompactQuiet); err != nil {
+					logger.LogErr(err, "periodic hub compaction failed")
+				}
+			}
+		}
+	}()
+	logger.Info("Hub change-log compaction scheduled", "every", interval.String())
+
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 // syncBeforeExit runs the final cycle and stops the client. Safe with a nil

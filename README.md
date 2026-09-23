@@ -235,6 +235,36 @@ Compaction **discards local change history** for the changes it replaces. That
 history exists to be pushed, and these have not been; but it is why nothing
 compacts unless you ask or opt in.
 
+#### Compacting the hub
+
+A hub keeps every change any spoke has pushed, as an operation-9 relay the
+other spokes pull, and the spoke compactor skips relays. Without anything
+else, a long-lived hub's log only grows. The hub has its own compactor for
+that. For every note or category **unchanged for the quiet period** (default
+24 hours), it collapses the entity's whole history into one full snapshot:
+
+```
+note A: create ─ relay ─ relay ─ update  ──►  relay (full snapshot of A)
+note B: relay ─ delete                   ──►  delete
+```
+
+A spoke that already had the history is marked as holding the snapshot and
+never sees it. A spoke that is behind, or brand new, receives the one snapshot
+instead of the tail. The GUIDs of the replaced changes are kept in
+`compacted_change_guids`, so a spoke that re-pushes one of them after a lost
+response is still recognised as a repeat and not applied twice.
+
+It runs when an admin asks, or on a schedule if the hub opts in:
+
+```bash
+curl -X POST http://<hub>/api/v1/admin/sync/compact \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -d '{"quiet_hours": 24}'
+
+GONOTES_HUB_COMPACT_INTERVAL=24h   # in the hub's .env
+```
+
+Both are refused on a spoke, which has `/sync/control/compact` for its own log.
+
 ### Sync Control API
 
 The spoke exposes six endpoints for UI integration (all require authentication):
@@ -264,6 +294,7 @@ The spoke exposes six endpoints for UI integration (all require authentication):
 | `GONOTES_SYNC_ON_EXIT` | No | `true` | Run one final cycle at shutdown — the sync nobody has to ask for |
 | `GONOTES_SYNC_COMPACT` | No | `false` | Collapse the pending change log before every push (see [Compacting](#compacting-the-change-log)) |
 | `GONOTES_SYNC_INVITE_TOKEN` | No | — | One-time invite token for auto-registration on the hub |
+| `GONOTES_HUB_COMPACT_INTERVAL` | No | — | **Hub only.** Compact the hub's change log this often (a Go duration, e.g. `24h`); see [Compacting the hub](#compacting-the-hub) |
 
 ---
 
@@ -413,6 +444,15 @@ Browse and edit notes right in the terminal — no web server needed:
 ./gonotes tui -d /path/to/dir # or point at another working directory
 ```
 
+The TUI decides for itself whether to open the notes directly or go through a
+running server (see the `gonotes` skill for the rule). Scripts and tests that
+must not land on the wrong one can order it instead:
+
+```bash
+./gonotes tui --local -d /tmp/scratch   # these files, never a server; fails if a server holds them
+./gonotes tui --remote                  # the server at $GONOTES_URL; fails rather than use local notes
+```
+
 On first run (empty database) the TUI walks you through creating an account; afterwards it signs you in with just your password (the username is prefilled when there's a single user).
 
 ### Categories and subcategories
@@ -504,7 +544,9 @@ l load theirs (drops your edits)   o overwrite theirs   esc decide later
 
 Nothing is lost while that dialog is up: your text stays in the form, and `esc` leaves it there.
 
-The same rules apply to the web UI and to anything else writing through the API — the server, not the client, is what enforces them. `X-GoNotes-Lock: <token>` carries a lease on a write; `expected_version` in the body opts a write into the version check. A write that names neither still works, which is what keeps `gn-clip.sh`, the Markdown importer, and sync running unchanged.
+The web UI takes part too. **Edit** takes the lease before the form opens and renews it while the tab stays in edit mode. Saving, cancelling, picking another note or closing the tab releases it. If a TUI (or another tab) holds the note, the browser asks whether to take it over.
+
+The same rules apply to anything else writing through the API — the server, not the client, is what enforces them. `X-GoNotes-Lock: <token>` carries a lease on a write; `expected_version` in the body opts a write into the version check. A write that names neither still works, which is what keeps `gn-clip.sh`, the Markdown importer, and sync running unchanged.
 
 ### Keys
 

@@ -364,6 +364,20 @@ func (en *dbEngine) createPublicOnlySchema() error {
 		return err
 	}
 
+	// --- compacted change GUIDs ---
+	// Hub compaction (CompactHubChangeLog) deletes change rows, but their
+	// GUIDs are still what idempotency is checked by: a spoke whose push
+	// response was lost re-pushes the same change GUIDs later, and a hub that
+	// no longer knows them would apply a stale body diff a second time. One
+	// short row per superseded GUID keeps that check whole for a small
+	// fraction of the space the rows and their fragments took.
+	if err := en.ensureTable("compacted_change_guids", `CREATE TABLE compacted_change_guids (
+		guid         VARCHAR PRIMARY KEY,
+		compacted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		return err
+	}
+
 	// --- users ---
 	if err := en.createSequence("users_id_seq", 1); err != nil {
 		return err

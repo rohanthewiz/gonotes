@@ -594,28 +594,25 @@
   // Save Note Category Assignments
   // ============================================
 
-  // Multi-category diff-based save: compare originalCategoryEntries vs categoryEntries.
-  // Computes removed, added, and kept (with possible subcat changes).
+  // saveCategoryAssignments writes the form's category entries to the note.
   // Called from saveNote() after the note itself is saved.
+  //
+  // Two phases:
+  //   1. catalog: create categories typed as new, and merge newly typed
+  //      subcategories into an existing category's definition. These are
+  //      writes to the category, not to this note, so they stay per-category.
+  //   2. links: one PUT /notes/:id/categories carrying the complete set. The
+  //      server diffs it against the stored links (add / re-select / remove),
+  //      leaves identical links untouched, and records one sync change.
+  //
+  // Phase 2 used to be one POST, PUT or DELETE per link, so a comma-separated
+  // "Work, Personal, Ideas" cost three round trips. It is now always one, and
+  // it is skipped when the entries match what was loaded.
   async function saveCategoryAssignments(savedNoteId) {
     const state = getState();
 
-    // Removed: in original but not in current
-    for (const [key, origEntry] of originalCategoryEntries) {
-      if (!categoryEntries.has(key)) {
-        await apiRequest(`/notes/${savedNoteId}/categories/${origEntry.categoryId}`, {
-          method: 'DELETE'
-        });
-      }
-    }
-
-    // Added & kept entries
-    for (const [key, entry] of categoryEntries) {
-      const isAdded = !originalCategoryEntries.has(key);
-
-      // Ensure category exists — create if new
-      let categoryId = entry.categoryId;
-      if (entry.isNew && !categoryId) {
+    for (const entry of categoryEntries.values()) {
+      if (entry.isNew && !entry.categoryId) {
         const createResp = await apiRequest('/categories', {
           method: 'POST',
           body: JSON.stringify({
@@ -624,17 +621,16 @@
           })
         });
         if (createResp && createResp.data) {
-          categoryId = createResp.data.id;
-          entry.categoryId = categoryId;
+          entry.categoryId = createResp.data.id;
           showToast(`Category "${entry.categoryName}" created`, 'success');
         }
-      } else if (entry.newSubcategories.length > 0 && categoryId) {
+      } else if (entry.newSubcategories.length > 0 && entry.categoryId) {
         // Merge new subcategories into existing category definition
-        const catDef = state.categories.find(c => c.id === categoryId);
+        const catDef = state.categories.find(c => c.id === entry.categoryId);
         const existingSubcats = (catDef && catDef.subcategories) ? catDef.subcategories : [];
         const allSubcats = [...new Set([...existingSubcats, ...entry.newSubcategories])];
 
-        await apiRequest(`/categories/${categoryId}`, {
+        await apiRequest(`/categories/${entry.categoryId}`, {
           method: 'PUT',
           body: JSON.stringify({
             name: entry.categoryName,
@@ -642,30 +638,37 @@
           })
         });
       }
-
-      if (!categoryId) continue;
-
-      if (isAdded) {
-        // New association — POST to create the note-category link
-        await apiRequest(`/notes/${savedNoteId}/categories/${categoryId}`, {
-          method: 'POST',
-          body: JSON.stringify({ subcategories: entry.selectedSubcats })
-        });
-      } else {
-        // Kept entry — check if subcategories changed
-        const origEntry = originalCategoryEntries.get(key);
-        const subcatsChanged =
-          JSON.stringify(origEntry.selectedSubcats.slice().sort()) !==
-          JSON.stringify(entry.selectedSubcats.slice().sort());
-
-        if (subcatsChanged) {
-          await apiRequest(`/notes/${savedNoteId}/categories/${categoryId}`, {
-            method: 'PUT',
-            body: JSON.stringify({ subcategories: entry.selectedSubcats })
-          });
-        }
-      }
     }
+
+    // An entry whose category could not be created has no id and is left out,
+    // exactly as the per-link loop used to `continue` past it.
+    const assignments = [...categoryEntries.values()]
+      .filter(entry => entry.categoryId)
+      .map(entry => ({ category_id: entry.categoryId, subcategories: entry.selectedSubcats }));
+
+    if (!categoryAssignmentsChanged(assignments)) return;
+
+    await apiRequest(`/notes/${savedNoteId}/categories`, {
+      method: 'PUT',
+      body: JSON.stringify({ categories: assignments })
+    });
+  }
+
+  // categoryAssignmentsChanged reports whether `assignments` differs from what
+  // the form loaded (originalCategoryEntries). The server would treat an
+  // identical set as a no-op anyway; checking here saves the request on the
+  // common save where only the title or body changed.
+  //
+  // Subcategory order does not count, matching the server's comparison.
+  function categoryAssignmentsChanged(assignments) {
+    const canon = subs => JSON.stringify((subs || []).slice().sort());
+    const original = new Map();
+    for (const entry of originalCategoryEntries.values()) {
+      original.set(entry.categoryId, canon(entry.selectedSubcats));
+    }
+    if (original.size !== assignments.length) return true;
+    return assignments.some(a =>
+      !original.has(a.category_id) || original.get(a.category_id) !== canon(a.subcategories));
   }
 
   // ============================================

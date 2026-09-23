@@ -174,11 +174,38 @@ func groupNoteChanges(changes []NoteChange) ([]string, map[string][]NoteChange) 
 	return order, groups
 }
 
+// groupPlan is how a group of changes is to be rewritten. The spoke and hub
+// compactors share the rewrite machinery (snapshot, insert, delete, carry
+// peer markers) and differ only in these choices. See CompactHubChangeLog for
+// why the hub needs different ones.
+type groupPlan struct {
+	// operation is the replacement's operation code.
+	operation int32
+	// fullSnapshot claims every field in the replacement's fragment instead of
+	// the union of the group's bitmasks.
+	fullSnapshot bool
+	// createdAt is the replacement's position in the change stream.
+	createdAt time.Time
+	// tombstone records every superseded change GUID in
+	// compacted_change_guids, so a late re-push of one is still recognised as
+	// already applied (see changeGUIDExists).
+	tombstone bool
+}
+
 // compactNoteGroup replaces one note's pending changes with a single change.
 // Returns false (with no error) when the group is better left alone.
 func compactNoteGroup(noteGUID string, grp []NoteChange) (bool, error) {
+	return compactNoteGroupAs(noteGUID, grp, groupPlan{
+		operation: netNoteOperation(grp),
+		createdAt: grp[len(grp)-1].CreatedAt,
+	})
+}
+
+// compactNoteGroupAs rewrites one note's group of changes as a single change,
+// following plan.
+func compactNoteGroupAs(noteGUID string, grp []NoteChange, plan groupPlan) (bool, error) {
 	last := grp[len(grp)-1]
-	operation := netNoteOperation(grp)
+	operation := plan.operation
 
 	// Peers that had already received EVERY change in the group must not be
 	// handed a replacement for them. The intersection is what the compacted
@@ -209,7 +236,11 @@ func compactNoteGroup(noteGUID string, grp []NoteChange) (bool, error) {
 			return false, serr.New("could not resolve database for note " + noteGUID)
 		}
 
-		fragment, err := noteSnapshotFragment(note, unionNoteBitmask(grp, operation))
+		bitmask := unionNoteBitmask(grp, operation)
+		if plan.fullSnapshot {
+			bitmask = allNoteFragmentBits
+		}
+		fragment, err := noteSnapshotFragment(note, bitmask)
 		if err != nil {
 			return false, err
 		}
@@ -228,8 +259,23 @@ func compactNoteGroup(noteGUID string, grp []NoteChange) (bool, error) {
 		user = last.User.String
 	}
 	changeGUID := GenerateChangeGUID()
-	if err := insertNoteChangeAt(en, changeGUID, noteGUID, operation, fragmentID, user, last.CreatedAt); err != nil {
+	if err := insertNoteChangeAt(en, changeGUID, noteGUID, operation, fragmentID, user, plan.createdAt); err != nil {
 		return false, serr.Wrap(err, "failed to insert compacted note change")
+	}
+
+	// Tombstones go in before the originals leave, so there is no moment at
+	// which a superseded GUID is unknown to changeGUIDExists.
+	if plan.tombstone {
+		guids := make([]string, len(grp))
+		for i, c := range grp {
+			guids[i] = c.GUID
+		}
+		if err := recordCompactedGUIDs(guids); err != nil {
+			// Without the tombstones, deleting the originals would reopen the
+			// window they exist to close. Keep the old rows; the new change is
+			// only redundant.
+			return false, err
+		}
 	}
 
 	// Only now is it safe to drop the originals: if the process dies between
@@ -282,8 +328,7 @@ func netNoteOperation(grp []NoteChange) int32 {
 // this one fragment, so every field it can carry has to be present.
 func unionNoteBitmask(grp []NoteChange, operation int32) int16 {
 	if operation == OperationCreate {
-		return FragmentTitle | FragmentDescription | FragmentBody |
-			FragmentTags | FragmentIsPrivate | FragmentCategories
+		return allNoteFragmentBits
 	}
 	var mask int16
 	for _, c := range grp {
@@ -298,6 +343,14 @@ func unionNoteBitmask(grp []NoteChange, operation int32) int16 {
 	}
 	return mask
 }
+
+// allNoteFragmentBits is every field a note fragment can carry: what a
+// receiver needs to build the note from nothing.
+const allNoteFragmentBits = FragmentTitle | FragmentDescription | FragmentBody |
+	FragmentTags | FragmentIsPrivate | FragmentCategories
+
+// allCategoryFragmentBits is the category counterpart.
+const allCategoryFragmentBits = CatFragmentName | CatFragmentDescription | CatFragmentSubcategories
 
 // noteSnapshotFragment fills a fragment from the note as it stands now, for
 // exactly the fields the bitmask names. Body is written as literal text with
@@ -491,8 +544,17 @@ func groupCategoryChanges(changes []CategoryChange) ([]string, map[string][]Cate
 // compactCategoryGroup replaces one category's pending changes with a single
 // change built from its current row.
 func compactCategoryGroup(categoryGUID string, grp []CategoryChange) (bool, error) {
+	return compactCategoryGroupAs(categoryGUID, grp, groupPlan{
+		operation: netCategoryOperation(grp),
+		createdAt: grp[len(grp)-1].CreatedAt,
+	})
+}
+
+// compactCategoryGroupAs rewrites one category's group as a single change,
+// following plan.
+func compactCategoryGroupAs(categoryGUID string, grp []CategoryChange, plan groupPlan) (bool, error) {
 	last := grp[len(grp)-1]
-	operation := netCategoryOperation(grp)
+	operation := plan.operation
 
 	settled, err := peersHoldingAllCategoryChanges(grp)
 	if err != nil {
@@ -509,7 +571,11 @@ func compactCategoryGroup(categoryGUID string, grp []CategoryChange) (bool, erro
 			return false, nil // gone without a delete change; leave the log alone
 		}
 
-		fragment := categorySnapshotFragment(category, unionCategoryBitmask(grp, operation))
+		bitmask := unionCategoryBitmask(grp, operation)
+		if plan.fullSnapshot {
+			bitmask = allCategoryFragmentBits
+		}
+		fragment := categorySnapshotFragment(category, bitmask)
 		id, err := insertCategoryFragment(fragment)
 		if err != nil {
 			return false, serr.Wrap(err, "failed to insert compacted category fragment")
@@ -522,8 +588,18 @@ func compactCategoryGroup(categoryGUID string, grp []CategoryChange) (bool, erro
 		user = last.User.String
 	}
 	changeGUID := GenerateChangeGUID()
-	if err := insertCategoryChangeAt(changeGUID, categoryGUID, operation, fragmentID, user, last.CreatedAt); err != nil {
+	if err := insertCategoryChangeAt(changeGUID, categoryGUID, operation, fragmentID, user, plan.createdAt); err != nil {
 		return false, serr.Wrap(err, "failed to insert compacted category change")
+	}
+
+	if plan.tombstone {
+		guids := make([]string, len(grp))
+		for i, c := range grp {
+			guids[i] = c.GUID
+		}
+		if err := recordCompactedGUIDs(guids); err != nil {
+			return false, err
+		}
 	}
 
 	for _, c := range grp {
@@ -565,7 +641,7 @@ func netCategoryOperation(grp []CategoryChange) int32 {
 // everything, for the same reason a note create does.
 func unionCategoryBitmask(grp []CategoryChange, operation int32) int16 {
 	if operation == OperationCreate {
-		return CatFragmentName | CatFragmentDescription | CatFragmentSubcategories
+		return allCategoryFragmentBits
 	}
 	var mask int16
 	for _, c := range grp {

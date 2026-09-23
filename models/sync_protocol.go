@@ -592,7 +592,8 @@ func deserializeCategoryFragment(fragment any) (CategoryFragment, error) {
 }
 
 // changeGUIDExists checks if a change with the given GUID already exists
-// in either the note_changes or category_changes table.
+// in either the note_changes or category_changes table, or was folded away
+// by hub compaction (compacted_change_guids).
 func changeGUIDExists(guid string) bool {
 	var count int
 
@@ -605,6 +606,12 @@ func changeGUIDExists(guid string) bool {
 
 	// category_changes live only in the public database.
 	if err := pubDB.QueryRow(`SELECT COUNT(*) FROM category_changes WHERE guid = ?`, guid).Scan(&count); err == nil && count > 0 {
+		return true
+	}
+
+	// A change the hub compactor folded into a snapshot has no row of its own
+	// any more, but it was applied, and it must still read as applied.
+	if err := pubDB.QueryRow(`SELECT COUNT(*) FROM compacted_change_guids WHERE guid = ?`, guid).Scan(&count); err == nil && count > 0 {
 		return true
 	}
 

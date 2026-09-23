@@ -61,6 +61,12 @@ when that server holds *these* files, so `/api/v1/health` reports `data_dir`
 | Unset, server too old to report `data_dir` | HTTP, with a notice |
 | No server | local |
 
+`--local` / `--remote` override the table (`decideForcedStore`): `--local` skips
+the probe and fails if `InitDB` can't open the files; `--remote` fails if nothing
+answers. Neither ever falls back to the other store. **Scripted or test TUI runs
+should pass `--local -d <scratch>`** rather than pointing `GONOTES_URL` at a dead
+port.
+
 Every outcome is labelled on screen (`tui.Mode`), so the TUI always says which
 notes these are. In HTTP mode `models.InitDB` is skipped entirely — no file lock,
 no conflict with the running server or MacApp.
@@ -395,6 +401,11 @@ Two sessions cannot edit one note. The server arbitrates (`models/lock.go`,
 human-recognizable label (cats pane handle → hostname → truncated id), and a
 heartbeat that renews leases and reports when one is lost.
 
+- The web UI is a client too (`app.js`, "Note Leases"): one session id per page
+  load (not sessionStorage, which duplicated tabs share), lease taken in
+  `editNote` before the form opens, renewed every 30s and on tab focus,
+  released in `showPreviewMode` / `newNote` / `pagehide` (keepalive fetch).
+  `apiRequest` attaches `X-GoNotes-Lock` to any `/notes/<leased id>…` request.
 - `GET /api/v1/note-locks` — every live lease in one call, for list badges.
 - Contention dialog (`tui/locked.go`): `r`/`enter` open read-only, `t` take over,
   `g` go to their pane, `esc` never mind. Waiting is deliberately not offered — a
@@ -456,6 +467,8 @@ Categories are attached separately, after the note exists:
 ```bash
 POST /api/v1/categories                              {"name":"Work"}
 POST /api/v1/notes/<note_id>/categories/<cat_id>     {"subcategories":["backend"]}
+PUT  /api/v1/notes/<note_id>/categories              {"categories":[{"category_id":1,"subcategories":["backend"]}]}   # replace the whole set in one call
+PUT  /api/v1/notes/<note_id>/privacy                 {"is_private":true}   # moves the note between databases, nothing else changes
 ```
 
 Markdown frontmatter uses a different shape — `guid`, `title`, `description`,
@@ -506,6 +519,14 @@ replaces. It is destructive to local change history and therefore never
 automatic unless `GONOTES_SYNC_COMPACT=true`. Offered as `c` (compact & sync)
 and `p` (compact only) in the TUI dialog, **Compact & sync** in the web banner,
 and `POST /sync/control/compact`.
+
+**Hub compaction** (`models/sync_hub_compact.go`) is the hub-side counterpart:
+global rather than per-peer, includes operation-9 relays, rewrites each quiet
+entity (unchanged for 24h by default) to one full-snapshot op-9 change (deletes
+stay deletes), and tombstones the superseded GUIDs in `compacted_change_guids`
+so `changeGUIDExists` still recognises a late re-push. Admin-only
+`POST /api/v1/admin/sync/compact` (`{"quiet_hours":N}`), or
+`GONOTES_HUB_COMPACT_INTERVAL=24h`. Refused on a spoke.
 
 Runtime control — all authenticated:
 
