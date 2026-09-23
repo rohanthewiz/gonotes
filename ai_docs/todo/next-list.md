@@ -68,17 +68,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   toggling mid-edit, and image paste inside Monaco. The CDP harness (see
   memory) makes this cheap now.
 
-- **N-008** · raised `2026-0817-0015-tui-mouse-filter-and-store-identity` · value low
-  The TUI agent picker and confirm dialog remain keyboard-only.
-
-- **N-010** · raised `2026-0817-0015-tui-mouse-filter-and-store-identity` · value low
-  The TUI never shows *why* an HTTP request failed mid-session. Only the
-  startup local/remote decision is labelled.
-
-- **N-011** · raised `2026-0817-1046-tui-subcategory-support` · value low
-  `ctrl+g` pane capture still files notes with no category. It could take a
-  category spec (`Work/backend`), as the note form does.
-
 - **N-012** · raised `2026-0817-1046-tui-subcategory-support` · value low
   Toggling several subcategories means AND ("all of them"), in both UIs.
   There's no OR, and no models function for one.
@@ -99,10 +88,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   The category and subcategory screens have no lock gate. Nothing is at risk
   today because they don't edit notes, but any bulk note operation added
   there later would need one. Contingent on such an operation existing.
-
-- **N-019** · raised `2026-0818-1739-duplicate-note-dialog` · value low
-  The TUI duplicate dialog has no "duplicating…" state. Against a slow remote
-  hub, nothing shows until the status line arrives.
 
 - **N-021** · raised `2026-0818-1739-duplicate-note-dialog` · value low
   Whether a note's follow-up flag should carry over to a duplicate is left to
@@ -161,6 +146,11 @@ session doc marked an item as deferred, so move items here from Open by hand.
   query "…"` CLI subcommand. It would have to open the databases directly, so
   it would only work with the server stopped. The TUI's HTTP fallback is the
   better route and already exists.
+- **N-008** · declined `2026-0923-1133-next-list-batches` — Mouse support in the TUI agent picker and
+  confirm dialog. `tui/mouse.go` already records this as deliberate: they are a
+  few rows in a `lipgloss.Place`d box, so hit-testing means repeating the
+  centering math, and a two-choice dialog doesn't earn that. Raised in
+  `2026-0817-0015-tui-mouse-filter-and-store-identity`.
 
 ## Closed
 
@@ -198,6 +188,12 @@ session doc marked an item as deferred, so move items here from Open by hand.
   The icon-only summarize button was dimmed but not animated. Done: `busy()` sets `aria-busy` and `app.css` pulses the icon. The animation is off under `prefers-reduced-motion`.
 - **N-046** · raised `2026-0923-1124-medium-next-items` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
   The web note list had no "being edited elsewhere" badge. Done: `refreshNoteLocks` polls `GET /note-locks` every 30s while the tab is visible (and on return) and re-renders only on a change. It skips this tab's own lease, and the tooltip names the holder. Checked in Chrome against a curl-held lease.
+- **N-010** · raised `2026-0817-0015-tui-mouse-filter-and-store-identity` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+  The TUI never said *why* an HTTP request failed mid-session. In fact it did, but as Go's raw transport error (`Put "http://…": dial tcp …: connection refused`), and the one-line status bar truncated it before the cause. Done: `errReason` (`tui/errreason.go`) names refused, timed out, unknown host, dropped connection, 5xx and 401 in a few words, and `statusErr` uses it. Tested against real failures from the HTTP store.
+- **N-011** · raised `2026-0817-1046-tui-subcategory-support` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+  `ctrl+g` capture filed notes with no category. Its form always had an editable Categories field; what was missing was a default. Done: the field is preset to the list's category filter (`Work/backend`), and left empty when the list is unfiltered or a query is in force. A preset alone doesn't make the form dirty.
+- **N-019** · raised `2026-0818-1739-duplicate-note-dialog` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+  The TUI duplicate dialog showed nothing while the copy was made. Done: `confirm` sequences pop → "Duplicating…" → the create, and the result's status replaces it.
 
 Closures before this file was seeded are recorded in the session docs
 themselves. These were found already done while seeding:

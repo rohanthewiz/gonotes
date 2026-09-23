@@ -358,6 +358,11 @@ func (m appModel) captureDone(msg captureDoneMsg) tea.Cmd {
 
 	f := newFormScreen(m.sess, nil)
 	f.prefill(captureTitle(msg.agent), captureTag, text)
+	// Filed where the list is looking. Capturing while browsing Work/backend
+	// most likely means the answer belongs there; the spec lands in the form's
+	// Categories field, visible and editable, and nothing is filed until
+	// ctrl+s. Browsing everything leaves the field empty, as before.
+	f.presetCategories(m.browseFilingSpec())
 	// The form is left UNSAVED deliberately — the same rule the outbound half
 	// keeps, where pane.send_input stages text without pressing Enter. What was
 	// captured is the agent's words; whether they are worth keeping is the
@@ -366,6 +371,19 @@ func (m appModel) captureDone(msg captureDoneMsg) tea.Cmd {
 	// Batch rather than Sequence: the two are independent (one pushes a screen,
 	// the other writes the status line) and neither reads what the other did.
 	return tea.Batch(push(f), status("Captured from "+msg.agent+" — ctrl+s to save"))
+}
+
+// browseFilingSpec is the category the note list is filtered to (see
+// browseScreen.filingSpec), or "". The list is found by walking the stack
+// rather than taking the top, because a capture finishes asynchronously and
+// the user may have opened another screen over the list in the meantime.
+func (m appModel) browseFilingSpec() string {
+	for i := len(m.stack) - 1; i >= 0; i-- {
+		if b, ok := m.stack[i].(*browseScreen); ok {
+			return b.filingSpec()
+		}
+	}
+	return ""
 }
 
 // captureNow is the clock the capture title is stamped from. A var so a test

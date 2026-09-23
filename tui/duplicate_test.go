@@ -329,3 +329,31 @@ func TestDuplicateReportsAPartialCopy(t *testing.T) {
 		t.Errorf("a copy that was never created is reported as %q", got)
 	}
 }
+
+// Confirming shows "Duplicating…" after the dialog closes and before the copy
+// is made, so a slow remote create is not a silent pause. The order matters:
+// status before the result, or the result's message would be overwritten.
+func TestDuplicateConfirmAnnouncesTheWork(t *testing.T) {
+	sess, fs, user := dupSession(t)
+	note := richNote(t, fs, user)
+
+	s := newDuplicateScreen(sess, note)
+	loadCats(t, s, sess, note)
+
+	msgs := drainSequence(s.confirm())
+	var order []string
+	for _, m := range msgs {
+		switch m := m.(type) {
+		case popMsg:
+			order = append(order, "pop")
+		case statusNote:
+			order = append(order, "status:"+m.text)
+		case noteDuplicatedMsg:
+			order = append(order, "done")
+		}
+	}
+	want := []string{"pop", "status:Duplicating…", "done"}
+	if strings.Join(order, ",") != strings.Join(want, ",") {
+		t.Errorf("confirm delivered %v, want %v", order, want)
+	}
+}

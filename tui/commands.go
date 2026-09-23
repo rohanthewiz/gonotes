@@ -56,8 +56,10 @@ func status(text string) tea.Cmd {
 	return func() tea.Msg { return statusNote{text: text} }
 }
 
+// statusErr reports a failure as "<context>: <reason>", the reason shortened
+// by errReason so a transport failure still says why within one line.
 func statusErr(err error, context string) tea.Cmd {
-	return func() tea.Msg { return statusNote{text: context + ": " + err.Error(), isErr: true} }
+	return func() tea.Msg { return statusNote{text: context + ": " + errReason(err), isErr: true} }
 }
 
 // ---- Auth ------------------------------------------------------------------

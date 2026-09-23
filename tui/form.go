@@ -193,6 +193,21 @@ func (s *formScreen) prefill(title, tags, body string) {
 	s.body.SetValue(body)
 }
 
+// presetCategories fills a NEW note's Categories field with a default the user
+// can see and change before saving, in the field's own notation
+// ("Work/backend").
+//
+// Unlike prefill, it DOES move the baseline, for this one field. A default is
+// not unsaved work: backing out of a form that holds nothing but a suggested
+// category must not stop to ask about losing it.
+func (s *formScreen) presetCategories(spec string) {
+	if spec == "" {
+		return
+	}
+	s.categories.SetValue(spec)
+	s.baseline.categories = s.categories.Value()
+}
+
 // summarize is the form's ctrl+r: condense the body that is on screen right
 // now. Returns the command, or a status line explaining why there is nothing
 // to do.

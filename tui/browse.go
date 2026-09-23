@@ -321,6 +321,17 @@ func (s *browseScreen) Init() tea.Cmd {
 	return s.refresh()
 }
 
+// filingSpec is where the list is looking, in the note form's category
+// notation ("Work/backend"), or "" when it isn't narrowed to a category. A
+// query outranks the category filter in reloadNotes, so while one is in force
+// there is no single place the list is "in", and this answers "".
+func (s *browseScreen) filingSpec() string {
+	if s.queryFilter != "" || s.catFilter == nil {
+		return ""
+	}
+	return models.FormatCategorySpec(s.catFilter.Name, s.subFilter)
+}
+
 // title is the list's heading: the app name, the active category filter, and
 // the mode badge.
 //

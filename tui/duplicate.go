@@ -312,12 +312,20 @@ func (s *duplicateScreen) plan() (dupPlan, string) {
 // It pops BEFORE creating, exactly as confirmScreen does: noteDuplicatedMsg has
 // to land on the screen that opened this dialog, which is only the top of the
 // stack once this one is off it.
+//
+// "Duplicating…" goes up between the pop and the work. Against a local store
+// the copy lands before anyone could read it; against a remote hub the create
+// plus the category set is two round trips, and without it the dialog would
+// vanish and nothing would change for that long. The result's own status
+// replaces it. tea.Sequence delivers the status before starting the create,
+// so the message is never shown after the result.
 func (s *duplicateScreen) confirm() tea.Cmd {
 	p, problem := s.plan()
 	if problem != "" {
 		return status(problem)
 	}
 	return tea.Sequence(pop(false),
+		status("Duplicating…"),
 		duplicateNoteCmd(s.sess.store, p.input, p.cats, s.sess.user.GUID))
 }
 

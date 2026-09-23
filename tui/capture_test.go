@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gonotes/cats"
+	"gonotes/models"
 
 	tea "charm.land/bubbletea/v2"
 	teatest "github.com/charmbracelet/x/exp/teatest/v2"
@@ -563,4 +564,42 @@ func TestCaptureLandsInAPrefilledForm(t *testing.T) {
 
 	tm.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
+}
+
+// A capture made while the list is filtered to a category starts filed there:
+// the spec is in the form's Categories field, where it can still be changed.
+// It is a default, not typed work, so it alone does not make the form dirty.
+func TestCaptureDefaultsToTheBrowsedCategory(t *testing.T) {
+	fs := newFakeStore()
+	user := fs.addUser("tui_tester", "test-password-123")
+	m := newAppModel(fs)
+	m.sess.user = user
+	m.sess.width, m.sess.height = 100, 40
+
+	browse := newBrowseScreen(m.sess)
+	browse.catFilter = &models.Category{ID: 1, Name: "Work"}
+	browse.subFilter = []string{"backend"}
+	m.stack = append(m.stack, browse)
+
+	var form *formScreen
+	for _, msg := range drainCmd(m.captureDone(captureDoneMsg{agent: "claude", text: "answer"})) {
+		if p, ok := msg.(pushMsg); ok {
+			form, _ = p.s.(*formScreen)
+		}
+	}
+	if form == nil {
+		t.Fatal("a successful capture should push a form screen")
+	}
+	if got := form.categories.Value(); got != "Work/backend" {
+		t.Errorf("categories = %q, want the browsed Work/backend", got)
+	}
+	if form.baseline.categories != form.categories.Value() {
+		t.Error("the preset category counts as unsaved work")
+	}
+
+	// A query in force means the list is not "in" a category.
+	browse.queryFilter = "tags = 'x'"
+	if spec := m.browseFilingSpec(); spec != "" {
+		t.Errorf("with a query in force the filing spec is %q, want empty", spec)
+	}
 }
