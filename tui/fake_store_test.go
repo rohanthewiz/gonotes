@@ -589,6 +589,70 @@ func (f *fakeStore) SetCategorySubcategories(cat models.Category, subcategories 
 	return nil, serr.New("category not found")
 }
 
+func (f *fakeStore) RenameCategory(cat models.Category, name, userGUID string) (*models.Category, error) {
+	cat.Name = name
+	return f.SetCategorySubcategories(cat, cat.SubcategoryList(), userGUID)
+}
+
+// RenameSubcategory mirrors models.RenameSubcategory: links first (each one
+// counted as a write), then the definition, merging onto an existing name.
+func (f *fakeStore) RenameSubcategory(categoryID int64, from, to, userGUID string) (*models.Category, int, error) {
+	rename := func(list []string) []string {
+		hasTo := slices.Contains(list, to)
+		out := []string{}
+		for _, v := range list {
+			switch {
+			case v == from && hasTo:
+			case v == from:
+				out = append(out, to)
+			default:
+				out = append(out, v)
+			}
+		}
+		return out
+	}
+
+	f.mu.Lock()
+	var cat *models.Category
+	for i := range f.cats {
+		if f.cats[i].ID == categoryID && f.cats[i].CreatedBy.String == userGUID {
+			c := f.cats[i]
+			cat = &c
+		}
+	}
+	if cat == nil || !slices.Contains(cat.SubcategoryList(), from) {
+		f.mu.Unlock()
+		return nil, 0, serr.New("subcategory not found")
+	}
+	changed := 0
+	for noteID, links := range f.links {
+		for i, l := range links {
+			if l.catID == categoryID && slices.Contains(l.subs, from) {
+				f.links[noteID][i].subs = rename(l.subs)
+				f.linkWrites++
+				changed++
+			}
+		}
+	}
+	f.mu.Unlock()
+
+	updated, err := f.SetCategorySubcategories(*cat, rename(cat.SubcategoryList()), userGUID)
+	return updated, changed, err
+}
+
+func (f *fakeStore) SubcategoryNoteCounts(categoryID int64, _ string) (map[string]int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failWith != nil {
+		return nil, f.failWith
+	}
+	var all []models.NoteCategoryMapping
+	for noteID := range f.links {
+		all = append(all, f.mappingsFor(noteID)...)
+	}
+	return countSubcategoryNotes(all, categoryID), nil
+}
+
 func (f *fakeStore) GetCategoryByName(name, userGUID string) (*models.Category, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

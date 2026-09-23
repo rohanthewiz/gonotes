@@ -299,6 +299,30 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		writeOK(w, http.StatusOK, updated.ToOutput())
 	}))
 
+	mux.HandleFunc("POST /api/v1/categories/{id}/subcategories/rename", auth(func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ From, To string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		updated, n, err := api.data.RenameSubcategory(pathID(r, "id"), in.From, in.To, api.user.GUID)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeOK(w, http.StatusOK, map[string]any{"category": updated.ToOutput(), "notes_changed": n})
+	}))
+
+	mux.HandleFunc("GET /api/v1/note-category-mappings", auth(func(w http.ResponseWriter, r *http.Request) {
+		api.data.mu.Lock()
+		var all []models.NoteCategoryMapping
+		for noteID := range api.data.links {
+			all = append(all, api.data.mappingsFor(noteID)...)
+		}
+		api.data.mu.Unlock()
+		writeOK(w, http.StatusOK, all)
+	}))
+
 	mux.HandleFunc("DELETE /api/v1/categories/{id}", auth(func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r, "id")
 		if err := api.data.DeleteCategory(id, api.user.GUID); err != nil {
@@ -1163,5 +1187,70 @@ func TestReleaseAllNoteLocksFallsBackPerNote(t *testing.T) {
 	}
 	if models.GetNoteLock(21) != nil || models.GetNoteLock(22) != nil {
 		t.Error("a lease survived the fallback release")
+	}
+}
+
+// The HTTP store renames a subcategory through the server's rename endpoint,
+// so notes this client never loaded follow the rename too.
+func TestRenameSubcategoryOverHTTP(t *testing.T) {
+	api := newFakeAPI(t)
+	st := api.store(t)
+	if _, err := st.AuthenticateUser("api_user", fakeAPIPassword); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	cat, err := api.data.CreateCategory("Work", api.user.GUID)
+	if err != nil {
+		t.Fatalf("create category: %v", err)
+	}
+	if _, err := api.data.SetCategorySubcategories(*cat, []string{"api"}, api.user.GUID); err != nil {
+		t.Fatalf("define subcategory: %v", err)
+	}
+	note, _ := api.data.CreateNote(models.NoteInput{Title: "Filed"}, api.user.GUID)
+	if err := api.data.AddCategoryToNoteWithSubcategories(note.ID, cat.ID, []string{"api"}, api.user.GUID); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+
+	updated, n, err := st.RenameSubcategory(cat.ID, "api", "http", api.user.GUID)
+	if err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("notes changed = %d, want 1", n)
+	}
+	if got := updated.SubcategoryList(); !slices.Equal(got, []string{"http"}) {
+		t.Errorf("definition = %v, want [http]", got)
+	}
+
+	renamed, err := st.RenameCategory(*updated, "Job", api.user.GUID)
+	if err != nil {
+		t.Fatalf("rename category: %v", err)
+	}
+	if renamed.Name != "Job" || !slices.Equal(renamed.SubcategoryList(), []string{"http"}) {
+		t.Errorf("renamed category = %s %v, want Job [http]", renamed.Name, renamed.SubcategoryList())
+	}
+}
+
+// Subcategory counts come from one mappings request, counted client-side.
+func TestSubcategoryNoteCountsOverHTTP(t *testing.T) {
+	api := newFakeAPI(t)
+	st := api.store(t)
+	if _, err := st.AuthenticateUser("api_user", fakeAPIPassword); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	cat, _ := api.data.CreateCategory("Work", api.user.GUID)
+	other, _ := api.data.CreateCategory("Home", api.user.GUID)
+	for i, subs := range [][]string{{"api"}, {"api", "ops"}, {}} {
+		n, _ := api.data.CreateNote(models.NoteInput{Title: "n" + strconv.Itoa(i)}, api.user.GUID)
+		api.data.AddCategoryToNoteWithSubcategories(n.ID, cat.ID, subs, api.user.GUID)
+		api.data.AddCategoryToNoteWithSubcategories(n.ID, other.ID, []string{"api"}, api.user.GUID)
+	}
+
+	counts, err := st.SubcategoryNoteCounts(cat.ID, api.user.GUID)
+	if err != nil {
+		t.Fatalf("counts: %v", err)
+	}
+	if counts["api"] != 2 || counts["ops"] != 1 || len(counts) != 2 {
+		t.Errorf("counts = %v, want api:2 ops:1 (Home's links not counted)", counts)
 	}
 }

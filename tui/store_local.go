@@ -161,6 +161,27 @@ func (s *localStore) SetCategorySubcategories(cat models.Category, subcategories
 	return models.UpdateCategory(cat.ID, input, userGUID)
 }
 
+func (s *localStore) RenameCategory(cat models.Category, name, userGUID string) (*models.Category, error) {
+	input := models.CategoryInput{Name: name, Subcategories: cat.SubcategoryList()}
+	if cat.Description.Valid {
+		desc := cat.Description.String
+		input.Description = &desc
+	}
+	return models.UpdateCategory(cat.ID, input, userGUID)
+}
+
+func (s *localStore) RenameSubcategory(categoryID int64, from, to, userGUID string) (*models.Category, int, error) {
+	return models.RenameSubcategory(categoryID, from, to, userGUID)
+}
+
+func (s *localStore) SubcategoryNoteCounts(categoryID int64, userGUID string) (map[string]int, error) {
+	mappings, err := models.GetAllNoteCategoryMappings(userGUID)
+	if err != nil {
+		return nil, err
+	}
+	return countSubcategoryNotes(mappings, categoryID), nil
+}
+
 func (s *localStore) GetCategoryByName(name, userGUID string) (*models.Category, error) {
 	return models.GetCategoryByName(name, userGUID)
 }

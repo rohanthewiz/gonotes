@@ -155,6 +155,59 @@ func UpdateCategory(ctx rweb.Context) error {
 	return writeSuccess(ctx, http.StatusOK, category.ToOutput())
 }
 
+// RenameSubcategoryRequest is the body of POST
+// /api/v1/categories/:id/subcategories/rename.
+type RenameSubcategoryRequest struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// RenameSubcategory handles POST /api/v1/categories/:id/subcategories/rename.
+// It renames one subcategory in the category's definition and in every note
+// filed under it (see models.RenameSubcategory), answering with the updated
+// category and how many notes were rewritten.
+//
+// A POST to a sub-resource rather than a PUT of the category: a PUT carries a
+// new definition, which can say "api is gone and http is new" but can't say
+// "api IS http now", and that difference is exactly what decides whether the
+// notes filed under api follow it.
+func RenameSubcategory(ctx rweb.Context) error {
+	userGUID := GetCurrentUserGUID(ctx)
+	if userGUID == "" {
+		return writeError(ctx, http.StatusUnauthorized, "authentication required")
+	}
+	id, err := strconv.ParseInt(ctx.Request().Param("id"), 10, 64)
+	if err != nil {
+		return writeError(ctx, http.StatusBadRequest, "invalid category id")
+	}
+	var req RenameSubcategoryRequest
+	if err := json.Unmarshal(ctx.Request().Body(), &req); err != nil {
+		return writeError(ctx, http.StatusBadRequest, "invalid JSON body")
+	}
+
+	category, changed, err := models.RenameSubcategory(id, req.From, req.To, userGUID)
+	if err != nil {
+		// Same string-matched sentinels as the other category handlers.
+		switch msg := err.Error(); msg {
+		case "category not found", "subcategory not found":
+			return writeError(ctx, http.StatusNotFound, msg)
+		case "subcategory names cannot be empty",
+			"the new name is the same as the old one",
+			`a subcategory name cannot contain "/" or ","`:
+			return writeError(ctx, http.StatusBadRequest, msg)
+		}
+		logger.LogErr(serr.Wrap(err, "failed to rename subcategory"), "database error",
+			"category_id", id, "notes_changed", changed)
+		return writeError(ctx, http.StatusInternalServerError, "failed to rename subcategory")
+	}
+
+	logger.Info("Subcategory renamed", "category_id", id, "from", req.From, "to", req.To, "notes_changed", changed)
+	return writeSuccess(ctx, http.StatusOK, map[string]interface{}{
+		"category":      category.ToOutput(),
+		"notes_changed": changed,
+	})
+}
+
 // DeleteCategory handles DELETE /api/v1/categories/:id
 // Deletes a category permanently, scoped to the authenticated user.
 func DeleteCategory(ctx rweb.Context) error {

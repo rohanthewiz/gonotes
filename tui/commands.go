@@ -419,6 +419,88 @@ func createCategoryCmd(st Store, name string, userGUID string) tea.Cmd {
 	}
 }
 
+type categoryRenamedMsg struct {
+	name string
+	err  error
+}
+
+// renameCategoryCmd renames a category, refusing a name another category
+// already has. Names aren't unique in the schema, but everything that files
+// by name (the note form, gn-clip -c, Markdown import) takes the first match,
+// so a second "Work" would quietly split notes between two categories. The
+// check is case-insensitive for the same reason: the web form matches names
+// that way. A case-only rename of the same category ("work" → "Work") is
+// allowed.
+func renameCategoryCmd(st Store, cat models.Category, name, userGUID string) tea.Cmd {
+	return func() tea.Msg {
+		cats, err := st.ListCategories(userGUID)
+		if err != nil {
+			return categoryRenamedMsg{err: err}
+		}
+		for _, c := range cats {
+			if c.ID != cat.ID && strings.EqualFold(c.Name, name) {
+				return categoryRenamedMsg{err: serr.New("a category named \"" + c.Name + "\" already exists")}
+			}
+		}
+		_, err = st.RenameCategory(cat, name, userGUID)
+		return categoryRenamedMsg{name: name, err: err}
+	}
+}
+
+// subcategoryRenamedMsg carries a finished subcategory rename back to the
+// subcategory screen: the category as the store wrote it, the names (so a
+// toggled selection can follow the rename), and how many notes moved.
+type subcategoryRenamedMsg struct {
+	cat      *models.Category
+	from, to string
+	notes    int
+	err      error
+}
+
+func renameSubcategoryCmd(st Store, categoryID int64, from, to, userGUID string) tea.Cmd {
+	return func() tea.Msg {
+		cat, n, err := st.RenameSubcategory(categoryID, from, to, userGUID)
+		return subcategoryRenamedMsg{cat: cat, from: from, to: to, notes: n, err: err}
+	}
+}
+
+// subcategoryCountsMsg carries notes-per-subcategory for one category. The id
+// rides along so a late answer can't be applied to a different category's
+// screen.
+type subcategoryCountsMsg struct {
+	categoryID int64
+	counts     map[string]int
+	err        error
+}
+
+func subcategoryCountsCmd(st Store, categoryID int64, userGUID string) tea.Cmd {
+	return func() tea.Msg {
+		counts, err := st.SubcategoryNoteCounts(categoryID, userGUID)
+		return subcategoryCountsMsg{categoryID: categoryID, counts: counts, err: err}
+	}
+}
+
+// countSubcategoryNotes tallies, per subcategory name, the notes whose link to
+// categoryID selects it. Shared by both stores (and the test fake) so they
+// can't count differently. A note counts once per name even if its selection
+// somehow repeats it.
+func countSubcategoryNotes(mappings []models.NoteCategoryMapping, categoryID int64) map[string]int {
+	counts := map[string]int{}
+	for _, m := range mappings {
+		if m.CategoryID != categoryID {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, sub := range m.SelectedSubcategories {
+			if !seen[sub] {
+				seen[sub] = true
+				counts[sub]++
+			}
+		}
+	}
+	return counts
+}
+
 type categoryDeletedMsg struct{ err error }
 
 func deleteCategoryCmd(st Store, id int64, userGUID string) tea.Cmd {

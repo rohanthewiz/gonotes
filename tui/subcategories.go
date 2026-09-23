@@ -2,6 +2,8 @@ package tui
 
 import (
 	"slices"
+	"strconv"
+	"strings"
 
 	"gonotes/models"
 
@@ -52,14 +54,23 @@ type subcategoriesScreen struct {
 	// clicks turns two clicks on one row into "filter by this subcategory",
 	// matching what enter does. See mouse.go.
 	clicks clickTracker
+
+	// counts is notes per subcategory name, from subcategoryCountsCmd; nil
+	// until the first load lands. Reloaded after a rename (which moves notes)
+	// but not after add/remove, which change only the definition.
+	counts map[string]int
 }
 
 // subItem is one subcategory row. It carries the toggle state rather than
 // looking it up, because list.Item values are what the widget renders from —
 // there is no hook for "ask the screen whether this row is selected".
+//
+// count is how many notes are filed under it, or -1 while unknown (not loaded
+// yet, or the load failed). Unknown shows nothing rather than a guess.
 type subItem struct {
-	name string
-	on   bool
+	name  string
+	on    bool
+	count int
 }
 
 // Title marks a toggled row with a checkbox. The marker is text, not color: the
@@ -73,14 +84,27 @@ func (i subItem) Title() string {
 	return "[ ] " + i.name
 }
 
-// Description marks membership in the filter being built and otherwise says
-// nothing. The keys are in the footer already; repeating "space selects" on
-// every row would be three lines of instruction for three rows of content.
+// Description gives the row's note count and marks membership in the filter
+// being built. The keys are in the footer already; repeating "space selects"
+// on every row would be three lines of instruction for three rows of content.
+//
+// The count says whether a subcategory is worth filtering by (or safe to
+// remove) before the user commits to either.
 func (i subItem) Description() string {
-	if i.on {
-		return dimStyle.Render("in the filter")
+	var parts []string
+	switch {
+	case i.count == 1:
+		parts = append(parts, "1 note")
+	case i.count >= 0:
+		parts = append(parts, strconv.Itoa(i.count)+" notes")
 	}
-	return ""
+	if i.on {
+		parts = append(parts, "in the filter")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return dimStyle.Render(strings.Join(parts, " · "))
 }
 
 func (i subItem) FilterValue() string { return i.name }
@@ -121,7 +145,11 @@ func (s *subcategoriesScreen) restyle() {
 
 func (s *subcategoriesScreen) Init() tea.Cmd {
 	s.list.SetSize(s.sess.width, s.sess.height)
-	return s.rebuild()
+	return tea.Batch(s.rebuild(), s.loadCounts())
+}
+
+func (s *subcategoriesScreen) loadCounts() tea.Cmd {
+	return subcategoryCountsCmd(s.sess.store, s.cat.ID, s.sess.user.GUID)
 }
 
 // takingText: the same fuzzy-filter condition as the other list screens. See
@@ -143,7 +171,11 @@ func (s *subcategoriesScreen) rebuild() tea.Cmd {
 	subs := s.subcategories()
 	items := make([]list.Item, 0, len(subs))
 	for _, name := range subs {
-		items = append(items, subItem{name: name, on: slices.Contains(s.selected, name)})
+		count := -1
+		if s.counts != nil {
+			count = s.counts[name] // absent from the map = no notes = 0
+		}
+		items = append(items, subItem{name: name, on: slices.Contains(s.selected, name), count: count})
 	}
 	return s.list.SetItems(items)
 }
@@ -251,6 +283,47 @@ func (s *subcategoriesScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		s.syncTitle()
 		return s, tea.Batch(s.rebuild(), status("Subcategories updated"))
 
+	case subcategoryCountsMsg:
+		// A failed count is not worth a status line: the rows still work,
+		// they just show no numbers.
+		if msg.err != nil || msg.categoryID != s.cat.ID {
+			return s, nil
+		}
+		s.counts = msg.counts
+		return s, s.rebuild()
+
+	case subcategoryRenamedMsg:
+		if msg.err != nil {
+			return s, statusErr(msg.err, "Failed to rename subcategory")
+		}
+		if msg.cat != nil {
+			s.cat = *msg.cat
+		}
+		s.dirty = true
+		// A toggled subcategory follows its rename, so the filter being built
+		// still means what it meant. On a merge the new name may already be
+		// toggled; it is kept once.
+		renamed := []string{}
+		for _, name := range s.selected {
+			if name == msg.from {
+				name = msg.to
+			}
+			if !slices.Contains(renamed, name) {
+				renamed = append(renamed, name)
+			}
+		}
+		s.selected = renamed
+		s.syncTitle()
+		text := "Renamed " + msg.from + " → " + msg.to
+		switch msg.notes {
+		case 0:
+		case 1:
+			text += " (1 note refiled)"
+		default:
+			text += " (" + strconv.Itoa(msg.notes) + " notes refiled)"
+		}
+		return s, tea.Batch(s.rebuild(), s.loadCounts(), status(text))
+
 	case tea.MouseWheelMsg:
 		wheelList(&s.list, msg)
 		return s, nil
@@ -301,6 +374,23 @@ func (s *subcategoriesScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			return s, push(newPromptScreen(s.sess,
 				"New subcategory of "+s.cat.Name,
 				func(name string) tea.Cmd { return s.addSubcategory(name) }))
+
+		case key.Matches(msg, keys.Rename):
+			// Unlike d, a rename reaches the notes: every note filed under the
+			// old name is refiled under the new one (models.RenameSubcategory).
+			// The prompt says so because that is the difference from removing
+			// one and adding another.
+			if name := s.highlighted(); name != "" {
+				catID := s.cat.ID
+				return s, push(newPromptScreen(s.sess,
+					"Rename \""+name+"\" (notes filed under it follow)",
+					func(to string) tea.Cmd {
+						if to == name {
+							return nil
+						}
+						return renameSubcategoryCmd(s.sess.store, catID, name, to, s.sess.user.GUID)
+					}).withValue(name))
+			}
 
 		case key.Matches(msg, keys.Delete):
 			if name := s.highlighted(); name != "" {

@@ -506,7 +506,7 @@ notes list ──"c"──► categories ──"s"──► subcategories
 
 The active filter appears in the list title — `GoNotes — Work/backend` — and `esc` backs out one layer at a time: the search first, then the subcategory, then the category. Once there is nothing left to back out of, `esc` quits, the same as `q`. A note form with unsaved edits is never one of those layers — `esc` there stops and offers to save first.
 
-**Editing the list a category offers.** On the subcategories screen, `n` adds a name and `d` removes one. That list is a palette rather than an assignment: removing a name does not refile anything, so notes already filed under it keep it until they are next edited.
+**Editing the list a category offers.** On the subcategories screen, `n` adds a name and `d` removes one. That list is a palette rather than an assignment: removing a name does not refile anything, so notes already filed under it keep it until they are next edited. Renaming is different: `r` renames a subcategory everywhere, so every note filed under `api` is refiled under the new name (renaming onto an existing name merges the two). Each row shows how many notes are filed under it. `r` on the categories screen renames a category; notes follow it, and a name another category already has is refused.
 
 ### Editing the same note from two places
 
@@ -594,10 +594,10 @@ The same rules apply to anything else writing through the API — the server, no
 | | `esc` | Dismiss the completions, then the field list, then the screen |
 | Categories | `enter` | Filter notes by the selected category |
 | | `s` | Open that category's subcategories |
-| | `n` / `d` | New / delete category |
+| | `n` / `r` / `d` | New / rename / delete category |
 | Subcategories | `enter` | Filter notes by the selected subcategories |
 | | `space` | Toggle a subcategory into the filter (several = notes carrying all of them) |
-| | `n` / `d` | Add / remove a subcategory of this category |
+| | `n` / `r` / `d` | Add / rename / remove a subcategory of this category (rename refiles its notes) |
 
 Notes:
 - The bottom line says `⟲ 12 changes not synced, last synced 3 hours ago — S to sync` once a sync is due, and keeps saying it until you sync or defer. See [When does a sync actually happen?](#when-does-a-sync-actually-happen).

@@ -147,7 +147,7 @@ func TestHelpSetsAreHandled(t *testing.T) {
 			screen: "categories",
 			help:   keys.categoriesHelp(),
 			handled: []key.Binding{
-				keys.Filter, keys.Subcats, keys.AllNotes, keys.New, keys.Delete,
+				keys.Filter, keys.Subcats, keys.AllNotes, keys.New, keys.Rename, keys.Delete,
 				keys.Back, keys.Quit,
 			},
 		},
@@ -155,7 +155,7 @@ func TestHelpSetsAreHandled(t *testing.T) {
 			screen: "subcategories",
 			help:   keys.subcategoriesHelp(),
 			handled: []key.Binding{
-				keys.Filter, keys.SelectSub, keys.New, keys.Delete,
+				keys.Filter, keys.SelectSub, keys.New, keys.Rename, keys.Delete,
 				keys.Back, keys.Quit,
 			},
 		},

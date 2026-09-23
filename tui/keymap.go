@@ -53,6 +53,7 @@ type keyMap struct {
 	Filter   key.Binding // enter: narrow the note list to this category
 	AllNotes key.Binding // clear the category filter
 	Subcats  key.Binding // open the highlighted category's subcategories
+	Rename   key.Binding // rename the highlighted category or subcategory
 	// SelectSub toggles a subcategory into the filter being built. It shares the
 	// space bar with TogglePrivate, which is safe because the two screens are
 	// disjoint — but they stay separate bindings so each footer can name the
@@ -239,6 +240,13 @@ func defaultKeyMap() keyMap {
 		SelectSub: key.NewBinding(
 			key.WithKeys("space"),
 			key.WithHelp("space", "select"),
+		),
+		// "r" is free on both category screens, and is the mnemonic. The
+		// locked-note dialog also uses r (read-only), which is safe because the
+		// screens never share a keypress.
+		Rename: key.NewBinding(
+			key.WithKeys("r"),
+			key.WithHelp("r", "rename"),
 		),
 
 		// ctrl+g rather than a bare letter: browse spends every unmodified key
@@ -507,11 +515,11 @@ func (k keyMap) queryHelp() []key.Binding {
 }
 
 func (k keyMap) categoriesHelp() []key.Binding {
-	return []key.Binding{k.Filter, k.Subcats, k.AllNotes, k.New, k.Delete, k.Back}
+	return []key.Binding{k.Filter, k.Subcats, k.AllNotes, k.New, k.Rename, k.Delete, k.Back}
 }
 
 func (k keyMap) subcategoriesHelp() []key.Binding {
-	return []key.Binding{k.Filter, k.SelectSub, k.New, k.Delete, k.Back}
+	return []key.Binding{k.Filter, k.SelectSub, k.New, k.Rename, k.Delete, k.Back}
 }
 
 func (k keyMap) agentPickerHelp() []key.Binding {

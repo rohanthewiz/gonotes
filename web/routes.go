@@ -92,11 +92,12 @@ func setupRoutes(s *rweb.Server) {
 	s.Delete("/api/v1/note-locks", api.ReleaseSessionNoteLocks) // Bulk: ?session_id=… drops that session's leases
 
 	// Categories CRUD endpoints following RESTful conventions
-	s.Post("/api/v1/categories", api.CreateCategory)       // Create a new category
-	s.Get("/api/v1/categories", api.ListCategories)        // List all categories (with pagination)
-	s.Get("/api/v1/categories/:id", api.GetCategory)       // Get a single category by ID
-	s.Put("/api/v1/categories/:id", api.UpdateCategory)    // Update a category by ID
-	s.Delete("/api/v1/categories/:id", api.DeleteCategory) // Delete a category by ID
+	s.Post("/api/v1/categories", api.CreateCategory)                             // Create a new category
+	s.Get("/api/v1/categories", api.ListCategories)                              // List all categories (with pagination)
+	s.Get("/api/v1/categories/:id", api.GetCategory)                             // Get a single category by ID
+	s.Put("/api/v1/categories/:id", api.UpdateCategory)                          // Update a category by ID
+	s.Delete("/api/v1/categories/:id", api.DeleteCategory)                       // Delete a category by ID
+	s.Post("/api/v1/categories/:id/subcategories/rename", api.RenameSubcategory) // Rename a subcategory in the definition and every note filed under it
 
 	// Note-Category relationship endpoints
 	s.Post("/api/v1/notes/:id/categories/:category_id", api.AddCategoryToNote)        // Add a category to a note

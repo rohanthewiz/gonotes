@@ -155,6 +155,14 @@ func newPromptScreen(sess *session, title string, onSubmit func(string) tea.Cmd)
 	return s
 }
 
+// withValue starts the input holding text, cursor at the end: a rename opens
+// on the current name, so fixing one letter is one keystroke, not a retype.
+func (s *promptScreen) withValue(text string) *promptScreen {
+	s.input.SetValue(text)
+	s.input.CursorEnd()
+	return s
+}
+
 // restyle re-applies the palette to the input. See the note in form.go — the
 // widget copied a hardcoded dark style set in at construction.
 func (s *promptScreen) restyle() {

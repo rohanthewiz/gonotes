@@ -476,6 +476,7 @@ POST /api/v1/categories                              {"name":"Work"}
 POST /api/v1/notes/<note_id>/categories/<cat_id>     {"subcategories":["backend"]}
 PUT  /api/v1/notes/<note_id>/categories              {"categories":[{"category_id":1,"subcategories":["backend"]}]}   # replace the whole set in one call
 DELETE /api/v1/notes/<note_id>/categories/<cat_id>                        # unlink one (404 for a note you don't own)
+POST /api/v1/categories/<cat_id>/subcategories/rename {"from":"api","to":"http"}   # definition + every filed note; merges onto an existing name
 PUT  /api/v1/notes/<note_id>/privacy                 {"is_private":true}   # moves the note between databases, nothing else changes
 ```
 

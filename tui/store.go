@@ -130,6 +130,22 @@ type Store interface {
 	// hand — they had to, to know its current subcategories.
 	SetCategorySubcategories(cat models.Category, subcategories []string, userGUID string) (*models.Category, error)
 
+	// RenameCategory changes a category's name, carrying its description and
+	// subcategories through the whole-object update (see
+	// SetCategorySubcategories). Notes are linked by id, so they follow it.
+	RenameCategory(cat models.Category, name, userGUID string) (*models.Category, error)
+
+	// RenameSubcategory renames one subcategory in the category's definition
+	// AND in every note filed under it (models.RenameSubcategory), returning the
+	// updated category and how many notes were rewritten. Renaming onto an
+	// existing subcategory merges the two.
+	RenameSubcategory(categoryID int64, from, to, userGUID string) (*models.Category, int, error)
+
+	// SubcategoryNoteCounts counts, per subcategory name, how many of the
+	// user's notes in a category are filed under it. One read for the whole
+	// screen (the note-category mappings), not one query per row.
+	SubcategoryNoteCounts(categoryID int64, userGUID string) (map[string]int, error)
+
 	// GetCategoryByName returns (nil, nil) when no category has that name.
 	// The form's category sync uses this to decide create-or-link.
 	GetCategoryByName(name, userGUID string) (*models.Category, error)

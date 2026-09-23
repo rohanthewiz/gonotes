@@ -673,3 +673,101 @@ func browseTitles(t *testing.T, s *browseScreen, cmd tea.Cmd) []string {
 	slices.Sort(titles)
 	return titles
 }
+
+// TestSubcategoryScreenRenameRefilesNotes: r renames a subcategory in the
+// definition and in the notes filed under it, and a toggled selection follows
+// the new name.
+func TestSubcategoryScreenRenameRefilesNotes(t *testing.T) {
+	sess, fs, user := subcatSession(t)
+	cat := catWithSubs(t, fs, "Work", []string{"api", "ops"}, user.GUID)
+	note, err := fs.CreateNote(models.NoteInput{Title: "Filed"}, user.GUID)
+	if err != nil {
+		t.Fatalf("create note: %v", err)
+	}
+	if err := fs.AddCategoryToNoteWithSubcategories(note.ID, cat.ID, []string{"api"}, user.GUID); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+
+	s := newSubcategoriesScreen(sess, cat)
+	drainInit(s)
+	s.selected = []string{"api"}
+
+	msg := renameSubcategoryCmd(fs, cat.ID, "api", "http", user.GUID)()
+	renamed, ok := msg.(subcategoryRenamedMsg)
+	if !ok || renamed.err != nil {
+		t.Fatalf("rename produced %#v", msg)
+	}
+	next, cmd := s.Update(renamed)
+	s = next.(*subcategoriesScreen)
+
+	if got := s.subcategories(); !slices.Equal(got, []string{"http", "ops"}) {
+		t.Errorf("the screen shows %v, want [http ops]", got)
+	}
+	if !slices.Equal(s.selected, []string{"http"}) {
+		t.Errorf("the toggled selection is %v, want it to follow the rename to [http]", s.selected)
+	}
+	if got := noteSpecs(t, fs, note.ID, user.GUID); got != "Work/http" {
+		t.Errorf("the note is filed as %q, want Work/http", got)
+	}
+	var text string
+	for _, m := range drainSequence(cmd) {
+		if sn, ok := m.(statusNote); ok {
+			text = sn.text
+		}
+	}
+	if !strings.Contains(text, "1 note refiled") {
+		t.Errorf("status = %q, want it to count the refiled note", text)
+	}
+}
+
+// renameCategoryCmd refuses a name another category already has, compared
+// case-insensitively, but allows a case-only rename of the same category.
+func TestRenameCategoryRefusesATakenName(t *testing.T) {
+	_, fs, user := subcatSession(t)
+	catWithSubs(t, fs, "Work", nil, user.GUID)
+	home := catWithSubs(t, fs, "home", nil, user.GUID)
+
+	if msg := renameCategoryCmd(fs, home, "work", user.GUID)().(categoryRenamedMsg); msg.err == nil {
+		t.Error("renaming onto another category's name (different case) succeeded")
+	}
+	if msg := renameCategoryCmd(fs, home, "Home", user.GUID)().(categoryRenamedMsg); msg.err != nil {
+		t.Errorf("a case-only rename of the same category was refused: %v", msg.err)
+	}
+	if got, _ := fs.GetCategoryByName("Home", user.GUID); got == nil || got.ID != home.ID {
+		t.Errorf("after renaming, Home resolves to %+v", got)
+	}
+}
+
+// The subcategory screen shows how many notes each row holds once the counts
+// load, and shows nothing (not "0 notes") before then.
+func TestSubcategoryScreenShowsNoteCounts(t *testing.T) {
+	sess, fs, user := subcatSession(t)
+	cat := catWithSubs(t, fs, "Work", []string{"api", "ops", "idle"}, user.GUID)
+	for _, subs := range [][]string{{"api"}, {"api", "ops"}} {
+		n, _ := fs.CreateNote(models.NoteInput{Title: "n"}, user.GUID)
+		fs.AddCategoryToNoteWithSubcategories(n.ID, cat.ID, subs, user.GUID)
+	}
+
+	s := newSubcategoriesScreen(sess, cat)
+	s.rebuild()
+	desc := func() map[string]string {
+		out := map[string]string{}
+		for _, it := range s.list.Items() {
+			i := it.(subItem)
+			out[i.name] = i.Description()
+		}
+		return out
+	}
+	if got := desc()["api"]; got != "" {
+		t.Errorf("before the counts load, api's row says %q, want nothing", got)
+	}
+
+	next, _ := s.Update(subcategoryCountsCmd(fs, cat.ID, user.GUID)())
+	s = next.(*subcategoriesScreen)
+	got := desc()
+	for name, want := range map[string]string{"api": "2 notes", "ops": "1 note", "idle": "0 notes"} {
+		if !strings.Contains(got[name], want) {
+			t.Errorf("%s row says %q, want %q", name, got[name], want)
+		}
+	}
+}

@@ -12,8 +12,7 @@ import (
 
 // categoriesScreen lists the user's categories. Its primary job is picking a
 // category filter for the notes list (enter), with light management on the
-// side (n = new, d = delete). Renames stay in the web UI — the TUI optimizes
-// for the frequent operations.
+// side (n = new, r = rename, d = delete).
 //
 // Subcategories are one level down, behind "s": the row shows which ones a
 // category defines, and subcategoriesScreen is where they are picked as a
@@ -133,6 +132,12 @@ func (s *categoriesScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		}
 		return s, tea.Batch(s.refresh(), status("Category created"))
 
+	case categoryRenamedMsg:
+		if msg.err != nil {
+			return s, statusErr(msg.err, "Failed to rename category")
+		}
+		return s, tea.Batch(s.refresh(), status("Category renamed to "+msg.name))
+
 	case categoryDeletedMsg:
 		if msg.err != nil {
 			return s, statusErr(msg.err, "Failed to delete category")
@@ -193,6 +198,21 @@ func (s *categoriesScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				func(name string) tea.Cmd {
 					return createCategoryCmd(s.sess.store, name, s.sess.user.GUID)
 				}))
+
+		case key.Matches(msg, keys.Rename):
+			// The category travels by value: the prompt may outlive a refresh
+			// of this list, and the rename must apply to the row that was
+			// highlighted when r was pressed.
+			if c := s.selected(); c != nil {
+				cat := *c
+				return s, push(newPromptScreen(s.sess, "Rename category \""+cat.Name+"\"",
+					func(name string) tea.Cmd {
+						if name == cat.Name {
+							return nil
+						}
+						return renameCategoryCmd(s.sess.store, cat, name, s.sess.user.GUID)
+					}).withValue(cat.Name))
+			}
 
 		case key.Matches(msg, keys.Delete):
 			if c := s.selected(); c != nil {

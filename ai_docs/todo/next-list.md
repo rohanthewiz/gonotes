@@ -31,17 +31,9 @@ with every item's premise re-checked against the code at `e0c2a39`.
 - Open and Roadmap stay in ID order. Edit an item's text in place when its
   premise changes; keep its ID and `raised`.
 
-**Next ID:** N-047
+**Next ID:** N-048
 
 ## Open
-
-- **N-001** · raised `2026-0710-1656-tui-implementation` · value low
-  Category and subcategory **rename** in the TUI. `tui/categories.go:15` still
-  says renames stay in the web UI; the subcategory screen only adds and
-  removes. A subcategory rename would need a models-level operation that
-  rewrites every note's selection, which doesn't exist yet. Re-raised in
-  `2026-0817-1046-tui-subcategory-support` (subcategory support itself landed
-  there).
 
 - **N-002** · raised `2026-0722-1558-migrate-duckdb-to-bytdb` · value low
   Sequential fan-outs remain in low-frequency paths: `GetSyncStatus` counts,
@@ -71,10 +63,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
 - **N-012** · raised `2026-0817-1046-tui-subcategory-support` · value low
   Toggling several subcategories means AND ("all of them"), in both UIs.
   There's no OR, and no models function for one.
-
-- **N-013** · raised `2026-0817-1046-tui-subcategory-support` · value low
-  The TUI subcategory screen shows no note counts per row (each would cost a
-  query).
 
 - **N-015** · raised `2026-0817-1420-gonotes-note-locks` · value low
   cats-mobile parity. The same app came up three times: unaware of note locks
@@ -130,6 +118,12 @@ with every item's premise re-checked against the code at `e0c2a39`.
 - **N-034** · raised `2026-0909-1858-advanced-sql-search` · value low
   The web advanced-search query bar isn't wired to the note-link autocomplete
   or to saved/named queries. Query history is per browser (`localStorage`).
+
+- **N-047** · raised `2026-0923-1133-next-list-batches` · value low
+  The web category manager can't rename a subcategory. The TUI's `r` and
+  `POST /api/v1/categories/:id/subcategories/rename` exist, so this needs only
+  a UI. Until then, renaming by removing one and adding another in the web UI
+  leaves notes filed under the old name.
 
 ## Roadmap
 
@@ -194,6 +188,10 @@ session doc marked an item as deferred, so move items here from Open by hand.
   `ctrl+g` capture filed notes with no category. Its form always had an editable Categories field; what was missing was a default. Done: the field is preset to the list's category filter (`Work/backend`), and left empty when the list is unfiltered or a query is in force. A preset alone doesn't make the form dirty.
 - **N-019** · raised `2026-0818-1739-duplicate-note-dialog` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
   The TUI duplicate dialog showed nothing while the copy was made. Done: `confirm` sequences pop → "Duplicating…" → the create, and the result's status replaces it.
+- **N-001** · raised `2026-0710-1656-tui-implementation` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+  Category and subcategory rename in the TUI. Done: `r` on both screens. A category rename is the whole-object update and refuses a name another category has (case-insensitive). A subcategory rename goes through the new `models.RenameSubcategory` (links first, then the definition, safe to re-run, merges onto an existing name) and `POST /api/v1/categories/:id/subcategories/rename`, so notes filed under the old name follow it. The web UI has no subcategory rename yet.
+- **N-013** · raised `2026-0817-1046-tui-subcategory-support` · closed 2026-09-23, `2026-0923-1133-next-list-batches` —
+  The TUI subcategory screen showed no note counts. Done: one `SubcategoryNoteCounts` read per screen (the bulk note-category mappings, counted client-side, not a query per row), reloaded after a rename. Rows show nothing until the counts load.
 
 Closures before this file was seeded are recorded in the session docs
 themselves. These were found already done while seeding:

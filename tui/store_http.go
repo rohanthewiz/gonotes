@@ -981,6 +981,51 @@ func (s *httpStore) SetCategorySubcategories(cat models.Category, subcategories 
 	return &updated, nil
 }
 
+// RenameCategory is the same whole-object PUT as SetCategorySubcategories,
+// with the name changed and the subcategories carried through.
+func (s *httpStore) RenameCategory(cat models.Category, name, _ string) (*models.Category, error) {
+	body := models.CategoryInput{Name: name, Subcategories: cat.SubcategoryList()}
+	if cat.Description.Valid {
+		desc := cat.Description.String
+		body.Description = &desc
+	}
+	var out models.CategoryOutput
+	if err := s.request(http.MethodPut,
+		"/api/v1/categories/"+strconv.FormatInt(cat.ID, 10), body, &out); err != nil {
+		return nil, serr.Wrap(err, "failed to rename category")
+	}
+	updated := categoryFromOutput(out)
+	return &updated, nil
+}
+
+// RenameSubcategory goes through the server's rename endpoint rather than a
+// PUT of the definition: only the server can rewrite the selections of notes
+// this client never loaded.
+func (s *httpStore) RenameSubcategory(categoryID int64, from, to, _ string) (*models.Category, int, error) {
+	var out struct {
+		Category     models.CategoryOutput `json:"category"`
+		NotesChanged int                   `json:"notes_changed"`
+	}
+	err := s.request(http.MethodPost,
+		"/api/v1/categories/"+strconv.FormatInt(categoryID, 10)+"/subcategories/rename",
+		map[string]string{"from": from, "to": to}, &out)
+	if err != nil {
+		return nil, 0, serr.Wrap(err, "failed to rename subcategory")
+	}
+	updated := categoryFromOutput(out.Category)
+	return &updated, out.NotesChanged, nil
+}
+
+// SubcategoryNoteCounts reads the bulk mappings the web UI's category filter
+// uses and counts client-side: one request, whatever the number of rows.
+func (s *httpStore) SubcategoryNoteCounts(categoryID int64, _ string) (map[string]int, error) {
+	var mappings []models.NoteCategoryMapping
+	if err := s.request(http.MethodGet, "/api/v1/note-category-mappings", nil, &mappings); err != nil {
+		return nil, serr.Wrap(err, "failed to load note category mappings")
+	}
+	return countSubcategoryNotes(mappings, categoryID), nil
+}
+
 // GetCategoryByName is resolved client-side. The API has no lookup-by-name
 // endpoint, and adding one for this would be the wrong trade: category lists
 // are short, the call already happens once per save, and a client-side scan

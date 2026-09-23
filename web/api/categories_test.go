@@ -1036,3 +1036,78 @@ func TestRemoveCategoryFromAnotherUsersNote(t *testing.T) {
 		t.Errorf("the refused PUT still changed the selection to %v", details[0].SelectedSubcategories)
 	}
 }
+
+// TestRenameSubcategoryAPI covers POST /categories/:id/subcategories/rename:
+// the definition and a filed note follow the rename, and the refusals map to
+// 400 and 404.
+func TestRenameSubcategoryAPI(t *testing.T) {
+	server, cleanup := setupCategoryTestServer(t)
+	defer cleanup()
+	server.registerAndLogin(t)
+
+	decodeID := func(resp *http.Response) int64 {
+		t.Helper()
+		var out api.APIResponse
+		json.NewDecoder(resp.Body).Decode(&out)
+		resp.Body.Close()
+		return int64(out.Data.(map[string]interface{})["id"].(float64))
+	}
+
+	body, _ := json.Marshal(models.NoteInput{GUID: "rename-sub-note", Title: "Filed"})
+	resp, err := server.doAuthPost(server.baseURL+"/api/v1/notes", body)
+	if err != nil {
+		t.Fatalf("create note: %v", err)
+	}
+	noteID := decodeID(resp)
+
+	body, _ = json.Marshal(models.CategoryInput{Name: "Work", Subcategories: []string{"api", "ops"}})
+	resp, err = server.doAuthPost(server.baseURL+"/api/v1/categories", body)
+	if err != nil {
+		t.Fatalf("create category: %v", err)
+	}
+	catID := decodeID(resp)
+
+	body, _ = json.Marshal(map[string][]string{"subcategories": {"api"}})
+	resp, err = server.doAuthPost(fmt.Sprintf("%s/api/v1/notes/%d/categories/%d", server.baseURL, noteID, catID), body)
+	if err != nil || resp.StatusCode != http.StatusCreated {
+		t.Fatalf("link: %v (status %v)", err, resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	rename := func(from, to string) (int, map[string]interface{}) {
+		t.Helper()
+		b, _ := json.Marshal(map[string]string{"from": from, "to": to})
+		resp, err := server.doAuthPost(fmt.Sprintf("%s/api/v1/categories/%d/subcategories/rename", server.baseURL, catID), b)
+		if err != nil {
+			t.Fatalf("rename request: %v", err)
+		}
+		defer resp.Body.Close()
+		var out api.APIResponse
+		json.NewDecoder(resp.Body).Decode(&out)
+		data, _ := out.Data.(map[string]interface{})
+		return resp.StatusCode, data
+	}
+
+	status, data := rename("api", "http")
+	if status != http.StatusOK {
+		t.Fatalf("rename returned %d", status)
+	}
+	if n := data["notes_changed"].(float64); n != 1 {
+		t.Errorf("notes_changed = %v, want 1", n)
+	}
+	subs := data["category"].(map[string]interface{})["subcategories"].([]interface{})
+	if len(subs) != 2 || subs[0] != "http" || subs[1] != "ops" {
+		t.Errorf("definition = %v, want [http ops]", subs)
+	}
+	details, _ := models.GetNoteCategoryDetails(noteID, "")
+	if len(details) != 1 || len(details[0].SelectedSubcategories) != 1 || details[0].SelectedSubcategories[0] != "http" {
+		t.Errorf("note selection = %+v, want [http]", details)
+	}
+
+	if status, _ := rename("missing", "x"); status != http.StatusNotFound {
+		t.Errorf("renaming a missing subcategory returned %d, want 404", status)
+	}
+	if status, _ := rename("http", "a/b"); status != http.StatusBadRequest {
+		t.Errorf("renaming to a name with a slash returned %d, want 400", status)
+	}
+}
