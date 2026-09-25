@@ -195,6 +195,10 @@ type appModel struct {
 	statusText string
 	statusErr  bool
 	statusOK   bool
+
+	// heldIntake is notes delivered by another program before anyone logged
+	// in, opened by loggedInMsg. See intake.go.
+	heldIntake []intakeNote
 }
 
 // newAppModel builds the root model. Its signature deliberately did not change
@@ -328,6 +332,19 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case captureDoneMsg:
 		return m, m.captureDone(msg)
 
+	// A paste is checked for a note envelope before any screen sees it, so a
+	// note delivered by another program (cats-todo's "Send to notes") opens as
+	// its own form instead of landing in whichever field has focus. Anything
+	// else falls through to the active screen, as every paste always has.
+	case tea.PasteMsg:
+		note, isEnvelope, err := parseIntake(msg.Content)
+		if isEnvelope {
+			if err != nil {
+				return m, statusErr(err, "Note not opened")
+			}
+			return m.intakePaste(note)
+		}
+
 	// summarizeDoneMsg is delivered at the root for the same reason: a model
 	// call takes seconds and the user is free to move while it runs. See the
 	// rules at the top of summarize.go.
@@ -371,6 +388,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sess.sync.polling = true
 			cmds = append(cmds, syncStatusCmd(m.sess.store), syncTickCmd(m.sess.sync.pollInterval()))
 		}
+		// Notes that arrived while the login screen was up open now, over the
+		// browser, in the order they came (the last one ends up on top).
+		for _, note := range m.heldIntake {
+			cmds = append(cmds, m.openIntake(note))
+		}
+		m.heldIntake = nil
 		return m, tea.Batch(cmds...)
 
 	// ---- Sync ------------------------------------------------------------

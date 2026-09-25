@@ -553,6 +553,19 @@ The web UI takes part too. **Edit** takes the lease before the form opens and re
 
 The same rules apply to anything else writing through the API — the server, not the client, is what enforces them. `X-GoNotes-Lock: <token>` carries a lease on a write; `expected_version` in the body opts a write into the version check. A write that names neither still works, which is what keeps `gn-clip.sh`, the Markdown importer, and sync running unchanged.
 
+### Notes sent from other programs
+
+Inside cats, another program can hand the TUI a finished note by pasting it into
+the GoNotes pane. cats-todo does this for prompts marked ℹ Info ("Send to
+notes"), and finds the pane by its `notes_mgr` plugin type, not by name. The
+paste is an envelope: a `<!-- cats-note v1 -->` first line, optional YAML
+frontmatter (`title`, `description`, `tags`, `categories`), then the markdown
+body. GoNotes catches it before any screen does and opens it as a new,
+**unsaved** note form over whatever you were doing (`ctrl+s` saves it, `esc`
+returns to where you were). A note that arrives before login opens once you log
+in. Any other paste goes to the focused field as before. The full contract is
+at the top of `tui/intake.go`.
+
 ### Keys
 
 | Screen | Key | Action |
