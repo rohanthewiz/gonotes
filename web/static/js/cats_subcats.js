@@ -201,6 +201,7 @@
       state.filters.categoryId = null;
       state.filters.categoryName = '';
       state.filters.subcategories = [];
+      state.filters.subcatMode = 'all';
       renderSubcategoryChips([]);
     } else {
       const categoryId = parseInt(categoryIdStr, 10);
@@ -208,6 +209,9 @@
       state.filters.categoryId = categoryId;
       state.filters.categoryName = cat ? cat.name : '';
       state.filters.subcategories = [];
+      // The mode resets with the chips: it describes how THESE toggles
+      // combine, and a new category starts with none toggled.
+      state.filters.subcatMode = 'all';
       // Render subcategory chips from the category definition
       const subcats = (cat && cat.subcategories) ? cat.subcategories : [];
       renderSubcategoryChips(subcats);
@@ -220,11 +224,26 @@
 
   // Render toggleable subcategory chips in the search bar.
   // Each chip toggles on/off to narrow results within the selected category.
+  //
+  // With two or more chips, a leading all/any switch says how toggled chips
+  // combine: "all" (AND, the default) or "any" (OR). It is left off for a
+  // single chip, where the two rules give the same answer and a control that
+  // changes nothing would only invite the question of what it does.
   function renderSubcategoryChips(subcategories) {
     const container = document.getElementById('search-subcats-container');
     if (!container) return;
 
     container.innerHTML = '';
+
+    if (subcategories.length > 1) {
+      const mode = document.createElement('button');
+      mode.type = 'button';
+      mode.id = 'subcat-mode-toggle';
+      mode.className = 'subcat-mode-toggle';
+      mode.onclick = () => window.app.toggleSubcategoryMode();
+      container.appendChild(mode);
+      syncSubcategoryModeToggle();
+    }
 
     subcategories.forEach(sub => {
       const chip = document.createElement('span');
@@ -234,6 +253,33 @@
       container.appendChild(chip);
     });
   }
+
+  // Label the all/any switch from state. Kept separate from the click handler
+  // so a re-render (category change, clear) and a click cannot disagree.
+  function syncSubcategoryModeToggle() {
+    const btn = document.getElementById('subcat-mode-toggle');
+    if (!btn) return;
+    const any = getState().filters.subcatMode === 'any';
+    // "all of" / "any of" rather than a bare "all" / "any": read left to right
+    // with the chips after it, it is a sentence ("any of backend api ops"),
+    // and a bare word could pass for one more subcategory name.
+    btn.textContent = any ? 'any of' : 'all of';
+    btn.classList.toggle('active', any);
+    btn.title = any
+      ? 'Showing notes with ANY selected subcategory — click for ALL'
+      : 'Showing notes with ALL selected subcategories — click for ANY';
+  }
+
+  // Flip how toggled subcategory chips combine: all (AND) ⇄ any (OR).
+  window.app.toggleSubcategoryMode = function() {
+    const state = getState();
+    state.filters.subcatMode = state.filters.subcatMode === 'any' ? 'all' : 'any';
+    syncSubcategoryModeToggle();
+
+    renderNoteList();
+    updateResultCount();
+    updateActiveFilters();
+  };
 
   // Toggle a subcategory chip on/off in the search bar filter
   window.app.toggleSubcategoryFilter = function(subcat) {

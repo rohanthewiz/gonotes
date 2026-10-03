@@ -526,7 +526,7 @@ The form prefills the field with precisely what is stored, so opening a note and
 ```
 
 - `enter` filters the note list to the whole category.
-- `s` drills into that category's subcategories. `space` toggles rows into the filter and `enter` applies it; the heading shows what is about to be applied (`filter: Work/backend/api`). Toggling more than one narrows to the notes carrying **all** of them — the same rule as the web UI's chips. With nothing toggled, `enter` filters by the highlighted row alone.
+- `s` drills into that category's subcategories. `space` toggles rows into the filter and `enter` applies it; the heading shows what is about to be applied (`filter: Work/backend/api`). Toggling more than one narrows to the notes carrying **all** of them — the same rule as the web UI's chips. `m` switches that to **any** of them and back; the heading then ends in `(any)`, and so does the list title once it is applied (`GoNotes — Work/backend/api (any)`). The web UI's chips have the same switch, an `all`/`any` button ahead of them, and the API takes it as `subcats_mode=any` on `/api/v1/notes?cat=…&subcats[]=…`. With nothing toggled, `enter` filters by the highlighted row alone.
 
 ```
 notes list ──"c"──► categories ──"s"──► subcategories

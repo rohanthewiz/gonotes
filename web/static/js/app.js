@@ -23,7 +23,8 @@
       regex: false,            // when true, search term is treated as a regular expression
       categoryId: null,        // selected category ID from search bar dropdown
       categoryName: '',        // selected category name (for display)
-      subcategories: [],       // selected subcategory chips (AND logic)
+      subcategories: [],       // selected subcategory chips
+      subcatMode: 'all',       // how the chips combine: 'all' (AND) or 'any' (OR)
       privacy: 'all',
       date: 'all',
       unsynced: false,
@@ -1474,18 +1475,21 @@
         return mappings.some(m => m.categoryId === catId);
       });
 
-      // Apply subcategory filter — AND logic: note must have ALL selected subcats
+      // Apply subcategory filter. 'all' (AND, the default): the note must have
+      // every selected subcat. 'any' (OR): at least one. Same two rules as
+      // models.GetNotesByCategorySubcategoryMatch on the server.
       if (state.filters.subcategories.length > 0) {
+        const wantAny = state.filters.subcatMode === 'any';
         notes = notes.filter(note => {
           const mappings = state.noteCategoryMap[note.id];
           if (!mappings) return false;
           // Find the mapping for the selected category
           const catMapping = mappings.find(m => m.categoryId === catId);
           if (!catMapping) return false;
-          // Check that every selected subcategory is present in the mapping
-          return state.filters.subcategories.every(
-            sub => catMapping.subcategories.includes(sub)
-          );
+          const has = sub => catMapping.subcategories.includes(sub);
+          return wantAny
+            ? state.filters.subcategories.some(has)
+            : state.filters.subcategories.every(has);
         });
       }
     }
@@ -1616,6 +1620,7 @@
     state.filters.categoryId = null;
     state.filters.categoryName = '';
     state.filters.subcategories = [];
+    state.filters.subcatMode = 'all';
 
     // Clear subcategory chips
     window.app._renderSubcategoryChips([]);
@@ -1684,6 +1689,7 @@
       categoryId: null,
       categoryName: '',
       subcategories: [],
+      subcatMode: 'all',
       privacy: 'all',
       date: 'all',
       unsynced: false,
@@ -2402,6 +2408,11 @@
       parts.push(`cat:"${state.filters.categoryName}"`);
       if (state.filters.subcategories.length > 0) {
         parts.push(`subcats:"${state.filters.subcategories.join(',')}"`);
+        // Only OR is spelled out, and only where it differs from AND: the
+        // query string has always meant AND, so it stays as it was otherwise.
+        if (state.filters.subcatMode === 'any' && state.filters.subcategories.length > 1) {
+          parts.push('match:any');
+        }
       }
     }
     if (state.filters.privacy !== 'all') {

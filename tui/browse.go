@@ -41,10 +41,15 @@ type browseScreen struct {
 	// catFilter is the active category filter; nil means "all notes".
 	catFilter *models.Category
 	// subFilter narrows catFilter to the notes carrying ALL of these
-	// subcategories. Only ever non-empty alongside catFilter, and cleared one
-	// step before it by esc — a subcategory is a refinement of a category, so
-	// backing out of it should land on the category rather than on everything.
+	// subcategories (or ANY of them — see subMatch). Only ever non-empty
+	// alongside catFilter, and cleared one step before it by esc — a
+	// subcategory is a refinement of a category, so backing out of it should
+	// land on the category rather than on everything.
 	subFilter []string
+	// subMatch is how subFilter's names combine. It travels with subFilter
+	// (set from the same message, cleared by the same esc) so a later pick of
+	// one subcategory can never inherit an OR left over from an earlier pick.
+	subMatch models.SubcategoryMatch
 
 	// queryFilter is the advanced-search query in force, or "" for none. It is
 	// a THIRD way of loading this list, alongside "all notes" and the category
@@ -325,6 +330,10 @@ func (s *browseScreen) Init() tea.Cmd {
 // notation ("Work/backend"), or "" when it isn't narrowed to a category. A
 // query outranks the category filter in reloadNotes, so while one is in force
 // there is no single place the list is "in", and this answers "".
+//
+// The spec ignores subMatch: filing a note under every subcategory of an OR
+// filter still puts it in the list (it carries at least one), so the same
+// spec serves both modes.
 func (s *browseScreen) filingSpec() string {
 	if s.queryFilter != "" || s.catFilter == nil {
 		return ""
@@ -351,7 +360,8 @@ func (s *browseScreen) title() string {
 	if s.catFilter != nil {
 		// The same notation the form field takes, so "Work/backend" in the title
 		// is a string the user could type back into a note to file it here.
-		t += " — " + models.FormatCategorySpec(s.catFilter.Name, s.subFilter)
+		t += " — " + models.FormatCategorySpec(s.catFilter.Name, s.subFilter) +
+			subMatchSuffix(s.subFilter, s.subMatch)
 	}
 	if b := s.sess.mode.Badge; b != "" {
 		t += " · " + b
@@ -429,6 +439,18 @@ func (s *browseScreen) applyLockBadges() tea.Cmd {
 	return s.list.SetItems(updated)
 }
 
+// subMatchSuffix marks an OR subcategory filter in a heading. The category
+// notation ("Work/backend/api") has no way to say "any of", and it reads as
+// AND because that is what it means in the form field, so OR needs a marker
+// of its own. Nothing is added for AND, or for a single subcategory, where
+// the two rules give the same answer — the common case reads as it always has.
+func subMatchSuffix(subs []string, match models.SubcategoryMatch) string {
+	if match != models.MatchAnySubcategory || len(subs) < 2 {
+		return ""
+	}
+	return " (any)"
+}
+
 func (s *browseScreen) reloadNotes() tea.Cmd {
 	// A query supersedes the category filter rather than composing with it.
 	// Routing it through the same notesLoadedMsg as every other load is what
@@ -443,7 +465,7 @@ func (s *browseScreen) reloadNotes() tea.Cmd {
 			// The subcategory filter is name-keyed rather than id-keyed; see
 			// Store.GetCategorySubcategoryNotes for why that is the only door.
 			return loadCategorySubNotesCmd(s.sess.store,
-				s.catFilter.Name, s.subFilter, s.sess.user.GUID)
+				s.catFilter.Name, s.subFilter, s.subMatch, s.sess.user.GUID)
 		}
 		return loadCategoryNotesCmd(s.sess.store, s.catFilter.ID, s.sess.user.GUID)
 	}
@@ -534,8 +556,10 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		// would silently narrow the new category (or, with no category, narrow
 		// nothing while claiming to).
 		s.subFilter = msg.subs
+		s.subMatch = msg.match
 		if msg.cat == nil {
 			s.subFilter = nil
+			s.subMatch = models.MatchAllSubcategories
 		}
 		// A category pick also retires any query, because a query outranks the
 		// category filter in reloadNotes — leaving it in place would make the
@@ -627,6 +651,7 @@ func (s *browseScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			}
 			if len(s.subFilter) > 0 {
 				s.subFilter = nil
+				s.subMatch = models.MatchAllSubcategories
 				return s, s.refresh()
 			}
 			if s.catFilter != nil {

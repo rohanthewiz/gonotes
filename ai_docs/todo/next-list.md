@@ -60,10 +60,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   toggling mid-edit, and image paste inside Monaco. The CDP harness (see
   memory) makes this cheap now.
 
-- **N-012** · raised `2026-0817-1046-tui-subcategory-support` · value low
-  Toggling several subcategories means AND ("all of them"), in both UIs.
-  There's no OR, and no models function for one.
-
 - **N-015** · raised `2026-0817-1420-gonotes-note-locks` · value low
   cats-mobile parity. The same app came up three times: unaware of note locks
   and version guards (`2026-0817-1420`), no duplicate action
@@ -147,6 +143,8 @@ session doc marked an item as deferred, so move items here from Open by hand.
 
 ## Closed
 
+- **N-012** · raised `2026-0817-1046-tui-subcategory-support` · closed 2026-10-03 —
+  Toggling several subcategories meant AND only, in both UIs. Done: an all/any switch, with AND still the default. `models.SubcategoryMatch` and `GetNotesByCategorySubcategoryMatch` (plus `GetNotesByCategoryAndAnySubcategory`), and the API takes `subcats_mode=any`. The TUI subcategory screen flips with `m`, and the heading and list title end in `(any)`. The web chips get a leading `all of` / `any of` button, and the query string shows `match:any`. Checked in headless Chrome against a scratch server.
 - **N-034** · raised `2026-0909-1858-advanced-sql-search` · closed 2026-10-03, `2026-1003-1606-n034-saved-queries` —
   The query bar had no note-link completion, no saved queries, and kept history in `localStorage`. Done: `guid = ` completes notes by title (or GUID prefix, or a pasted link) and inserts the GUID. Saved queries and history live server-side in `saved_queries` (private DB, `models/saved_query.go`) behind `/api/v1/notes/query/saved` and `/query/history`. The completer leads an empty box with them, so web and TUI share them. The web bar saves (☆, ⌘S), forgets (`Shift+Delete`, ×) and uploads its old `localStorage` list once. Checked in Chrome against a scratch server.
 - **N-009** · raised `2026-0817-0015-tui-mouse-filter-and-store-identity` · closed 2026-09-23, `2026-0923-1124-medium-next-items` —

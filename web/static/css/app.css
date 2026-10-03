@@ -484,6 +484,36 @@ input, textarea, select {
   font-weight: 500;
 }
 
+/* all/any switch ahead of the chips. Dashed and monospace so it reads as a
+   control over the chips rather than as one more subcategory to toggle; the
+   border stays dashed when "any" is on, for the same reason. Colored only for
+   "any", the non-default, so the usual AND state looks quiet. */
+.subcat-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-family: monospace;
+  font-size: var(--font-size-xs);
+  border: 1px dashed var(--border-light);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: all var(--transition-fast);
+}
+
+.subcat-mode-toggle:hover {
+  border-color: var(--primary-light);
+  color: var(--primary);
+}
+
+.subcat-mode-toggle.active {
+  border-color: var(--primary);
+  background: var(--primary-alpha-10);
+  color: var(--primary);
+}
+
 /* Regex toggle button in search bar */
 .search-bar-regex-toggle {
   flex-shrink: 0;

@@ -150,14 +150,15 @@ func loadCategoryNotesCmd(st Store, categoryID int64, userGUID string) tea.Cmd {
 }
 
 // loadCategorySubNotesCmd narrows a category filter further, to the notes filed
-// under every one of the given subcategories.
+// under every one of the given subcategories — or any one of them, when match
+// is models.MatchAnySubcategory.
 //
 // It resolves to the same notesLoadedMsg as the two commands above, which is
 // what keeps the browse screen's handling of "here are your notes" in one place
 // no matter which of the three filters produced them.
-func loadCategorySubNotesCmd(st Store, categoryName string, subcategories []string, userGUID string) tea.Cmd {
+func loadCategorySubNotesCmd(st Store, categoryName string, subcategories []string, match models.SubcategoryMatch, userGUID string) tea.Cmd {
 	return func() tea.Msg {
-		notes, err := st.GetCategorySubcategoryNotes(categoryName, subcategories, userGUID)
+		notes, err := st.GetCategorySubcategoryNotes(categoryName, subcategories, match, userGUID)
 		return notesLoadedMsg{notes: notes, err: err}
 	}
 }
@@ -403,11 +404,14 @@ func loadCategoriesCmd(st Store, userGUID string) tea.Cmd {
 // filter. A nil cat means "show all notes" (clear the filter).
 //
 // subs narrows within the category — the notes filed under ALL of those
-// subcategories. It is only ever non-empty alongside a cat, since a subcategory
-// has no meaning without the category that defines it.
+// subcategories, or ANY of them when match says so. It is only ever non-empty
+// alongside a cat, since a subcategory has no meaning without the category
+// that defines it. match is meaningless without subs; the zero value (AND) is
+// what the category screen's plain pick carries.
 type categoryPickedMsg struct {
-	cat  *models.Category
-	subs []string
+	cat   *models.Category
+	subs  []string
+	match models.SubcategoryMatch
 }
 
 type categoryCreatedMsg struct{ err error }

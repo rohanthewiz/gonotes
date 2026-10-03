@@ -62,10 +62,10 @@ func (s *localStore) GetCategoryNotes(categoryID int64, userGUID string) ([]mode
 	return models.GetCategoryNotes(categoryID, userGUID)
 }
 
-func (s *localStore) GetCategorySubcategoryNotes(categoryName string, subcategories []string, userGUID string) ([]models.Note, error) {
+func (s *localStore) GetCategorySubcategoryNotes(categoryName string, subcategories []string, match models.SubcategoryMatch, userGUID string) ([]models.Note, error) {
 	// The models function already special-cases an empty subcategory list as
 	// "the whole category", so no branch is needed here.
-	return models.GetNotesByCategoryAndSubcategories(categoryName, subcategories, userGUID)
+	return models.GetNotesByCategorySubcategoryMatch(categoryName, subcategories, match, userGUID)
 }
 
 func (s *localStore) GetNoteByID(id int64, userGUID string) (*models.Note, error) {

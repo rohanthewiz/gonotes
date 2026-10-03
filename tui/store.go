@@ -64,9 +64,10 @@ type Store interface {
 	GetCategoryNotes(categoryID int64, userGUID string) ([]models.Note, error)
 
 	// GetCategorySubcategoryNotes narrows a category to the notes filed under
-	// ALL of the given subcategories (AND, matching the web UI's chips and
-	// models.GetNotesByCategoryAndSubcategories). An empty list is the
-	// unfiltered category, so callers need no special case.
+	// ALL of the given subcategories (AND), or ANY of them when match is
+	// models.MatchAnySubcategory — the same two rules as the web UI's chips and
+	// models.GetNotesByCategorySubcategoryMatch. An empty list is the
+	// unfiltered category in either mode, so callers need no special case.
 	//
 	// It takes the category NAME, not the id, because that is what both
 	// implementations can act on: the models function is name-keyed and the API
@@ -74,7 +75,7 @@ type Store interface {
 	// id-keyed door to it. The name is read from the category the user just
 	// picked, so a rename would have to land between the pick and the reload to
 	// matter.
-	GetCategorySubcategoryNotes(categoryName string, subcategories []string, userGUID string) ([]models.Note, error)
+	GetCategorySubcategoryNotes(categoryName string, subcategories []string, match models.SubcategoryMatch, userGUID string) ([]models.Note, error)
 
 	// GetNoteByID returns (nil, nil) when the note does not exist or is not
 	// owned by the user — a missing note is not an error at this layer.

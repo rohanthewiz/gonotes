@@ -51,6 +51,7 @@ func TestBindingKeys(t *testing.T) {
 		// reaches. Pinned separately so a rebind of one cannot quietly move the
 		// other.
 		{"select a subcategory", keys.SelectSub, []string{"space"}},
+		{"subcategory match all/any", keys.SubMatch, []string{"m"}},
 
 		{"capture from an agent pane", keys.Capture, []string{"ctrl+g"}},
 		{"move within the picker", keys.Move, []string{"up", "down"}},
@@ -155,7 +156,7 @@ func TestHelpSetsAreHandled(t *testing.T) {
 			screen: "subcategories",
 			help:   keys.subcategoriesHelp(),
 			handled: []key.Binding{
-				keys.Filter, keys.SelectSub, keys.New, keys.Rename, keys.Delete,
+				keys.Filter, keys.SelectSub, keys.SubMatch, keys.New, keys.Rename, keys.Delete,
 				keys.Back, keys.Quit,
 			},
 		},

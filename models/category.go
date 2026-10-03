@@ -829,12 +829,67 @@ func GetAllNoteCategoryMappings(userGUID string) ([]NoteCategoryMapping, error) 
 	return mappings, nil
 }
 
+// SubcategoryMatch says how a multi-subcategory filter combines its names:
+// a note must carry ALL of them (AND), or ANY one of them (OR).
+//
+// The zero value is MatchAllSubcategories on purpose. AND was the only rule
+// before OR existed, so every caller that never heard of this type (an old
+// API client, a struct literal that omits the field) keeps the meaning it
+// always had.
+type SubcategoryMatch int
+
+const (
+	MatchAllSubcategories SubcategoryMatch = iota // AND: every named subcategory
+	MatchAnySubcategory                           // OR: at least one of them
+)
+
+// String gives the wire spelling, which is what ParseSubcategoryMatch reads
+// back. Used for the API's subcats_mode parameter and for UI labels.
+func (m SubcategoryMatch) String() string {
+	if m == MatchAnySubcategory {
+		return "any"
+	}
+	return "all"
+}
+
+// ParseSubcategoryMatch reads the wire spelling. Anything other than "any"
+// (including "" and typos) is AND. Failing safe to AND rather than erroring
+// is deliberate: AND returns a subset of what OR would, so a mistyped mode
+// can only hide notes, never show notes outside what the caller asked for.
+func ParseSubcategoryMatch(s string) SubcategoryMatch {
+	if s == "any" {
+		return MatchAnySubcategory
+	}
+	return MatchAllSubcategories
+}
+
 // GetNotesByCategoryAndSubcategories retrieves a user's notes in a category
 // that carry ALL of the given subcategories. The old DuckDB JSON-array
 // query is replaced by an in-Go filter: fetch the category's notes with
 // their per-note selected subcategories, then keep those that contain
 // every requested subcategory.
 func GetNotesByCategoryAndSubcategories(categoryName string, subcategories []string, userGUID string) ([]Note, error) {
+	return GetNotesByCategorySubcategoryMatch(categoryName, subcategories, MatchAllSubcategories, userGUID)
+}
+
+// GetNotesByCategoryAndAnySubcategory is the OR variant: a user's notes in a
+// category that carry AT LEAST ONE of the given subcategories.
+func GetNotesByCategoryAndAnySubcategory(categoryName string, subcategories []string, userGUID string) ([]Note, error) {
+	return GetNotesByCategorySubcategoryMatch(categoryName, subcategories, MatchAnySubcategory, userGUID)
+}
+
+// GetNotesByCategorySubcategoryMatch is the one implementation behind both
+// named variants, for callers that carry the match mode as a value (the API
+// handler and the TUI store) rather than choosing at compile time.
+//
+// Both modes read the same rows: the category's links that have any
+// subcategory selected at all. Only the final per-note test differs, so the
+// two cannot drift on scoping (owner, soft-delete, both databases) or order.
+//
+// An empty subcategory list is the whole category in either mode. Strictly,
+// OR over nothing would match nothing, but "no subcategory toggled" means
+// "no narrowing" to every UI, and a mode switch must not change that.
+func GetNotesByCategorySubcategoryMatch(categoryName string, subcategories []string, match SubcategoryMatch, userGUID string) ([]Note, error) {
 	if len(subcategories) == 0 {
 		return GetNotesByCategoryName(categoryName, userGUID)
 	}
@@ -910,18 +965,30 @@ func GetNotesByCategoryAndSubcategories(categoryName string, subcategories []str
 
 	var notes []Note
 	for _, nps := range collected {
-		hasAll := true
-		for _, want := range subcategories {
-			if _, ok := nps.selected[want]; !ok {
-				hasAll = false
-				break
-			}
-		}
-		if hasAll {
+		if subcategorySetMatches(nps.selected, subcategories, match) {
 			notes = append(notes, nps.note)
 		}
 	}
 
 	sort.SliceStable(notes, func(i, j int) bool { return notes[i].CreatedAt.After(notes[j].CreatedAt) })
 	return notes, nil
+}
+
+// subcategorySetMatches applies the match rule to one link's selected set.
+// AND stops at the first missing name; OR stops at the first present one.
+func subcategorySetMatches(selected map[string]struct{}, want []string, match SubcategoryMatch) bool {
+	if match == MatchAnySubcategory {
+		for _, w := range want {
+			if _, ok := selected[w]; ok {
+				return true
+			}
+		}
+		return false
+	}
+	for _, w := range want {
+		if _, ok := selected[w]; !ok {
+			return false
+		}
+	}
+	return true
 }

@@ -135,7 +135,10 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 	mux.HandleFunc("GET /api/v1/notes", auth(func(w http.ResponseWriter, r *http.Request) {
 		if cat := r.URL.Query().Get("cat"); cat != "" {
 			subs := r.URL.Query()["subcats[]"]
-			notes, _ := api.data.GetCategorySubcategoryNotes(cat, subs, api.user.GUID)
+			// Parsed the way the real handler parses it, so a store that
+			// misspelled the parameter or its value would get AND back.
+			match := models.ParseSubcategoryMatch(r.URL.Query().Get("subcats_mode"))
+			notes, _ := api.data.GetCategorySubcategoryNotes(cat, subs, match, api.user.GUID)
 			writeOK(w, http.StatusOK, noteOutputs(notes))
 			return
 		}
@@ -798,19 +801,37 @@ func TestSubcategoriesOverHTTP(t *testing.T) {
 	}
 
 	// The filter read: AND semantics, through the one endpoint that offers it.
-	notes, err := st.GetCategorySubcategoryNotes("Work", []string{"backend", "api"}, api.user.GUID)
+	notes, err := st.GetCategorySubcategoryNotes("Work", []string{"backend", "api"}, models.MatchAllSubcategories, api.user.GUID)
 	if err != nil {
 		t.Fatalf("GetCategorySubcategoryNotes: %v", err)
 	}
 	if len(notes) != 1 || notes[0].Title != "Filed deep" {
 		t.Errorf("filtering by Work/backend/api returned %d notes, want the one", len(notes))
 	}
-	notes, err = st.GetCategorySubcategoryNotes("Work", []string{"ops"}, api.user.GUID)
+	notes, err = st.GetCategorySubcategoryNotes("Work", []string{"ops"}, models.MatchAllSubcategories, api.user.GUID)
 	if err != nil {
 		t.Fatalf("GetCategorySubcategoryNotes(ops): %v", err)
 	}
 	if len(notes) != 0 {
 		t.Errorf("filtering by an unused subcategory returned %d notes, want none", len(notes))
+	}
+
+	// AND vs OR over the wire, on a pair where they disagree: the note carries
+	// api but not ops. AND excludes it; OR includes it only if subcats_mode
+	// actually reached the server.
+	notes, err = st.GetCategorySubcategoryNotes("Work", []string{"api", "ops"}, models.MatchAllSubcategories, api.user.GUID)
+	if err != nil {
+		t.Fatalf("GetCategorySubcategoryNotes(api AND ops): %v", err)
+	}
+	if len(notes) != 0 {
+		t.Errorf("api AND ops returned %d notes, want none", len(notes))
+	}
+	notes, err = st.GetCategorySubcategoryNotes("Work", []string{"api", "ops"}, models.MatchAnySubcategory, api.user.GUID)
+	if err != nil {
+		t.Fatalf("GetCategorySubcategoryNotes(api OR ops): %v", err)
+	}
+	if len(notes) != 1 || notes[0].Title != "Filed deep" {
+		t.Errorf("api OR ops returned %d notes, want the one", len(notes))
 	}
 
 	// Editing the selection: the link PUT, not a detach-and-reattach.

@@ -567,6 +567,84 @@ func TestBrowseAppliesTheSubcategoryFilter(t *testing.T) {
 	if !slices.Equal(titles, []string{"Both note"}) {
 		t.Errorf("filtering by Work/backend/ops showed %v, want [Both note] only", titles)
 	}
+	if got := s.title(); strings.Contains(got, "(any)") {
+		t.Errorf("an AND filter's title %q is marked as OR", got)
+	}
+
+	// The same two as OR: every note carrying either, and the title says so —
+	// "Work/backend/ops" on its own reads as AND.
+	titles = browseTitlesAfterPick(t, s, categoryPickedMsg{
+		cat: cat, subs: []string{"backend", "ops"}, match: models.MatchAnySubcategory,
+	})
+	if want := []string{"Backend note", "Both note", "Ops note"}; !slices.Equal(titles, want) {
+		t.Errorf("filtering by backend OR ops showed %v, want %v", titles, want)
+	}
+	if got := s.title(); !strings.Contains(got, "Work/backend/ops (any)") {
+		t.Errorf("the OR filter's title is %q; it does not say (any)", got)
+	}
+
+	// A later plain pick must not inherit the OR.
+	browseTitlesAfterPick(t, s, categoryPickedMsg{cat: cat, subs: []string{"backend", "ops"}})
+	if s.subMatch != models.MatchAllSubcategories {
+		t.Errorf("a pick without a match kept %v from the previous pick", s.subMatch)
+	}
+}
+
+// TestSubcategoryMatchKeyFlipsToAny: m switches the filter being built to OR,
+// the title shows it, enter carries it, and a second m switches back.
+func TestSubcategoryMatchKeyFlipsToAny(t *testing.T) {
+	sess, fs, user := subcatSession(t)
+	cat := catWithSubs(t, fs, "Work", []string{"backend", "ops"}, user.GUID)
+
+	s := newSubcategoriesScreen(sess, cat)
+	drainInit(s)
+
+	space := tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
+	down := tea.KeyPressMsg{Code: tea.KeyDown}
+	m := tea.KeyPressMsg{Code: 'm', Text: "m"}
+
+	for _, k := range []tea.KeyPressMsg{space, down, space} {
+		updated, _ := s.Update(k)
+		s = updated.(*subcategoriesScreen)
+	}
+
+	updated, cmd := s.Update(m)
+	s = updated.(*subcategoriesScreen)
+	if cmd == nil {
+		t.Error("m gave no status line; the switch would be silent")
+	}
+	if s.match != models.MatchAnySubcategory {
+		t.Fatalf("after m, match = %v, want any", s.match)
+	}
+	if view := stripANSI(s.View()); !strings.Contains(view, "Work/backend/ops (any)") {
+		t.Errorf("the view %q does not show the filter as OR", view)
+	}
+
+	_, cmd = s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter with a selection produced no command")
+	}
+	found := false
+	for _, msg := range drainSequence(cmd) {
+		if pick, ok := msg.(categoryPickedMsg); ok {
+			found = true
+			if pick.match != models.MatchAnySubcategory {
+				t.Errorf("the pick carries match %v, want any", pick.match)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("enter never delivered a categoryPickedMsg")
+	}
+
+	updated, _ = s.Update(m)
+	s = updated.(*subcategoriesScreen)
+	if s.match != models.MatchAllSubcategories {
+		t.Errorf("a second m left match at %v, want all", s.match)
+	}
+	if view := stripANSI(s.View()); strings.Contains(view, "(any)") {
+		t.Errorf("the view %q still says (any) after switching back", view)
+	}
 }
 
 // TestBrowseEscPeelsSubcategoryBeforeCategory: esc has to walk back out the way
@@ -584,7 +662,7 @@ func TestBrowseEscPeelsSubcategoryBeforeCategory(t *testing.T) {
 	cat, _ := fs.GetCategoryByName("Work", user.GUID)
 	s := newBrowseScreen(sess)
 	s.layout()
-	browseTitlesAfterPick(t, s, categoryPickedMsg{cat: cat, subs: []string{"backend"}})
+	browseTitlesAfterPick(t, s, categoryPickedMsg{cat: cat, subs: []string{"backend"}, match: models.MatchAnySubcategory})
 
 	esc := tea.KeyPressMsg{Code: tea.KeyEscape}
 
@@ -593,6 +671,9 @@ func TestBrowseEscPeelsSubcategoryBeforeCategory(t *testing.T) {
 	s = updated.(*browseScreen)
 	if len(s.subFilter) != 0 {
 		t.Fatalf("the first esc left the subcategory filter %v in place", s.subFilter)
+	}
+	if s.subMatch != models.MatchAllSubcategories {
+		t.Errorf("the first esc left match at %v; it travels with the subcategories", s.subMatch)
 	}
 	if s.catFilter == nil {
 		t.Fatal("the first esc dropped the category filter too; that is a bigger step than esc promises")

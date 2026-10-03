@@ -616,12 +616,21 @@ func (s *httpStore) GetCategoryNotes(categoryID int64, _ string) ([]models.Note,
 // subcats[] is repeated once per subcategory rather than sent as a
 // comma-joined value — the handler reads url.Values["subcats[]"], so a comma
 // would arrive as one subcategory whose name happens to contain a comma, and
-// the filter (which requires ALL of them) would then match nothing.
-func (s *httpStore) GetCategorySubcategoryNotes(categoryName string, subcategories []string, _ string) ([]models.Note, error) {
+// the filter (which in AND mode requires ALL of them) would then match nothing.
+//
+// subcats_mode is sent only for OR. Leaving it off for AND keeps the request
+// byte-identical to what this client sent before the mode existed, so a newer
+// TUI against an older server still gets AND — and an older server that
+// ignores the parameter would also answer an OR request with AND, which is the
+// narrower (never the wider) of the two results.
+func (s *httpStore) GetCategorySubcategoryNotes(categoryName string, subcategories []string, match models.SubcategoryMatch, _ string) ([]models.Note, error) {
 	q := url.Values{}
 	q.Set("cat", categoryName)
 	for _, sub := range subcategories {
 		q.Add("subcats[]", sub)
+	}
+	if match == models.MatchAnySubcategory {
+		q.Set("subcats_mode", match.String())
 	}
 
 	var out []models.NoteOutput

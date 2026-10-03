@@ -195,10 +195,13 @@ func GetNote(ctx rweb.Context) error {
 //   - offset: Number of results to skip (default: 0)
 //   - cat: Filter by category name (e.g., ?cat=k8s)
 //   - subcats[]: Filter by subcategories within the category (e.g., ?cat=k8s&subcats[]=pod&subcats[]=replicaset)
+//   - subcats_mode: "all" (default) or "any" — how several subcats[] combine
 //
 // When cat is provided, returns only notes in that category.
 // When both cat and subcats[] are provided, returns notes that match the category
-// AND have ALL the specified subcategories.
+// AND have ALL the specified subcategories — or, with subcats_mode=any, AT
+// LEAST ONE of them. An unrecognized mode is treated as "all" (see
+// models.ParseSubcategoryMatch for why that is the safe direction).
 func ListNotes(ctx rweb.Context) error {
 	// Authentication check - all note operations require auth
 	userGUID := GetCurrentUserGUID(ctx)
@@ -245,7 +248,8 @@ func ListNotes(ctx rweb.Context) error {
 	if categoryName != "" {
 		// Filter by category (and optionally subcategories) with user scoping
 		if len(subcategories) > 0 {
-			notes, err = models.GetNotesByCategoryAndSubcategories(categoryName, subcategories, userGUID)
+			match := models.ParseSubcategoryMatch(ctx.Request().QueryParam("subcats_mode"))
+			notes, err = models.GetNotesByCategorySubcategoryMatch(categoryName, subcategories, match, userGUID)
 		} else {
 			notes, err = models.GetNotesByCategoryName(categoryName, userGUID)
 		}

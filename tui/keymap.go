@@ -59,6 +59,9 @@ type keyMap struct {
 	// disjoint — but they stay separate bindings so each footer can name the
 	// thing that screen actually toggles.
 	SelectSub key.Binding
+	// SubMatch flips the filter being built between "all of the selected
+	// subcategories" (AND, the default) and "any of them" (OR).
+	SubMatch key.Binding
 
 	// ---- Capture from a sibling agent pane --------------------------------
 	// Capture is the door (browse); Move and Pick drive the picker it opens.
@@ -240,6 +243,15 @@ func defaultKeyMap() keyMap {
 		SelectSub: key.NewBinding(
 			key.WithKeys("space"),
 			key.WithHelp("space", "select"),
+		),
+		// "m" for match. The subcategories screen spends space, enter, n, r, d
+		// and q, and the list widget claims / and its navigation letters
+		// (j/k/h/l/g/G/b/f/u); "a" would read as "all" but is the category
+		// screen's "all notes", one level up, and the same letter meaning two
+		// things on adjacent screens is a slip waiting to happen.
+		SubMatch: key.NewBinding(
+			key.WithKeys("m"),
+			key.WithHelp("m", "all/any"),
 		),
 		// "r" is free on both category screens, and is the mnemonic. The
 		// locked-note dialog also uses r (read-only), which is safe because the
@@ -519,7 +531,7 @@ func (k keyMap) categoriesHelp() []key.Binding {
 }
 
 func (k keyMap) subcategoriesHelp() []key.Binding {
-	return []key.Binding{k.Filter, k.SelectSub, k.New, k.Rename, k.Delete, k.Back}
+	return []key.Binding{k.Filter, k.SelectSub, k.SubMatch, k.New, k.Rename, k.Delete, k.Back}
 }
 
 func (k keyMap) agentPickerHelp() []key.Binding {

@@ -230,10 +230,11 @@ func (f *fakeStore) GetCategoryNotes(categoryID int64, userGUID string) ([]model
 	return out, nil
 }
 
-// GetCategorySubcategoryNotes mirrors the real AND semantics: a note qualifies
-// only if its link carries EVERY requested subcategory. Getting that wrong in
-// the double would make a broken filter look like a working one.
-func (f *fakeStore) GetCategorySubcategoryNotes(categoryName string, subcategories []string, userGUID string) ([]models.Note, error) {
+// GetCategorySubcategoryNotes mirrors the real semantics: in AND mode a note
+// qualifies only if its link carries EVERY requested subcategory, in OR mode
+// if it carries at least one. Getting that wrong in the double would make a
+// broken filter look like a working one.
+func (f *fakeStore) GetCategorySubcategoryNotes(categoryName string, subcategories []string, match models.SubcategoryMatch, userGUID string) ([]models.Note, error) {
 	cat, err := f.GetCategoryByName(categoryName, userGUID)
 	if err != nil {
 		return nil, err
@@ -260,14 +261,17 @@ func (f *fakeStore) GetCategorySubcategoryNotes(categoryName string, subcategori
 			if l.catID != cat.ID {
 				continue
 			}
-			hasAll := true
+			// Written out independently of models.subcategorySetMatches rather
+			// than calling it, so a bug there is caught by the HTTP-store tests
+			// that compare the two instead of being copied into the double.
+			hits := 0
 			for _, want := range subcategories {
-				if !slices.Contains(l.subs, want) {
-					hasAll = false
-					break
+				if slices.Contains(l.subs, want) {
+					hits++
 				}
 			}
-			if hasAll {
+			if (match == models.MatchAnySubcategory && hits > 0) ||
+				(match != models.MatchAnySubcategory && hits == len(subcategories)) {
 				out = append(out, n)
 			}
 			break

@@ -23,10 +23,11 @@ import (
 // screen offers one level up:
 //
 //   - PICKING. space toggles a subcategory, enter filters the note list to the
-//     notes carrying every one that is selected (AND, the same rule the web
-//     UI's chips use — see models.GetNotesByCategoryAndSubcategories). With
-//     nothing toggled, enter filters by the highlighted row alone, so the common
-//     case is one keystroke and multi-select is there when it is wanted.
+//     notes carrying every one that is selected (AND, the same default rule
+//     the web UI's chips use — see models.GetNotesByCategorySubcategoryMatch).
+//     m switches that to "any one of them" (OR) and back. With nothing
+//     toggled, enter filters by the highlighted row alone, so the common case
+//     is one keystroke and multi-select is there when it is wanted.
 //   - DEFINING. n adds a name to the category's definition, d removes one. The
 //     definition is a palette, not an assignment: it is what the form field, the
 //     web UI's checkboxes and this screen offer, and editing it here never
@@ -45,6 +46,11 @@ type subcategoriesScreen struct {
 	// is what a filter built from them reads in, and stable order keeps the
 	// browse title from reshuffling between two picks of the same pair.
 	selected []string
+
+	// match is how the toggled names will combine when enter applies them.
+	// It starts at AND on every visit, the way selected starts empty: the
+	// screen builds a fresh filter rather than editing the one in force.
+	match models.SubcategoryMatch
 
 	// dirty records that the definition changed while this screen was open, so
 	// the pop can tell the category list to reload. Without it, a subcategory
@@ -130,12 +136,34 @@ func newSubcategoriesScreen(sess *session, cat models.Category) *subcategoriesSc
 // The pending filter goes in the list's TITLE rather than on a line of its own
 // under the list: the list widget is sized to the whole screen, so anything
 // appended below it is clamped away (clampPane) and would simply never be seen.
+//
+// OR is marked whenever it is on, even with fewer than two names toggled
+// (where it changes nothing yet). The browse title hides it in that case, but
+// here the user just pressed m and needs to see that it took.
 func (s *subcategoriesScreen) syncTitle() {
+	marker := ""
+	if s.match == models.MatchAnySubcategory {
+		marker = " (any)"
+	}
 	if len(s.selected) > 0 {
-		s.list.Title = "filter: " + models.FormatCategorySpec(s.cat.Name, s.selected)
+		s.list.Title = "filter: " + models.FormatCategorySpec(s.cat.Name, s.selected) + marker
 		return
 	}
-	s.list.Title = s.cat.Name + " subcategories"
+	s.list.Title = s.cat.Name + " subcategories" + marker
+}
+
+// toggleMatch flips between AND and OR for the filter being built.
+func (s *subcategoriesScreen) toggleMatch() tea.Cmd {
+	if s.match == models.MatchAnySubcategory {
+		s.match = models.MatchAllSubcategories
+	} else {
+		s.match = models.MatchAnySubcategory
+	}
+	s.syncTitle()
+	if s.match == models.MatchAnySubcategory {
+		return status("Matching notes with ANY selected subcategory")
+	}
+	return status("Matching notes with ALL selected subcategories")
 }
 
 // restyle rebuilds the styles the list widget copied in at construction.
@@ -222,8 +250,9 @@ func (s *subcategoriesScreen) pick(subs []string) tea.Cmd {
 	}
 	cat := s.cat
 	picked := slices.Clone(subs) // the screen's slice keeps mutating; the message must not
+	match := s.match
 	return tea.Sequence(pop(false), pop(false), func() tea.Msg {
-		return categoryPickedMsg{cat: &cat, subs: picked}
+		return categoryPickedMsg{cat: &cat, subs: picked, match: match}
 	})
 }
 
@@ -364,6 +393,9 @@ func (s *subcategoriesScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 
 		case key.Matches(msg, keys.SelectSub):
 			return s, s.toggle()
+
+		case key.Matches(msg, keys.SubMatch):
+			return s, s.toggleMatch()
 
 		case key.Matches(msg, keys.Filter):
 			if cmd := s.pickCurrent(); cmd != nil {

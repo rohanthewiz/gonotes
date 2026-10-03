@@ -556,6 +556,33 @@ func TestNotesCategoryFiltering(t *testing.T) {
 		}
 	})
 
+	// Test: subcats_mode on a pair where AND and OR disagree. The k8s note
+	// carries pod but not service, so the default (and an explicit "all", and
+	// an unknown mode) excludes it, and only "any" includes it.
+	t.Run("subcats_mode all vs any", func(t *testing.T) {
+		cases := []struct {
+			mode string
+			want int
+		}{
+			{"", 0},
+			{"&subcats_mode=all", 0},
+			{"&subcats_mode=bogus", 0},
+			{"&subcats_mode=any", 1},
+		}
+		for _, tc := range cases {
+			path := "/api/v1/notes?cat=k8s&subcats[]=pod&subcats[]=service" + tc.mode
+			status, resp := ts.request("GET", path, nil)
+			if status != http.StatusOK {
+				t.Errorf("%s: expected status %d, got %d", path, http.StatusOK, status)
+				continue
+			}
+			data := resp["data"].([]interface{})
+			if len(data) != tc.want {
+				t.Errorf("%s: expected %d notes, got %d", path, tc.want, len(data))
+			}
+		}
+	})
+
 	// Test: Filter by non-existent category
 	t.Run("filter by non-existent category", func(t *testing.T) {
 		status, resp := ts.request("GET", "/api/v1/notes?cat=nonexistent", nil)
