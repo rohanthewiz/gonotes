@@ -112,6 +112,13 @@ type Store interface {
 	// are wanted — so an error here means the store could not be reached at all.
 	CompleteQuery(query string, pos int, userGUID string) (*models.QueryCompletion, error)
 
+	// RecordQuery adds a query the user deliberately ran to their server-side
+	// history, which is where both this screen's and the web bar's "recent"
+	// rows come from (they arrive through CompleteQuery on an empty box). It
+	// is called for an explicit run only — never for the refresh that re-runs
+	// an active query on every reload.
+	RecordQuery(query, userGUID string) error
+
 	// ---- Categories --------------------------------------------------------
 
 	ListCategories(userGUID string) ([]models.Category, error)

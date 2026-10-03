@@ -134,6 +134,12 @@ func (s *localStore) CompleteQuery(query string, pos int, userGUID string) (*mod
 	return models.CompleteQuery(query, pos, userGUID), nil
 }
 
+// RecordQuery writes the history row in-process, into the same table the web
+// UI's POST /notes/query/history reaches.
+func (s *localStore) RecordQuery(query, userGUID string) error {
+	return models.RecordQueryHistory(userGUID, query)
+}
+
 // ---- Categories ------------------------------------------------------------
 
 func (s *localStore) ListCategories(userGUID string) ([]models.Category, error) {

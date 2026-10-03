@@ -42,10 +42,16 @@ type QuerySuggestion struct {
 	Label  string `json:"label"`
 	Detail string `json:"detail,omitempty"`
 	// Kind groups the list and picks its icon: field, operator, keyword,
-	// value, logic, example.
+	// value, logic, example, saved, history. The last three are WHOLE
+	// queries: a front end replaces the entire input with Text and runs it
+	// rather than splicing it into the replace range.
 	Kind string `json:"kind"`
 	// Doc is the longer explanation, shown for the highlighted row.
 	Doc string `json:"doc,omitempty"`
+	// ID is the saved_queries row behind a saved or history suggestion, so a
+	// front end can offer "forget this" from the popup without a second
+	// lookup. Zero for every other kind.
+	ID int64 `json:"id,omitempty"`
 }
 
 // QueryCompletion is a completion request's answer.
@@ -126,6 +132,14 @@ func CompleteQuery(src string, pos int, userGUID string) *QueryCompletion {
 	case stField:
 		c.Context = "field"
 		c.Suggestions = fieldSuggestions(typed, space, len(committed) == 0 && typed == "")
+		// At the very start of the text the user may be reaching for a query
+		// they already have rather than writing a new one, so their saved and
+		// recent queries lead the list. Past the first token they would be
+		// noise: "category = 'x' AND " is a field position too, but nobody
+		// there wants to replace the whole line.
+		if len(committed) == 0 {
+			c.Suggestions = append(storedQuerySuggestions(userGUID, typed), c.Suggestions...)
+		}
 	case stOperator:
 		c.Context = "operator for " + field.Name
 		c.Suggestions = operatorSuggestions(field, typed, space)
@@ -620,8 +634,140 @@ func valueSuggestions(field *QueryField, typed string, quote byte, space string,
 		for _, t := range distinctTitles(userGUID, typed) {
 			out = append(out, QuerySuggestion{Text: quoted(t), Label: t, Kind: "value"})
 		}
+	case "guid":
+		// A GUID is what a [[note:GUID|Title]] link stores, and nobody types
+		// one from memory. This is the note-link picker's lookup — find a
+		// note by its title — feeding the query bar: the row shows the
+		// title, and accepting it inserts the GUID. A GUID prefix (copied
+		// out of a link) matches too.
+		for _, n := range noteGUIDChoices(userGUID, typed) {
+			out = append(out, QuerySuggestion{
+				Text: quoted(n.guid), Label: n.title, Kind: "value",
+				Detail: shortGUID(n.guid), Doc: n.guid,
+			})
+		}
+		// Not ranked: rankSuggestions compares the typed text against the
+		// Label, and for a GUID prefix the label (a title) never matches, so
+		// ranking would only shuffle the recency order noteGUIDChoices chose.
+		return capSuggestions(out)
 	}
 	return rankSuggestions(out, typed)
+}
+
+// noteChoice is one note offered as a GUID value.
+type noteChoice struct {
+	guid, title string
+}
+
+// noteGUIDChoices offers the user's notes, most recently updated first,
+// matching typed against the title (anywhere, ignoring case) or the start of
+// the GUID.
+//
+// typed can also be a pasted link — `guid = '[[note:9f3c…|Title]]` — in
+// which case the GUID inside it is what is matched, so copying a link out of a
+// note body and pasting it between the quotes does the obvious thing (and
+// accepting the row replaces the whole link with the bare GUID). Pasted
+// without quotes the brackets are not tokens at all, so that form never
+// reaches here.
+func noteGUIDChoices(userGUID, typed string) []noteChoice {
+	notes, err := loadNotesForQuery(userGUID, false)
+	if err != nil {
+		return nil
+	}
+	if g := guidFromNoteLink(typed); g != "" {
+		typed = g
+	}
+	sort.SliceStable(notes, func(i, j int) bool { return notes[i].UpdatedAt.After(notes[j].UpdatedAt) })
+	fold := foldASCII(typed)
+	var out []noteChoice
+	for i := range notes {
+		n := &notes[i]
+		if fold != "" && !strings.HasPrefix(foldASCII(n.GUID), fold) && !containsFold(n.Title, fold) {
+			continue
+		}
+		out = append(out, noteChoice{guid: n.GUID, title: n.Title})
+		if len(out) >= completionValueLimit {
+			break
+		}
+	}
+	return out
+}
+
+// guidFromNoteLink extracts the GUID from `[[note:GUID|…]]` (or a prefix of
+// one still being pasted), returning "" when s is not a note link.
+func guidFromNoteLink(s string) string {
+	const prefix = "[[note:"
+	if !strings.HasPrefix(strings.ToLower(s), prefix) {
+		return ""
+	}
+	rest := s[len(prefix):]
+	if i := strings.IndexAny(rest, "|]"); i >= 0 {
+		rest = rest[:i]
+	}
+	return rest
+}
+
+// shortGUID is the eight-character form the note-link picker shows.
+func shortGUID(g string) string {
+	if len(g) <= 8 {
+		return g
+	}
+	return g[:8] + "…"
+}
+
+// storedQueryLimit caps how many of each stored kind an empty box shows, so a
+// long history does not push the worked examples and the field list out of
+// the popup entirely.
+const (
+	storedQuerySavedLimit   = 15
+	storedQueryHistoryLimit = 8
+)
+
+// storedQuerySuggestions turns the user's saved queries and history into
+// whole-query suggestions.
+//
+// With nothing typed, both lists are offered: saved first (a name is a
+// deliberate bookmark), then recent runs. With a partial first word, only
+// saved queries whose NAME matches are offered — the name is the handle a
+// person remembers ("airflow"), and matching history by raw text would
+// mostly echo the field name they are halfway through typing.
+//
+// A history entry that is also a saved query's text is dropped: the named row
+// already offers it, under a better label.
+func storedQuerySuggestions(userGUID, typed string) []QuerySuggestion {
+	list, err := ListSavedQueries(userGUID)
+	if err != nil || list == nil {
+		return nil
+	}
+	var out []QuerySuggestion
+	savedText := map[string]bool{}
+	for _, s := range list.Saved {
+		savedText[s.Query] = true
+		if typed != "" && !matchesPrefix(s.Name, typed) {
+			continue
+		}
+		if len(out) >= storedQuerySavedLimit {
+			continue
+		}
+		out = append(out, QuerySuggestion{
+			Text: s.Query, Label: s.Name, Detail: s.Query, Kind: SavedQueryKindSaved,
+			Doc: "saved query: " + s.Query, ID: s.ID,
+		})
+	}
+	if typed != "" {
+		return rankSuggestions(out, typed)
+	}
+	n := 0
+	for _, h := range list.History {
+		if savedText[h.Query] || n >= storedQueryHistoryLimit {
+			continue
+		}
+		n++
+		out = append(out, QuerySuggestion{
+			Text: h.Query, Label: h.Query, Detail: "recent", Kind: SavedQueryKindHistory, ID: h.ID,
+		})
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------

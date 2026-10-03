@@ -117,7 +117,8 @@ func openDatabases(pubPath, privPath string) error {
 	}
 
 	// Build the schema. Both databases get the note-side tables; only the
-	// public database gets the shared/system tables. The private database
+	// public database gets the shared/system tables, and only the private one
+	// gets saved_queries (query text is content — see createPrivateOnlySchema). The private database
 	// offsets its id sequences so note ids are globally unique.
 	if err = pubDB.createNoteSchema(0); err != nil {
 		return serr.Wrap(err, "failed to create public note schema")
@@ -127,6 +128,9 @@ func openDatabases(pubPath, privPath string) error {
 	}
 	if err = privDB.createNoteSchema(seqOffsetPrivate); err != nil {
 		return serr.Wrap(err, "failed to create private note schema")
+	}
+	if err = privDB.createPrivateOnlySchema(); err != nil {
+		return serr.Wrap(err, "failed to create private-only schema")
 	}
 
 	logger.Info("Databases initialized",

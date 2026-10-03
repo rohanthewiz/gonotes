@@ -784,6 +784,16 @@ func (s *httpStore) CompleteQuery(query string, pos int, _ string) (*models.Quer
 	return &out, nil
 }
 
+// RecordQuery posts a deliberate run to the server's history, so a query run
+// here shows up as "recent" in the web bar too (and the other way round).
+func (s *httpStore) RecordQuery(query, _ string) error {
+	body := map[string]string{"query": query}
+	if err := s.request(http.MethodPost, "/api/v1/notes/query/history", body, nil); err != nil {
+		return serr.Wrap(err, "failed to record query history")
+	}
+	return nil
+}
+
 // asQueryError recovers a *models.QueryError from a 400's envelope data,
 // returning nil when the error was anything else. The status check matters:
 // only the query endpoints put a QueryError in `data`, and a 409's conflict

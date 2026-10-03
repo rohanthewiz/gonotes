@@ -3236,6 +3236,7 @@ mark.note-search-hit-current {
          .aq-input-wrap            position: relative — the popup's anchor
            .aq-input               monospace: this is code, not prose
            .aq-popup               absolute, below the input, above everything
+       .aq-save                    name field, shown only while saving
        .aq-status / .aq-error      one line of feedback
        .aq-help                    the field catalog, collapsed by default   */
 
@@ -3390,6 +3391,7 @@ mark.note-search-hit-current {
 .aq-kind-value    { color: var(--warning); }
 .aq-kind-example,
 .aq-kind-history  { color: var(--text-secondary); }
+.aq-kind-saved    { color: var(--primary); }
 
 .aq-label {
   color: var(--text-primary);
@@ -3405,6 +3407,74 @@ mark.note-search-hit-current {
   color: var(--text-muted);
   font-size: var(--font-size-xs);
   font-family: var(--font-family);
+}
+
+/* A saved row's detail is the query itself, which can be long: unlike a type or
+   a count it shrinks and truncates, and keeps the monospace of the input it
+   will be put into. */
+.aq-suggestion-saved .aq-detail {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* Forget (x) on a saved or history row. Hidden until the row is hovered or
+   highlighted, so the list reads as suggestions rather than a row of delete
+   buttons. */
+.aq-forget {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  padding: 0 2px;
+  color: var(--text-muted);
+  cursor: pointer;
+  visibility: hidden;
+  font-size: var(--font-size-sm);
+  line-height: 1;
+}
+
+.aq-suggestion:hover .aq-forget,
+.aq-suggestion.highlighted .aq-forget {
+  visibility: visible;
+}
+
+.aq-forget:hover {
+  color: var(--danger);
+}
+
+/* ---- Save row ---- */
+
+.aq-save {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-xs);
+  padding-left: 44px; /* aligns with the input, like the status line */
+}
+
+.aq-save[hidden] {
+  display: none;
+}
+
+.aq-save-name {
+  flex: 0 1 280px;
+  min-width: 0;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border: 1px solid var(--border-dark);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.aq-save-name:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-alpha-10);
 }
 
 .aq-popup-footer {

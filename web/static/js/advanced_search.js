@@ -26,14 +26,20 @@
 //     range to replace and the exact text to put there, quoting and trailing
 //     space included, so this file never decides how to quote a value. The TUI
 //     does the same with the same numbers.
+//   - Saved queries and history are the server's too (/query/saved,
+//     /query/history; models/saved_query.go). They arrive as the first rows of
+//     an empty box's completion — kinds "saved" and "history" — so this file
+//     only records runs, saves names and forgets rows. History used to live in
+//     localStorage; a browser that still has that list hands it to the server
+//     once (migrateLocalHistory) and drops its copy.
 (function() {
   'use strict';
   if (!window.app) window.app = {};
 
   const internal = () => window.app._internal;
   const API = '/api/v1';
-  const HISTORY_KEY = 'gonotes-query-history';
-  const HISTORY_MAX = 25;
+  // The pre-server history list. Read once, uploaded, then removed.
+  const LEGACY_HISTORY_KEY = 'gonotes-query-history';
   const OPEN_KEY = 'gonotes-query-bar-open';
 
   const state = {
@@ -48,7 +54,9 @@
     lastRun: '',            // the query text of the last successful run
     lastError: null,
     context: '',           // what the server says is being completed
-    helpOpen: false
+    helpOpen: false,
+    saving: false,         // the name field is showing
+    historyMigrated: false // the legacy localStorage list has been handled
   };
 
   // ============================================
@@ -62,6 +70,8 @@
     status:   () => document.getElementById('advanced-query-status'),
     error:    () => document.getElementById('advanced-query-error'),
     help:     () => document.getElementById('advanced-query-help'),
+    save:     () => document.getElementById('advanced-query-save'),
+    saveName: () => document.getElementById('advanced-query-save-name'),
     toggle:   () => document.getElementById('btn-advanced-search'),
     hint:     () => document.getElementById('advanced-query-hint')
   };
@@ -79,20 +89,31 @@
   // data, and apiRequest turns a non-ok response into an Error that keeps only
   // the message. Underlining the mistake is most of what makes the box usable,
   // so this path keeps the whole envelope.
-  async function authedFetch(path) {
+  //
+  // method and body are optional; a body is sent as JSON.
+  async function authedFetch(path, method, body) {
     const token = internal() && internal().getAuthToken
       ? internal().getAuthToken()
       : localStorage.getItem('token');
     const headers = { 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = 'Bearer ' + token;
-    const resp = await fetch(API + path, { headers });
-    let body = null;
+    const init = { headers, method: method || 'GET' };
+    if (body !== undefined) init.body = JSON.stringify(body);
+    let resp;
     try {
-      body = await resp.json();
-    } catch (_) {
-      body = null;
+      resp = await fetch(API + path, init);
+    } catch (err) {
+      // A network failure is reported like a server one, so callers have one
+      // shape to handle instead of a thrown error on top of a status code.
+      return { ok: false, status: 0, body: { error: 'network error' } };
     }
-    return { ok: resp.ok, status: resp.status, body: body || {} };
+    let parsed = null;
+    try {
+      parsed = await resp.json();
+    } catch (_) {
+      parsed = null;
+    }
+    return { ok: resp.ok, status: resp.status, body: parsed || {} };
   }
 
   // ============================================
@@ -118,6 +139,7 @@
 
     if (open) {
       loadSchema();
+      migrateLocalHistory();
       const input = el.input();
       if (input) {
         input.focus();
@@ -127,6 +149,7 @@
       requestCompletion(true);
     } else {
       hidePopup();
+      window.app.cancelSaveAdvancedQuery();
     }
   }
 
@@ -210,7 +233,10 @@
     st.advanced.matched = data.matched || 0;
     st.advanced.scanned = data.scanned || 0;
 
-    rememberQuery(text);
+    // Recorded only here, on a deliberate run. Fire-and-forget: history is a
+    // convenience, and a failure to record must not turn a successful run
+    // into an error the user sees.
+    authedFetch('/notes/query/history', 'POST', { query: text });
     state.lastRun = text;
     setStatus(describeResult(data));
     hidePopup();
@@ -309,16 +335,9 @@
     if (!res.ok) { hidePopup(); return; }
 
     const data = res.body.data || {};
-    let suggestions = data.suggestions || [];
-
-    // Local history leads when the box is empty — the most likely next query
-    // is one already run, and the server cannot know them.
-    if (!q.trim()) {
-      const hist = loadHistory().map(h => ({
-        text: h, label: h, kind: 'history', detail: 'recent'
-      }));
-      suggestions = hist.concat(suggestions);
-    }
+    // Saved queries and recent runs are already at the top of an empty box's
+    // list — the server puts them there, so the TUI gets the same rows.
+    const suggestions = data.suggestions || [];
 
     state.suggestions = suggestions;
     state.replaceStart = data.replace_start || 0;
@@ -335,8 +354,15 @@
     value: '\u25c6',
     logic: '∧',
     example: '★',
-    history: '↺'
+    history: '↺',
+    saved: '☆'
   };
+
+  // Kinds that are a whole query rather than a fragment: accepting one
+  // replaces the line and runs it. Saved and history rows are also the ones a
+  // user can forget from the popup.
+  const WHOLE_QUERY = { example: true, history: true, saved: true };
+  const FORGETTABLE = { history: true, saved: true };
 
   function renderPopup() {
     const popup = el.popup();
@@ -347,23 +373,32 @@
     }
 
     const rows = state.suggestions.map((s, i) => {
-      const cls = 'aq-suggestion' + (i === state.highlighted ? ' highlighted' : '');
+      const cls = 'aq-suggestion aq-suggestion-' + escapeHtml(s.kind || '') +
+        (i === state.highlighted ? ' highlighted' : '');
       const icon = KIND_ICON[s.kind] || '·';
+      const forget = FORGETTABLE[s.kind] && s.id
+        ? '<button type="button" class="aq-forget" data-forget="' + i + '"' +
+          ' title="Forget this query (Shift+Delete)" aria-label="Forget">×</button>'
+        : '';
       return '<div class="' + cls + '" data-index="' + i + '" role="option"' +
         ' aria-selected="' + (i === state.highlighted) + '">' +
         '<span class="aq-kind aq-kind-' + escapeHtml(s.kind || '') + '">' + icon + '</span>' +
         '<span class="aq-label">' + escapeHtml(s.label || s.text) + '</span>' +
         (s.detail ? '<span class="aq-detail">' + escapeHtml(s.detail) + '</span>' : '') +
+        forget +
         '</div>';
     }).join('');
 
-    const doc = state.highlighted >= 0 ? (state.suggestions[state.highlighted].doc || '') : '';
+    const hiSugg = state.highlighted >= 0 ? state.suggestions[state.highlighted] : null;
+    const doc = hiSugg ? (hiSugg.doc || '') : '';
+    const keys = 'Tab accept · ↑↓ move · Enter run · Esc close' +
+      (hiSugg && FORGETTABLE[hiSugg.kind] ? ' · ⇧Del forget' : '');
     popup.innerHTML =
       '<div class="aq-suggestions" role="listbox">' + rows + '</div>' +
       '<div class="aq-popup-footer">' +
         '<span class="aq-context">' + escapeHtml(state.context) + '</span>' +
         (doc ? '<span class="aq-doc">' + escapeHtml(doc) + '</span>' : '') +
-        '<span class="aq-keys">Tab accept · ↑↓ move · Enter run · Esc close</span>' +
+        '<span class="aq-keys">' + keys + '</span>' +
       '</div>';
     popup.hidden = false;
 
@@ -389,8 +424,9 @@
     const s = state.suggestions[index];
     if (!input || !s) return;
 
-    // An example (or a history entry) is a whole query, not a fragment.
-    if (s.kind === 'example' || s.kind === 'history') {
+    // An example, a saved query or a history entry is a whole query, not a
+    // fragment.
+    if (WHOLE_QUERY[s.kind]) {
       input.value = s.text;
       input.setSelectionRange(input.value.length, input.value.length);
       hidePopup();
@@ -406,6 +442,22 @@
     showError(null);
     // Completing a field immediately asks what operator belongs next, which
     // is what makes the bar feel like it is leading rather than waiting.
+    requestCompletion(true);
+  }
+
+  // forgetSuggestion deletes the saved or history row behind a suggestion and
+  // asks for the list again, so the popup reflects the server rather than a
+  // locally edited copy that could disagree with it.
+  async function forgetSuggestion(index) {
+    const s = state.suggestions[index];
+    if (!s || !FORGETTABLE[s.kind] || !s.id) return;
+    const res = await authedFetch('/notes/query/saved/' + encodeURIComponent(s.id), 'DELETE');
+    if (!res.ok && res.status !== 404) {
+      showError(res.body.error || ('could not forget that query (' + res.status + ')'), null);
+      return;
+    }
+    const input = el.input();
+    if (input) input.focus();
     requestCompletion(true);
   }
 
@@ -478,6 +530,27 @@
           requestCompletion(true);
         }
         return;
+
+      case 'Delete':
+        // Shift+Delete forgets the highlighted saved/history row — the
+        // browser convention for removing an entry from an autocomplete list.
+        // A plain Delete keeps editing the text.
+        if (e.shiftKey && popupOpen && state.highlighted >= 0 &&
+            FORGETTABLE[state.suggestions[state.highlighted].kind]) {
+          e.preventDefault();
+          forgetSuggestion(state.highlighted);
+        }
+        return;
+
+      case 's':
+      case 'S':
+        // Ctrl/⌘+S saves the query in the box instead of the browser's "save
+        // page", which is never what someone typing a query meant.
+        if (e.metaKey || e.ctrlKey) {
+          e.preventDefault();
+          window.app.startSaveAdvancedQuery();
+        }
+        return;
     }
   }
 
@@ -487,25 +560,128 @@
   }
 
   // ============================================
-  // History
+  // History — legacy migration
   // ============================================
 
-  function loadHistory() {
+  // migrateLocalHistory hands a pre-server history list to the server once,
+  // then removes it, so upgrading does not lose the queries someone already
+  // relied on.
+  //
+  // It runs on the bar's first open rather than at page load, because that is
+  // when the user is certainly signed in. Entries are posted oldest first:
+  // each POST moves its query to the top, so posting in reverse order of
+  // recency rebuilds the list in the order it had. The local copy is removed
+  // only after every POST succeeded — a 401 or a dropped connection leaves it
+  // for the next open.
+  async function migrateLocalHistory() {
+    if (state.historyMigrated) return;
+    state.historyMigrated = true;
+
+    let list;
     try {
-      const raw = localStorage.getItem(HISTORY_KEY);
-      const list = raw ? JSON.parse(raw) : [];
-      return Array.isArray(list) ? list : [];
+      const raw = localStorage.getItem(LEGACY_HISTORY_KEY);
+      if (!raw) return;
+      list = JSON.parse(raw);
     } catch (_) {
-      return [];
+      return; // private browsing, or a value we cannot read: nothing to move
     }
+    if (!Array.isArray(list) || list.length === 0) {
+      try { localStorage.removeItem(LEGACY_HISTORY_KEY); } catch (_) { /* ignore */ }
+      return;
+    }
+
+    for (const q of list.slice().reverse()) {
+      if (typeof q !== 'string' || !q.trim()) continue;
+      const res = await authedFetch('/notes/query/history', 'POST', { query: q });
+      if (!res.ok) {
+        state.historyMigrated = false; // try again on the next open
+        return;
+      }
+    }
+    try { localStorage.removeItem(LEGACY_HISTORY_KEY); } catch (_) { /* ignore */ }
+    // If the box is still empty, refresh the popup so the migrated rows show.
+    const input = el.input();
+    if (state.open && input && !input.value.trim()) requestCompletion(true);
   }
 
-  function rememberQuery(text) {
-    try {
-      const list = loadHistory().filter(q => q !== text);
-      list.unshift(text);
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, HISTORY_MAX)));
-    } catch (_) { /* private browsing: history is a convenience, not state */ }
+  // ============================================
+  // Saving a named query
+  // ============================================
+
+  // startSaveAdvancedQuery shows the name field. If the box's text is already
+  // a saved query, the name is prefilled — saving over it is how a saved
+  // query is renamed in case or edited, and retyping the name to do that
+  // would be a chore.
+  window.app.startSaveAdvancedQuery = function() {
+    const input = el.input();
+    const row = el.save();
+    const name = el.saveName();
+    if (!input || !row || !name) return;
+    if (!input.value.trim()) {
+      showError('Type a query first, then save it.', null);
+      input.focus();
+      return;
+    }
+    showError(null);
+    hidePopup();
+    state.saving = true;
+    row.hidden = false;
+    const match = state.suggestions.find(s => s.kind === 'saved' && s.text === input.value.trim());
+    name.value = match ? match.label : '';
+    name.focus();
+    name.select();
+  };
+
+  window.app.cancelSaveAdvancedQuery = function() {
+    state.saving = false;
+    const row = el.save();
+    if (row) row.hidden = true;
+  };
+
+  // saveAdvancedQuery stores the box's text under the typed name. The server
+  // parses it first; a query that will not run is refused with the same
+  // positioned error as a run, which is shown against the query input so the
+  // mistake is selected and the name the user typed is kept.
+  window.app.saveAdvancedQuery = async function() {
+    const input = el.input();
+    const name = el.saveName();
+    if (!input || !name) return;
+    const text = input.value.trim();
+    const label = name.value.trim();
+    if (!label) {
+      name.focus();
+      return;
+    }
+
+    const res = await authedFetch('/notes/query/saved', 'POST', { name: label, query: text });
+    if (!res.ok) {
+      const qe = res.body.data;
+      if (res.status === 400 && qe && typeof qe.position === 'number') {
+        showError(res.body.error || 'invalid query', qe);
+      } else {
+        showError(res.body.error || ('could not save (' + res.status + ')'), null);
+        name.focus();
+      }
+      return;
+    }
+
+    window.app.cancelSaveAdvancedQuery();
+    setStatus('Saved as \u201c' + label + '\u201d — it leads the list when the box is empty.');
+    const toast = internal() && internal().showToast;
+    if (toast) toast('Query saved', 'success');
+    input.focus();
+  };
+
+  function onSaveNameKeyDown(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      window.app.saveAdvancedQuery();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      window.app.cancelSaveAdvancedQuery();
+      const input = el.input();
+      if (input) input.focus();
+    }
   }
 
   // ============================================
@@ -601,9 +777,20 @@
       setTimeout(() => { if (document.activeElement !== input) hidePopup(); }, 150);
     });
 
+    const saveName = el.saveName();
+    if (saveName) saveName.addEventListener('keydown', onSaveNameKeyDown);
+
     const popup = el.popup();
     if (popup) {
       popup.addEventListener('mousedown', e => {
+        // The forget button sits inside a row, so it is checked first —
+        // otherwise the click would also accept (and run) the row it removes.
+        const forget = e.target.closest('.aq-forget');
+        if (forget) {
+          e.preventDefault();
+          forgetSuggestion(parseInt(forget.dataset.forget, 10));
+          return;
+        }
         const row = e.target.closest('.aq-suggestion');
         if (!row) return;
         e.preventDefault(); // keep focus in the input

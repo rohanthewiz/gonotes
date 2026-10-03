@@ -173,6 +173,24 @@ func runQueryCmd(store Store, query, userGUID string) tea.Cmd {
 	}
 }
 
+// runAndRecordQueryCmd is runQueryCmd for a run the user asked for: on success
+// the text also goes into their query history. It is separate from
+// runQueryCmd because the browse screen re-runs an active query through that
+// one on every reload, and a refresh is not something the user did.
+//
+// Recording is best-effort and happens before the result is handed back, in
+// the same goroutine, so a failure to record can never reorder or swallow the
+// result — at worst the query is missing from "recent".
+func runAndRecordQueryCmd(store Store, query, userGUID string) tea.Cmd {
+	return func() tea.Msg {
+		notes, err := store.QueryNotes(query, userGUID)
+		if err == nil {
+			_ = store.RecordQuery(query, userGUID)
+		}
+		return queryRanMsg{query: query, notes: notes, err: err}
+	}
+}
+
 // cursorByteOffset converts the textinput's cursor — an index into the value's
 // RUNES — into the byte offset the query language works in.
 //
@@ -338,9 +356,10 @@ func (s *queryScreen) accept(i int) tea.Cmd {
 	}
 	sg := s.sugg[i]
 
-	// An example is a whole query rather than a fragment: it replaces the line
-	// and runs, which is the fastest way to learn the language.
-	if sg.Kind == "example" {
+	// An example, a saved query or a recent one is a whole query rather than a
+	// fragment: it replaces the line and runs. Saved and recent rows come from
+	// the same server-side store the web bar uses (models/saved_query.go).
+	if isWholeQueryKind(sg.Kind) {
 		s.input.SetValue(sg.Text)
 		s.input.CursorEnd()
 		s.sugg, s.highlight = nil, -1
@@ -392,7 +411,7 @@ func (s *queryScreen) run() tea.Cmd {
 		})
 	}
 	s.running = true
-	return runQueryCmd(s.sess.store, text, s.sess.user.GUID)
+	return runAndRecordQueryCmd(s.sess.store, text, s.sess.user.GUID)
 }
 
 // showError splits a failure into the two kinds a user acts on differently: a
@@ -508,8 +527,18 @@ func suggestionKindGlyph(kind string) string {
 		return "ⓚ"
 	case "example":
 		return "★"
+	case "saved":
+		return "☆"
+	case "history":
+		return "↺"
 	}
 	return "·"
+}
+
+// isWholeQueryKind reports the suggestion kinds that replace the input rather
+// than splice into it.
+func isWholeQueryKind(kind string) bool {
+	return kind == "example" || kind == "saved" || kind == "history"
 }
 
 func (s *queryScreen) renderSuggestions() string {

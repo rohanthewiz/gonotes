@@ -63,6 +63,9 @@ type fakeStore struct {
 	// screen's tests are about.
 	queryCalls int
 	lastQuery  string
+	// recorded is every query RecordQuery was handed, in order — how a test
+	// tells a deliberate run (recorded) from a refresh (not).
+	recorded []string
 
 	// ---- Sync ---------------------------------------------------------------
 	// syncStatus is what SyncStatus reports; nil means this installation has no
@@ -503,6 +506,14 @@ func (f *fakeStore) mappingsFor(noteID int64) []models.NoteCategoryMapping {
 		})
 	}
 	return out
+}
+
+// RecordQuery remembers what the query screen asked to record.
+func (f *fakeStore) RecordQuery(query, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recorded = append(f.recorded, query)
+	return nil
 }
 
 // CompleteQuery answers from the real completer, seeded with nothing — the

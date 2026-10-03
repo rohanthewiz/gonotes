@@ -74,11 +74,18 @@ func setupRoutes(s *rweb.Server) {
 	s.Get("/api/v1/notes/query", api.QueryNotes)                  // Run an advanced query
 	s.Get("/api/v1/notes/query/complete", api.QueryNotesComplete) // Autocomplete at a cursor position
 	s.Get("/api/v1/notes/query/schema", api.QueryNotesSchema)     // Queryable fields, operators, examples
-	s.Get("/api/v1/notes/:id", api.GetNote)                       // Get a single note by ID
-	s.Put("/api/v1/notes/:id", api.UpdateNote)                    // Update a note by ID
-	s.Delete("/api/v1/notes/:id", api.DeleteNote)                 // Soft delete a note by ID
-	s.Put("/api/v1/notes/:id/flag", api.ToggleNoteFlag)           // Toggle flag on a note
-	s.Put("/api/v1/notes/:id/privacy", api.SetNotePrivacy)        // Set is_private (moves the note between databases)
+	// Saved (named) queries and recent-query history, kept per user on the
+	// server so every browser and the TUI share them. See
+	// web/api/saved_queries.go.
+	s.Get("/api/v1/notes/query/saved", api.ListSavedQueries)        // Saved queries + history
+	s.Post("/api/v1/notes/query/saved", api.SaveQuery)              // Save {name, query}
+	s.Delete("/api/v1/notes/query/saved/:id", api.DeleteSavedQuery) // Forget a saved or history row
+	s.Post("/api/v1/notes/query/history", api.RecordQueryHistory)   // Record a run in history
+	s.Get("/api/v1/notes/:id", api.GetNote)                         // Get a single note by ID
+	s.Put("/api/v1/notes/:id", api.UpdateNote)                      // Update a note by ID
+	s.Delete("/api/v1/notes/:id", api.DeleteNote)                   // Soft delete a note by ID
+	s.Put("/api/v1/notes/:id/flag", api.ToggleNoteFlag)             // Toggle flag on a note
+	s.Put("/api/v1/notes/:id/privacy", api.SetNotePrivacy)          // Set is_private (moves the note between databases)
 
 	// Note locks — the mutual-exclusion protocol between editing sessions.
 	// One note's lease is acquired, renewed, and released on the same path

@@ -571,3 +571,70 @@ func TestColonOpensTheQueryScreenWithTheCurrentQuery(t *testing.T) {
 		t.Fatalf("the query screen opened with %q, want the query in force", q.input.Value())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Saved queries and history
+// ---------------------------------------------------------------------------
+
+// A deliberate run lands in history; the browse screen's refresh of an active
+// query does not. Without the distinction every reload would churn the list
+// and bump whatever query happened to be active back to the top.
+func TestOnlyADeliberateRunIsRecorded(t *testing.T) {
+	store := newFakeStore()
+	store.seedNote("u", "Airflow DAG conversion", "dags")
+
+	q := newQueryScreen(querySession(store), "")
+	q = typeQuery(q, "title CONTAINS 'airflow'")
+	tap(q, "enter")
+	if len(store.recorded) != 1 || store.recorded[0] != "title CONTAINS 'airflow'" {
+		t.Fatalf("enter should record the query once, got %q", store.recorded)
+	}
+
+	// The refresh path.
+	drainCmd(runQueryCmd(store, "title CONTAINS 'airflow'", "u"))
+	if len(store.recorded) != 1 {
+		t.Fatalf("a refresh must not be recorded, got %q", store.recorded)
+	}
+
+	// A failed run is not history either.
+	q = newQueryScreen(querySession(store), "")
+	q = typeQuery(q, "title = ")
+	tap(q, "enter")
+	if len(store.recorded) != 1 {
+		t.Fatalf("a query that did not parse must not be recorded, got %q", store.recorded)
+	}
+}
+
+// Saved and recent rows are whole queries: accepting one replaces the line and
+// runs it, exactly like an example — not a splice into the replace range.
+func TestAcceptingAStoredQueryReplacesTheLine(t *testing.T) {
+	for _, kind := range []string{"saved", "history"} {
+		store := newFakeStore()
+		store.seedNote("u", "Airflow DAG conversion", "dags")
+		store.seedNote("u", "Grocery list", "milk")
+
+		q := newQueryScreen(querySession(store), "")
+		q = typeQuery(q, "air")
+		q.adopt(&models.QueryCompletion{
+			ReplaceStart: 0, ReplaceEnd: 3,
+			Suggestions: []models.QuerySuggestion{
+				{Label: "airflow work", Text: "title CONTAINS 'airflow'", Kind: kind, ID: 7},
+			},
+		})
+
+		next, msgs := tap(q, "tab")
+		q = next.(*queryScreen)
+		if got := q.input.Value(); got != "title CONTAINS 'airflow'" {
+			t.Fatalf("%s: accepting should replace the line, got %q", kind, got)
+		}
+		var ran *queryRanMsg
+		for i := range msgs {
+			if m, ok := msgs[i].(queryRanMsg); ok {
+				ran = &m
+			}
+		}
+		if ran == nil || len(ran.notes) != 1 {
+			t.Fatalf("%s: accepting should run the query, got %+v", kind, ran)
+		}
+	}
+}

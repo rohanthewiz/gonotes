@@ -393,9 +393,12 @@ lists them too:
 
 The completions come from the server, because half of what is worth suggesting
 is your data. Type `category = ` and the list is your categories; `tags = ` and
-it is your tags, most-used first; `title = ` and it is your note titles. In the
-web UI: `Tab` accepts, `↑`/`↓` move, `Enter` runs, `Esc` closes, `Ctrl+Space`
-asks again. In the TUI: the same, with `ctrl+t` for the full field list.
+it is your tags, most-used first; `title = ` and it is your note titles;
+`guid = ` and it is your notes **by title** — the same lookup as the note-link
+picker, inserting the GUID a `[[note:…]]` link stores (a GUID prefix, or a whole
+link pasted between the quotes, matches too). In the web UI: `Tab` accepts,
+`↑`/`↓` move, `Enter` runs, `Esc` closes, `Ctrl+Space` asks again. In the TUI:
+the same, with `ctrl+t` for the full field list.
 
 A malformed query is never silently ignored. The web UI selects the offending
 run in the input; the TUI underlines it:
@@ -405,6 +408,25 @@ run in the input; the TUI underlines it:
   ^^^^^^^
 unknown field "catgory" — did you mean category?
 ```
+
+### Saved queries and history
+
+An empty box leads with your **saved** queries (☆), then your **recent** ones
+(↺), then the worked examples. Typing the start of a saved query's name offers
+it too. Picking one replaces the line and runs it.
+
+- **Save:** ☆ in the web bar (or ⌘S / Ctrl+S in the input), give it a name,
+  Enter. Saving under an existing name (case ignored) replaces that query. A
+  query that does not parse is refused with the usual underlined error.
+- **Forget:** `Shift+Delete` on a highlighted saved or recent row, or its ×.
+- Both lists live on the server, per user, in the **private** database (query
+  text quotes note content, so it gets encryption when that is configured).
+  Every browser and the TUI see the same lists. A deliberate run is recorded;
+  the TUI re-running an active query on refresh is not. History keeps the last
+  25 runs. A browser holding the old `localStorage` history uploads it once on
+  the first open of the bar, then drops its copy.
+- Saved queries are not synced between a spoke and its hub. They belong to the
+  server you query against.
 
 ### API
 
@@ -420,6 +442,14 @@ curl -s -G http://localhost:8444/api/v1/notes/query/complete \
 
 # The field catalog, operators, examples and the semantics above, as data
 curl -s http://localhost:8444/api/v1/notes/query/schema -H "Authorization: Bearer $TOKEN"
+
+# Saved queries and history: list, save (upsert by name), forget, record a run
+curl -s http://localhost:8444/api/v1/notes/query/saved -H "Authorization: Bearer $TOKEN"
+curl -s -X POST http://localhost:8444/api/v1/notes/query/saved -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"airflow","query":"category = '\''airflow'\''"}'
+curl -s -X DELETE http://localhost:8444/api/v1/notes/query/saved/42 -H "Authorization: Bearer $TOKEN"
+curl -s -X POST http://localhost:8444/api/v1/notes/query/history -H "Authorization: Bearer $TOKEN" \
+  -d '{"query":"is_flagged"}'
 ```
 
 `/notes/query` also takes `limit`, `offset`, `sort`, `dir` and

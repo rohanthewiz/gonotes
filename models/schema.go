@@ -472,3 +472,44 @@ func (en *dbEngine) createPublicOnlySchema() error {
 
 	return nil
 }
+
+// createPrivateOnlySchema builds the tables that live only in the private
+// database. Today that is saved_queries: a user's named advanced-search
+// queries and their recent-query history (see saved_query.go).
+//
+// They live on the PRIVATE side, against the grain of the public database
+// holding every other per-user system table, because a query's text is
+// content rather than metadata: `title = 'Divorce lawyer'` or
+// `body LIKE '%acct 4417%'` quotes the very private notes it was written to
+// find. The private database is the one that is encrypted when a key is
+// configured, so it is the only place the text cannot leak from in the
+// clear.
+//
+// The table is deliberately outside the sync change log. A saved query is
+// a property of the server a user works against — the TUI in HTTP mode and
+// the web UI both talk to that server, so they already share it — and
+// replicating it to a hub would mean a second change-tracking scheme for a
+// convenience nobody has asked to roam.
+func (en *dbEngine) createPrivateOnlySchema() error {
+	if err := en.createSequence("saved_queries_id_seq", 1+seqOffsetPrivate); err != nil {
+		return err
+	}
+	// kind is 'saved' (has a name, kept until deleted) or 'history' (no
+	// name, pruned to the most recent savedQueryHistoryMax per user). One
+	// table rather than two because both are "query text a user ran, for
+	// that user", listed together and deleted the same way.
+	if err := en.ensureTable("saved_queries", `CREATE TABLE saved_queries (
+		id           BIGINT PRIMARY KEY,
+		user_guid    VARCHAR NOT NULL,
+		kind         VARCHAR NOT NULL,
+		name         VARCHAR,
+		query        VARCHAR NOT NULL,
+		created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	)`,
+		`CREATE INDEX idx_saved_queries_user_guid ON saved_queries(user_guid)`,
+	); err != nil {
+		return err
+	}
+	return nil
+}

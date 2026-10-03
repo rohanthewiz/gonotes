@@ -7,8 +7,9 @@ import "github.com/rohanthewiz/element"
 // { } button opens it.
 //
 //	┌───────────────────────────────────────────────────────────────────┐
-//	│ SQL │ category = 'airflow' AND subcategory = 'conversion' │ Run ? ×│
+//	│ SQL │ category = 'airflow' AND subcategory = 'conversion' │Run ☆ ? ×│
 //	│     └─ suggestion popup, absolutely positioned under the input ─┘  │
+//	│     [ name this query        ] Save  Cancel   ← only while saving │
 //	│ 12 notes · of 412 scanned · 2.1 ms                                │
 //	└───────────────────────────────────────────────────────────────────┘
 //
@@ -49,6 +50,13 @@ func (a AdvancedSearchBar) Render(b *element.Builder) any {
 
 			b.Button("class", "btn btn-primary btn-sm", "id", "advanced-query-run",
 				"onclick", "app.runAdvancedQuery()", "title", "Run the query (Enter)").T("Run"),
+			// Save names the query in the box and stores it on the server
+			// (per user, shared by every browser and the TUI). The saved
+			// queries come back as the first rows of the popup on an empty
+			// box, so there is no separate list to open.
+			b.Button("class", "btn btn-secondary btn-sm", "id", "advanced-query-save-toggle",
+				"onclick", "app.startSaveAdvancedQuery()",
+				"title", "Save this query under a name", "aria-label", "Save query").T("☆"),
 			b.Button("class", "btn btn-secondary btn-sm", "id", "advanced-query-help-toggle",
 				"onclick", "app.toggleAdvancedHelp()",
 				"title", "Show every queryable attribute", "aria-label", "Query help").T("?"),
@@ -56,6 +64,19 @@ func (a AdvancedSearchBar) Render(b *element.Builder) any {
 				"onclick", "app.closeAdvancedSearch()",
 				"title", "Close the query bar and clear the query (Esc)",
 				"aria-label", "Close advanced query").T("×"),
+		),
+
+		// The save row: a name field shown only while saving. Inline rather
+		// than a prompt() dialog so it keeps the page's styling, can show the
+		// server's refusal next to the field, and does not block the page.
+		b.Div("class", "aq-save", "id", "advanced-query-save", "hidden", "hidden").R(
+			b.Input("type", "text", "class", "aq-save-name", "id", "advanced-query-save-name",
+				"placeholder", "Name this query", "maxlength", "80",
+				"autocomplete", "off", "aria-label", "Saved query name"),
+			b.Button("class", "btn btn-primary btn-sm", "onclick", "app.saveAdvancedQuery()",
+				"title", "Save (Enter)").T("Save"),
+			b.Button("class", "btn btn-secondary btn-sm", "onclick", "app.cancelSaveAdvancedQuery()",
+				"title", "Cancel (Esc)").T("Cancel"),
 		),
 
 		// The status line carries the result count, the timing and the

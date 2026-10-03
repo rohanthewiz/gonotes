@@ -31,7 +31,7 @@ with every item's premise re-checked against the code at `e0c2a39`.
 - Open and Roadmap stay in ID order. Edit an item's text in place when its
   premise changes; keep its ID and `raised`.
 
-**Next ID:** N-048
+**Next ID:** N-049
 
 ## Open
 
@@ -118,9 +118,11 @@ with every item's premise re-checked against the code at `e0c2a39`.
   *reappear* later, that is the sync path and needs its own investigation.
   Candidate for Closed if the symptom hasn't come back.
 
-- **N-034** · raised `2026-0909-1858-advanced-sql-search` · value low
-  The web advanced-search query bar isn't wired to the note-link autocomplete
-  or to saved/named queries. Query history is per browser (`localStorage`).
+- **N-048** · raised `2026-1003-1606-n034-saved-queries` · value low
+  The TUI query screen shows saved and recent queries (and runs them), but
+  cannot name a query or forget a row. Saving and forgetting are web-only
+  (☆ / `Shift+Delete`). The seam would need `SaveQuery` / `DeleteSavedQuery`
+  next to `RecordQuery` in `tui/store.go`.
 
 ## Roadmap
 
@@ -145,6 +147,8 @@ session doc marked an item as deferred, so move items here from Open by hand.
 
 ## Closed
 
+- **N-034** · raised `2026-0909-1858-advanced-sql-search` · closed 2026-10-03, `2026-1003-1606-n034-saved-queries` —
+  The query bar had no note-link completion, no saved queries, and kept history in `localStorage`. Done: `guid = ` completes notes by title (or GUID prefix, or a pasted link) and inserts the GUID. Saved queries and history live server-side in `saved_queries` (private DB, `models/saved_query.go`) behind `/api/v1/notes/query/saved` and `/query/history`. The completer leads an empty box with them, so web and TUI share them. The web bar saves (☆, ⌘S), forgets (`Shift+Delete`, ×) and uploads its old `localStorage` list once. Checked in Chrome against a scratch server.
 - **N-009** · raised `2026-0817-0015-tui-mouse-filter-and-store-identity` · closed 2026-09-23, `2026-0923-1124-medium-next-items` —
   TUI `--local` / `--remote`. Done: `gonotes tui --local` skips the probe and fails rather than use a server; `--remote` fails rather than use local notes (`decideForcedStore`, `main.go`).
 - **N-014** · raised `2026-0817-1420-gonotes-note-locks` · closed 2026-09-23, `2026-0923-1124-medium-next-items` —

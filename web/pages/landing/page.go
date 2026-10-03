@@ -37,7 +37,7 @@ func (p Page) renderHead(b *element.Builder) any {
 		// Inline theme init — runs before CSS to prevent flash of wrong theme
 		b.Script().T(`(function(){var t=localStorage.getItem('gonotes-theme')||'dark-green';document.documentElement.setAttribute('data-theme',t);})()`),
 		// CSS
-		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=15"),
+		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=16"),
 		// Highlight.js CSS theme - chosen based on current theme (default to dark)
 		b.Link("rel", "stylesheet", "id", "hljs-theme", "href", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css"),
 		// Update hljs theme link based on saved preference
@@ -134,7 +134,7 @@ func (p Page) renderBody(b *element.Builder) any {
 		b.Script("src", "/static/js/note_search.js?v=2").R(),
 		// Advanced (SQL) query bar. Loads after app.js because it drives the
 		// note list through _internal, and its own state lives in state.advanced.
-		b.Script("src", "/static/js/advanced_search.js?v=1").R(),
+		b.Script("src", "/static/js/advanced_search.js?v=2").R(),
 		// Optional Monaco editor for the note body. This small module only wires
 		// up the toggle; the actual Monaco library (full build, complete
 		// monaco.editor API) is loaded lazily on first activation from the

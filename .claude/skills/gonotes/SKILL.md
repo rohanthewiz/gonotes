@@ -265,6 +265,13 @@ server-side rather than a list in the browser. A syntax error is a `400` whose
 `data` carries `{position, length, hint}`, so both UIs point at the mistake
 rather than describing it.
 
+Saved (named) queries and run history are server-side too
+(`models/saved_query.go`, table `saved_queries` in the **private** DB, not
+synced): `GET/POST /api/v1/notes/query/saved`, `DELETE …/saved/:id`,
+`POST /api/v1/notes/query/history`. The completer puts them first on an empty
+box (kinds `saved` / `history`, whole-query rows that carry an `id`), so both
+UIs show them with no list of their own. `guid = ` completes notes by title.
+
 **Markdown round-trip** (server stopped) — export is Obsidian-compatible and
 idempotent in both directions, anchored on the frontmatter `guid`:
 
