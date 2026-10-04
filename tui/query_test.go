@@ -638,3 +638,249 @@ func TestAcceptingAStoredQueryReplacesTheLine(t *testing.T) {
 		}
 	}
 }
+
+// chord sends a modified keypress — ctrl+s, shift+delete — the way the
+// terminal reports it, and drains what it produced.
+func chord(s screen, code rune, mod tea.KeyMod) (screen, []tea.Msg) {
+	next, cmd := s.Update(tea.KeyPressMsg{Code: code, Mod: mod})
+	return next, drainCmd(cmd)
+}
+
+// storedRows installs a completion list of one example and two stored rows,
+// the shape an empty box gets from the real completer when the user has
+// history. Built by hand because the fake's completer has no saved_queries
+// table behind it.
+func storedRows(q *queryScreen) {
+	q.adopt(&models.QueryCompletion{
+		Suggestions: []models.QuerySuggestion{
+			{Label: "airflow work", Text: "title CONTAINS 'airflow'", Kind: "saved", ID: 7},
+			{Label: "tag = 'x'", Text: "tag = 'x'", Kind: "history", ID: 9},
+			{Label: "flagged notes", Text: "flagged = true", Kind: "example"},
+		},
+	})
+}
+
+// ctrl+s opens a name prompt, and submitting it saves the query that was in the
+// box — not whatever the box holds by the time the name is typed.
+func TestCtrlSSavesTheQueryUnderAName(t *testing.T) {
+	store := newFakeStore()
+	q := newQueryScreen(querySession(store), "")
+	q = typeQuery(q, "title CONTAINS 'dag'")
+
+	_, msgs := chord(q, 's', tea.ModCtrl)
+	var prompt *promptScreen
+	for _, m := range msgs {
+		if p, ok := m.(pushMsg); ok {
+			prompt, _ = p.s.(*promptScreen)
+		}
+	}
+	if prompt == nil {
+		t.Fatalf("ctrl+s should push a name prompt, got %#v", msgs)
+	}
+	if prompt.input.Value() != "" {
+		t.Fatalf("an unsaved query should open an empty prompt, got %q", prompt.input.Value())
+	}
+
+	q.input.SetValue("changed meanwhile")
+	for _, m := range drainCmd(prompt.onSubmit("dags")) {
+		next, _ := q.Update(m)
+		q = next.(*queryScreen)
+	}
+	if len(store.saved) != 1 || store.saved[0].Name != "dags" || store.saved[0].Query != "title CONTAINS 'dag'" {
+		t.Fatalf("saved = %+v", store.saved)
+	}
+	if !strings.Contains(q.notice, "dags") || !strings.Contains(q.View(), "saved as") {
+		t.Fatalf("a save should be acknowledged, notice = %q", q.notice)
+	}
+}
+
+// Re-saving a query that is already saved opens the prompt on its name, since
+// saving over a name is how a saved query is edited.
+func TestSavePrefillsTheNameOfASavedQuery(t *testing.T) {
+	q := newQueryScreen(querySession(newFakeStore()), "")
+	storedRows(q)
+	q.input.SetValue("title CONTAINS 'airflow'")
+
+	_, msgs := chord(q, 's', tea.ModCtrl)
+	for _, m := range msgs {
+		if p, ok := m.(pushMsg); ok {
+			if got := p.s.(*promptScreen).input.Value(); got != "airflow work" {
+				t.Fatalf("prompt should open on the saved name, got %q", got)
+			}
+			return
+		}
+	}
+	t.Fatal("ctrl+s pushed no prompt")
+}
+
+// There is nothing to name in an empty box; say so instead of asking for a name
+// the store would refuse anyway.
+func TestSavingAnEmptyQueryIsRefusedUpFront(t *testing.T) {
+	q := newQueryScreen(querySession(newFakeStore()), "")
+	_, msgs := chord(q, 's', tea.ModCtrl)
+	for _, m := range msgs {
+		if _, ok := m.(pushMsg); ok {
+			t.Fatal("an empty box should not open the name prompt")
+		}
+	}
+	if q.errText == "" {
+		t.Fatal("an empty save should explain itself")
+	}
+}
+
+// A query that does not parse is not stored, and the refusal points at the
+// mistake the same way a failed run does.
+func TestSavingABrokenQueryUnderlinesTheMistake(t *testing.T) {
+	store := newFakeStore()
+	q := newQueryScreen(querySession(store), "")
+	q = typeQuery(q, "title = ")
+
+	for _, m := range drainCmd(saveQueryCmd(store, "broken", "title = ", "u")) {
+		next, _ := q.Update(m)
+		q = next.(*queryScreen)
+	}
+	if len(store.saved) != 0 {
+		t.Fatalf("a broken query was saved: %+v", store.saved)
+	}
+	if q.qerr == nil {
+		t.Fatalf("a syntax error should be positioned, errText = %q", q.errText)
+	}
+	if q.notice != "" {
+		t.Fatalf("a refused save must not be acknowledged, notice = %q", q.notice)
+	}
+
+	// A refusal that is not about syntax is a sentence.
+	for _, m := range drainCmd(saveQueryCmd(store, "  ", "title = 'x'", "u")) {
+		next, _ := q.Update(m)
+		q = next.(*queryScreen)
+	}
+	if !strings.Contains(q.errText, "needs a name") {
+		t.Fatalf("errText = %q", q.errText)
+	}
+}
+
+// shift+delete — and its ctrl+x twin — forgets the highlighted stored row by
+// its id, drops it from the list at once, and asks for the list again once the
+// store has answered.
+func TestForgetRemovesTheHighlightedStoredRow(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code rune
+		mod  tea.KeyMod
+	}{
+		{"shift+delete", tea.KeyDelete, tea.ModShift},
+		{"ctrl+x", 'x', tea.ModCtrl},
+	} {
+		store := newFakeStore()
+		q := newQueryScreen(querySession(store), "")
+		storedRows(q)
+		q.highlight = 1 // the history row
+
+		next, msgs := chord(q, tc.code, tc.mod)
+		q = next.(*queryScreen)
+		if len(store.forgot) != 1 || store.forgot[0] != 9 {
+			t.Fatalf("%s: forgot = %v, want [9]", tc.name, store.forgot)
+		}
+		if len(q.sugg) != 2 || q.sugg[1].Kind != "example" {
+			t.Fatalf("%s: the row should leave the list at once, got %+v", tc.name, q.sugg)
+		}
+
+		var reasked bool
+		for _, m := range msgs {
+			next, cmd := q.Update(m)
+			q = next.(*queryScreen)
+			for _, mm := range drainCmd(cmd) {
+				if _, ok := mm.(queryCompletionMsg); ok {
+					reasked = true
+				}
+			}
+		}
+		if !reasked {
+			t.Fatalf("%s: a forget should re-request completions", tc.name)
+		}
+		if !strings.Contains(q.notice, "tag = 'x'") {
+			t.Fatalf("%s: notice = %q", tc.name, q.notice)
+		}
+	}
+}
+
+// Forget acts only on a stored row. On an example it is swallowed: nothing is
+// deleted, and the text is not edited either.
+func TestForgetIgnoresRowsThatAreNotStored(t *testing.T) {
+	store := newFakeStore()
+	q := newQueryScreen(querySession(store), "")
+	q.input.SetValue("abc")
+	q.input.SetCursor(1)
+	storedRows(q)
+	q.highlight = 2 // the example
+
+	next, _ := chord(q, tea.KeyDelete, tea.ModShift)
+	q = next.(*queryScreen)
+	if len(store.forgot) != 0 {
+		t.Fatalf("forgot = %v on an example row", store.forgot)
+	}
+	if len(q.sugg) != 3 || q.input.Value() != "abc" {
+		t.Fatalf("nothing should change, sugg=%d value=%q", len(q.sugg), q.input.Value())
+	}
+}
+
+// The footer names forget only while it would do something.
+func TestFooterOffersForgetOnlyOnStoredRows(t *testing.T) {
+	q := newQueryScreen(querySession(newFakeStore()), "")
+	storedRows(q)
+
+	q.highlight = 0
+	if !strings.Contains(q.View(), "forget") {
+		t.Fatal("a saved row should advertise forget")
+	}
+	q.highlight = 2
+	if strings.Contains(q.View(), "forget") {
+		t.Fatal("an example row should not advertise forget")
+	}
+}
+
+// The whole loop against the real local store: a save shows up as a ☆ row on an
+// empty box (through the real completer and saved_queries table), shift+delete
+// removes it, and forgetting an id that is already gone is not an error. The
+// fake-store tests above pin the screen; this pins that the pass-throughs reach
+// bytdb and that the completer hands back the ids forget depends on.
+func TestSaveAndForgetAgainstTheLocalStore(t *testing.T) {
+	user := setupTestDB(t)
+	store := NewLocalStore()
+	sess := querySession(store)
+	sess.user = user
+
+	if _, err := store.SaveQuery("dags", "title CONTAINS 'dag'", user.GUID); err != nil {
+		t.Fatalf("SaveQuery: %v", err)
+	}
+	var qe *models.QueryError
+	if _, err := store.SaveQuery("broken", "title = ", user.GUID); !errors.As(err, &qe) {
+		t.Fatalf("a broken query should be refused with a QueryError, got %v", err)
+	}
+
+	q := newQueryScreen(sess, "")
+	q = settle(q, drainCmd(q.complete()))
+	if len(q.sugg) == 0 || q.sugg[0].Kind != "saved" || q.sugg[0].Label != "dags" || q.sugg[0].ID == 0 {
+		t.Fatalf("an empty box should lead with the saved query, got %+v", q.sugg)
+	}
+	id := q.sugg[0].ID
+
+	next, msgs := chord(q, tea.KeyDelete, tea.ModShift)
+	q = next.(*queryScreen)
+	for _, m := range msgs {
+		next, cmd := q.Update(m)
+		q = settle(next.(*queryScreen), drainCmd(cmd))
+	}
+	for _, sg := range q.sugg {
+		if sg.Kind == "saved" {
+			t.Fatalf("the saved query survived a forget: %+v", q.sugg)
+		}
+	}
+	if q.errText != "" {
+		t.Fatalf("forget reported %q", q.errText)
+	}
+
+	if err := store.DeleteSavedQuery(id, user.GUID); err != nil {
+		t.Fatalf("forgetting a row that is already gone should succeed, got %v", err)
+	}
+}

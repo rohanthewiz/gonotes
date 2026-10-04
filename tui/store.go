@@ -120,6 +120,23 @@ type Store interface {
 	// an active query on every reload.
 	RecordQuery(query, userGUID string) error
 
+	// SaveQuery stores query under name, the TUI's half of the web bar's ☆.
+	// Saving under a name that already exists (compared ignoring case)
+	// replaces that query's text — it is how a saved query is edited, so it is
+	// an upsert rather than a conflict. The text must parse: a query that
+	// cannot run comes back as the same *models.QueryError a run would give,
+	// so the screen can underline it instead of storing a trap. A missing name
+	// or an over-long text is a *models.SavedQueryInputError locally and the
+	// server's sentence over HTTP; either way its Error() is the user-facing
+	// reason.
+	SaveQuery(name, query, userGUID string) (*models.SavedQuery, error)
+
+	// DeleteSavedQuery forgets one saved or history row by the id its
+	// suggestion carried (models.QuerySuggestion.ID). A row that is already
+	// gone is NOT an error: the goal — that row no longer being offered — is
+	// met either way, and another front end forgetting it first is ordinary.
+	DeleteSavedQuery(id int64, userGUID string) error
+
 	// ---- Categories --------------------------------------------------------
 
 	ListCategories(userGUID string) ([]models.Category, error)

@@ -66,6 +66,12 @@ type fakeStore struct {
 	// recorded is every query RecordQuery was handed, in order — how a test
 	// tells a deliberate run (recorded) from a refresh (not).
 	recorded []string
+	// saved is the named queries SaveQuery stored, in save order, and forgot
+	// is every id DeleteSavedQuery was handed. Together they are how a test
+	// sees the query screen's ctrl+s and shift+delete reach the store.
+	saved      []models.SavedQuery
+	forgot     []int64
+	nextSaveID int64
 
 	// ---- Sync ---------------------------------------------------------------
 	// syncStatus is what SyncStatus reports; nil means this installation has no
@@ -517,6 +523,46 @@ func (f *fakeStore) RecordQuery(query, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.recorded = append(f.recorded, query)
+	return nil
+}
+
+// SaveQuery applies the models layer's checks that need no database — a name,
+// a query, and that the query parses — so the screen's error paths are driven
+// by the same errors the real stores return. Saving under an existing name
+// (ignoring case) replaces it, matching models.SaveNamedQuery.
+func (f *fakeStore) SaveQuery(name, query, _ string) (*models.SavedQuery, error) {
+	name, query = strings.TrimSpace(name), strings.TrimSpace(query)
+	if name == "" {
+		return nil, &models.SavedQueryInputError{Msg: "a saved query needs a name"}
+	}
+	if query == "" {
+		return nil, &models.SavedQueryInputError{Msg: "nothing to save: the query is empty"}
+	}
+	if _, err := models.ParseQuery(query); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.saved {
+		if strings.EqualFold(f.saved[i].Name, name) {
+			f.saved[i].Name, f.saved[i].Query = name, query
+			out := f.saved[i]
+			return &out, nil
+		}
+	}
+	f.nextSaveID++
+	sq := models.SavedQuery{ID: f.nextSaveID, Kind: models.SavedQueryKindSaved, Name: name, Query: query}
+	f.saved = append(f.saved, sq)
+	return &sq, nil
+}
+
+// DeleteSavedQuery remembers the id and drops a matching saved row. An unknown
+// id is not an error, per the interface's contract.
+func (f *fakeStore) DeleteSavedQuery(id int64, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.forgot = append(f.forgot, id)
+	f.saved = slices.DeleteFunc(f.saved, func(sq models.SavedQuery) bool { return sq.ID == id })
 	return nil
 }
 

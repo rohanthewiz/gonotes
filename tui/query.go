@@ -26,7 +26,7 @@ import (
 //	│ value for subcategory                                  │  ← what is being
 //	│ the subcategories selected on this note's links        │    completed, and
 //	└────────────────────────────────────────────────────────┘    the doc for the
-//	 tab accept · ↑/↓ move · enter run · ctrl+t fields · esc      highlighted row
+//	 tab accept · ↑/↓ move · enter run · ctrl+s save as… · ctrl+t fields · esc
 //
 // It is the same language, the same completions and the same live data the web
 // UI gets, because both go through models/query*.go — here via the Store, so a
@@ -39,6 +39,17 @@ import (
 // list behavior — the preview pane, lock badges, edit, delete, "/" within the
 // results — working unchanged on a query result, instead of a second list
 // screen that would have to reimplement all of it.
+//
+// Saved and recent queries are managed from here too, mirroring the web bar:
+//
+//	ctrl+s          push a name prompt → Store.SaveQuery → "✓ saved as …"
+//	shift+delete    on a ☆/↺ row → Store.DeleteSavedQuery → re-complete
+//	(or ctrl+x)
+//
+// Naming reuses promptScreen, the same dialog categories use for new/rename,
+// rather than a second input on this screen: the prompt pops before its
+// submit command runs, so the store's answer lands back here, where a syntax
+// error can be underlined in the query the user is looking at.
 type queryScreen struct {
 	sess  *session
 	input textinput.Model
@@ -72,6 +83,11 @@ type queryScreen struct {
 	// store that could not be reached.
 	errText string
 	running bool
+	// notice is the one-line acknowledgement of a save or forget. Neither
+	// leaves anything else on screen to say it happened — a forget only makes
+	// a row disappear, a save changes nothing visible at all — so without it
+	// the user cannot tell success from a key that did nothing.
+	notice string
 
 	// helpOpen shows the field catalog instead of the completion list. The two
 	// share the space because they answer the same question at different
@@ -146,6 +162,33 @@ type queryRanMsg struct {
 	query string
 	notes []models.Note
 	err   error
+}
+
+// querySavedMsg is the answer to a save. name is what the user typed, kept
+// for the notice so it reads back exactly what they asked for.
+type querySavedMsg struct {
+	name string
+	err  error
+}
+
+// queryForgotMsg is the answer to a forget. label names the row for the
+// notice, since the row itself is gone by the time this arrives.
+type queryForgotMsg struct {
+	label string
+	err   error
+}
+
+func saveQueryCmd(store Store, name, query, userGUID string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := store.SaveQuery(name, query, userGUID)
+		return querySavedMsg{name: name, err: err}
+	}
+}
+
+func forgetQueryCmd(store Store, id int64, label, userGUID string) tea.Cmd {
+	return func() tea.Msg {
+		return queryForgotMsg{label: label, err: store.DeleteSavedQuery(id, userGUID)}
+	}
 }
 
 // complete asks for the suggestions valid at the cursor.
@@ -251,6 +294,38 @@ func (s *queryScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		// message arrives at this screen.
 		return s, tea.Sequence(pop(false), func() tea.Msg { return msg })
 
+	case querySavedMsg:
+		if msg.err != nil {
+			// showError routes a parse failure to the caret, which is the
+			// point of the store returning a *models.QueryError here: the
+			// save was refused for a character the user can now see. The
+			// name they typed is lost, but ctrl+s on a query that was a saved
+			// one prefills it, and a fresh name is a few keystrokes.
+			var qe *models.QueryError
+			if errors.As(msg.err, &qe) {
+				s.showError(qe)
+				return s, nil
+			}
+			// Anything else — no name, too long, server unreachable — is a
+			// sentence. errReason keeps it to the part worth reading: the
+			// server's own message for a 400, the transport's cause otherwise.
+			s.qerr, s.errText = nil, "could not save: "+errReason(msg.err)
+			return s, nil
+		}
+		s.notice = "saved as “" + msg.name + "” — it leads the list when the box is empty"
+		return s, nil
+
+	case queryForgotMsg:
+		if msg.err != nil {
+			s.qerr, s.errText = nil, "could not forget that query: "+errReason(msg.err)
+			return s, nil
+		}
+		s.notice = "forgot “" + msg.label + "”"
+		// Ask again rather than trust the local edit: the list is the
+		// server's, and it may now promote a history row that was hidden
+		// behind the one just removed.
+		return s, s.complete()
+
 	case tea.KeyPressMsg:
 		return s.handleKey(msg)
 	}
@@ -293,6 +368,19 @@ func (s *queryScreen) handleKey(k tea.KeyPressMsg) (screen, tea.Cmd) {
 	case key.Matches(k, keys.QueryAccept) && popupOpen:
 		return s, s.accept(s.highlight)
 
+	case key.Matches(k, keys.QuerySave):
+		return s, s.startSave()
+
+	case key.Matches(k, keys.QueryForget):
+		// Only a stored row can be forgotten. On anything else the key is
+		// swallowed rather than passed to the input: shift+delete is not an
+		// edit, and handing it on would make the same key delete a character
+		// on one row and a saved query on the next.
+		if !popupOpen || !s.highlightForgettable() {
+			return s, nil
+		}
+		return s, s.forget(s.highlight)
+
 	case key.Matches(k, keys.Submit):
 		// Enter runs the query. It accepts a suggestion first only when the
 		// user has moved OFF the default row — otherwise finishing a complete
@@ -323,7 +411,9 @@ func (s *queryScreen) handleKey(k tea.KeyPressMsg) (screen, tea.Cmd) {
 	var cmd tea.Cmd
 	s.input, cmd = s.input.Update(k)
 	if s.input.Value() != prev || s.input.Position() != prevPos {
-		s.qerr, s.errText = nil, "" // the text changed; the old complaint is stale
+		// The text changed; the old complaint and the old acknowledgement
+		// are both about a query that is no longer on screen.
+		s.qerr, s.errText, s.notice = nil, "", ""
 		return s, tea.Batch(cmd, s.complete())
 	}
 	return s, cmd
@@ -397,13 +487,77 @@ func clampRange(start, end, n int) (int, int) {
 // cursor index the textinput wants.
 func runeCount(s string) int { return utf8.RuneCountInString(s) }
 
+// highlightForgettable reports whether the highlighted row is a saved or
+// recent query with a row id behind it — the rows forget can act on. The id
+// check matters as much as the kind: a suggestion without one has nothing on
+// the server to delete.
+func (s *queryScreen) highlightForgettable() bool {
+	if s.highlight < 0 || s.highlight >= len(s.sugg) {
+		return false
+	}
+	sg := s.sugg[s.highlight]
+	return (sg.Kind == models.SavedQueryKindSaved || sg.Kind == models.SavedQueryKindHistory) && sg.ID > 0
+}
+
+// forget deletes row i's stored query.
+//
+// The row is dropped from the list at once, before the store answers. That
+// is not to look fast: it is so a second forget press, made before the reply,
+// lands on the NEXT row instead of re-sending the same id. The re-complete
+// that follows the reply replaces the list with the server's anyway.
+func (s *queryScreen) forget(i int) tea.Cmd {
+	sg := s.sugg[i]
+	// The three-index slice caps the head's capacity, so the append copies
+	// rather than shifting rows inside the backing array the completion reply
+	// handed over.
+	s.sugg = append(s.sugg[:i:i], s.sugg[i+1:]...)
+	switch {
+	case len(s.sugg) == 0:
+		s.highlight = -1
+	case s.highlight >= len(s.sugg):
+		s.highlight = len(s.sugg) - 1
+	}
+	s.qerr, s.errText, s.notice = nil, "", ""
+	return forgetQueryCmd(s.sess.store, sg.ID, sg.Label, s.sess.user.GUID)
+}
+
+// startSave asks for a name for the query in the box.
+//
+// If the text is already a saved query, the prompt opens on that name, so
+// re-saving it — which is how a saved query is edited or re-cased — does not
+// mean retyping the name. The match is against the rows on screen, which is
+// all the web bar checks too; a miss just opens an empty prompt.
+func (s *queryScreen) startSave() tea.Cmd {
+	text := strings.TrimSpace(s.input.Value())
+	if text == "" {
+		s.qerr, s.errText, s.notice = nil, "type a query first, then save it", ""
+		return nil
+	}
+	prefill := ""
+	for _, sg := range s.sugg {
+		if sg.Kind == models.SavedQueryKindSaved && sg.Text == text {
+			prefill = sg.Label
+			break
+		}
+	}
+	s.qerr, s.errText, s.notice = nil, "", ""
+
+	store, guid := s.sess.store, s.sess.user.GUID
+	return push(newPromptScreen(s.sess, "Save query as",
+		func(name string) tea.Cmd {
+			// The text is captured now, not read at submit: it is what the
+			// user was looking at when they asked to save.
+			return saveQueryCmd(store, name, text, guid)
+		}).withValue(prefill))
+}
+
 // run executes what is in the box. An empty query is not an error — it clears
 // the filter and shows the whole library, which is what an emptied search box
 // should always do.
 func (s *queryScreen) run() tea.Cmd {
 	text := strings.TrimSpace(s.input.Value())
 	s.sugg, s.highlight = nil, -1
-	s.qerr, s.errText = nil, ""
+	s.qerr, s.errText, s.notice = nil, "", ""
 
 	if text == "" {
 		return tea.Sequence(pop(false), func() tea.Msg {
@@ -462,6 +616,8 @@ func (s *queryScreen) View() string {
 		b.WriteString(s.renderSyntaxError())
 	case s.running:
 		b.WriteString("\n" + dimStyle.Render("running…") + "\n")
+	case s.notice != "":
+		b.WriteString("\n" + dimStyle.Render("✓ "+s.notice) + "\n")
 	}
 
 	if s.helpOpen {
@@ -470,7 +626,8 @@ func (s *queryScreen) View() string {
 		b.WriteString("\n" + s.renderSuggestions())
 	}
 
-	b.WriteString("\n" + renderHelp(keys.queryHelp()...))
+	forgettable := len(s.sugg) > 0 && !s.helpOpen && s.highlightForgettable()
+	b.WriteString("\n" + renderHelp(keys.queryHelp(forgettable)...))
 	box := dialogBoxStyle.Render(b.String())
 	return lipgloss.Place(s.sess.width, s.sess.height, lipgloss.Center, lipgloss.Top, box)
 }

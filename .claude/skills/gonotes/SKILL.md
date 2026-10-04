@@ -290,7 +290,7 @@ re-export and byte-diff as an independent check.
 
 **Terminal UI**: `gonotes tui` (or `gonotes tui -d <dir>`). Keys: `/` search,
 `:` advanced query (see above — `tab` accepts a completion, `ctrl+t` lists every
-field), `n`/`e` new/edit, `c` category filter (then `s` for that category's
+field, `ctrl+s` names the query, `shift+delete`/`ctrl+x` forgets a ☆/↺ row), `n`/`e` new/edit, `c` category filter (then `s` for that category's
 subcategories, `space` to toggle several, `enter` to filter), `f` flag, `d`
 delete, `D` duplicate, `S` sync, `ctrl+e` edit body in `$EDITOR`, `ctrl+s` save,
 `ctrl+g` capture an agent pane, `ctrl+r` summarize (the clipboard in the list,

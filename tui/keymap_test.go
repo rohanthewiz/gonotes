@@ -65,6 +65,13 @@ func TestBindingKeys(t *testing.T) {
 		{"field up", keys.FieldUp, []string{"up"}},
 		{"submit", keys.Submit, []string{"enter"}},
 
+		// The query screen's save chord must stay ctrl+s: that is the typing
+		// twin the ⌘S accelerator delivers, so drifting it would leave ⌘S
+		// inert there. Forget keeps a C0 twin for terminals that cannot tell
+		// shift+delete from delete.
+		{"save a query", keys.QuerySave, []string{"ctrl+s"}},
+		{"forget a stored query", keys.QueryForget, []string{"shift+delete", "ctrl+x"}},
+
 		// The v2 break the whole key-name suite exists for.
 		{"toggle private", keys.TogglePrivate, []string{"space"}},
 
@@ -133,10 +140,12 @@ func TestHelpSetsAreHandled(t *testing.T) {
 		},
 		{
 			screen: "query",
-			help:   keys.queryHelp(),
+			// The forgettable variant is the superset; the other is checked
+			// by being a subset of it.
+			help: keys.queryHelp(true),
 			handled: []key.Binding{
 				keys.QueryAccept, keys.Move, keys.Submit, keys.QueryFields,
-				keys.QueryComplete, keys.Back,
+				keys.QueryComplete, keys.QuerySave, keys.QueryForget, keys.Back,
 			},
 		},
 		{

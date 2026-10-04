@@ -803,6 +803,45 @@ func (s *httpStore) RecordQuery(query, _ string) error {
 	return nil
 }
 
+// saveQueryBody mirrors api.saveQueryRequest.
+type saveQueryBody struct {
+	Name  string `json:"name"`
+	Query string `json:"query"`
+}
+
+// SaveQuery names a query on the server, so it shows up as ☆ in the web bar
+// too. A parse failure comes back as the positioned 400 a run gives and is
+// recovered with asQueryError, for the same reason QueryNotes does it: the
+// screen underlines the mistake identically in both modes. Any other 400 (no
+// name, too long) is left as the apiError, whose Error() is the server's
+// sentence — already the reason the user needs.
+func (s *httpStore) SaveQuery(name, query, _ string) (*models.SavedQuery, error) {
+	var out models.SavedQuery
+	err := s.request(http.MethodPost, "/api/v1/notes/query/saved", saveQueryBody{Name: name, Query: query}, &out)
+	if err != nil {
+		if qe := asQueryError(err); qe != nil {
+			return nil, qe
+		}
+		return nil, serr.Wrap(err, "failed to save query")
+	}
+	return &out, nil
+}
+
+// DeleteSavedQuery forgets a saved or history row on the server. A 404 means
+// the row is already gone — forgotten from another front end, or pruned off
+// the end of history since the popup was drawn — which is the outcome asked
+// for, so it is not reported. The web bar makes the same call.
+func (s *httpStore) DeleteSavedQuery(id int64, _ string) error {
+	path := "/api/v1/notes/query/saved/" + strconv.FormatInt(id, 10)
+	if err := s.request(http.MethodDelete, path, nil, nil); err != nil {
+		if isNotFound(err) {
+			return nil
+		}
+		return serr.Wrap(err, "failed to forget saved query")
+	}
+	return nil
+}
+
 // asQueryError recovers a *models.QueryError from a 400's envelope data,
 // returning nil when the error was anything else. The status check matters:
 // only the query endpoints put a QueryError in `data`, and a 409's conflict

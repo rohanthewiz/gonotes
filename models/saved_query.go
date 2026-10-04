@@ -20,7 +20,8 @@ import (
 // every front end the same list from one place:
 //
 //	web query bar ──POST /query/saved, /query/history──┐
-//	TUI query screen ──RecordQuery (local or HTTP)─────┤
+//	TUI query screen ──RecordQuery, SaveQuery,─────────┤
+//	                   DeleteSavedQuery (local or HTTP)│
 //	                                                   ▼
 //	                                   saved_queries (private DB)
 //	                                                   │

@@ -143,6 +143,17 @@ type keyMap struct {
 	// a key that stops deleting is far worse than a mnemonic that has to be
 	// read off the footer.
 	QueryFields key.Binding
+	// QuerySave names the query in the box (the web bar's ☆ / ⌘S). Same chord
+	// as the form's Save, so the ⌘S accelerator — whose typing twin is ctrl+s,
+	// see metakeys.go — reaches it with no row of its own.
+	QuerySave key.Binding
+	// QueryForget deletes the highlighted saved or recent row. shift+delete
+	// is the web bar's key and the browser convention for dropping an
+	// autocomplete entry; ctrl+x is its twin for terminals that report
+	// shift+delete as a plain delete (or not at all) — a C0 control every
+	// terminal sends, and one textinput leaves unbound, so it cannot be
+	// mistaken for editing.
+	QueryForget key.Binding
 
 	// ---- Locked-note dialog -----------------------------------------------
 	// Shown when another session already has the note open. Like the unsaved
@@ -311,6 +322,14 @@ func defaultKeyMap() keyMap {
 		QueryFields: key.NewBinding(
 			key.WithKeys("ctrl+t"),
 			key.WithHelp("ctrl+t", "fields"),
+		),
+		QuerySave: key.NewBinding(
+			key.WithKeys("ctrl+s"),
+			key.WithHelp("ctrl+s", "save as…"),
+		),
+		QueryForget: key.NewBinding(
+			key.WithKeys("shift+delete", "ctrl+x"),
+			key.WithHelp("⇧del", "forget"),
 		),
 
 		Save: key.NewBinding(
@@ -522,8 +541,15 @@ func (k keyMap) browseHelp() []key.Binding {
 // queryHelp is the advanced-search footer. Accept comes first because it is
 // the key that is not guessable — enter and esc mean here what they mean
 // everywhere else, and tab is the one a person has to be told about.
-func (k keyMap) queryHelp() []key.Binding {
-	return []key.Binding{k.QueryAccept, k.Move, k.Submit, k.QueryFields, k.Back}
+//
+// Forget is listed only while the highlighted row is a saved or recent query
+// (forgettable), the same way the web bar adds "⇧Del forget" to its hint: a
+// footer naming a key that does nothing on the row in front of you is noise.
+func (k keyMap) queryHelp(forgettable bool) []key.Binding {
+	if forgettable {
+		return []key.Binding{k.QueryAccept, k.Move, k.Submit, k.QueryForget, k.QuerySave, k.QueryFields, k.Back}
+	}
+	return []key.Binding{k.QueryAccept, k.Move, k.Submit, k.QuerySave, k.QueryFields, k.Back}
 }
 
 func (k keyMap) categoriesHelp() []key.Binding {

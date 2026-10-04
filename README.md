@@ -416,9 +416,13 @@ An empty box leads with your **saved** queries (☆), then your **recent** ones
 it too. Picking one replaces the line and runs it.
 
 - **Save:** ☆ in the web bar (or ⌘S / Ctrl+S in the input), give it a name,
-  Enter. Saving under an existing name (case ignored) replaces that query. A
-  query that does not parse is refused with the usual underlined error.
+  Enter. In the TUI, `ctrl+s` (or ⌘S) asks for the name. Saving under an
+  existing name (case ignored) replaces that query, and re-saving a saved
+  query's text opens the prompt on its name. A query that does not parse is
+  refused with the usual underlined error.
 - **Forget:** `Shift+Delete` on a highlighted saved or recent row, or its ×.
+  The TUI takes `shift+delete` too, or `ctrl+x` where the terminal can't tell
+  it from a plain delete.
 - Both lists live on the server, per user, in the **private** database (query
   text quotes note content, so it gets encryption when that is configured).
   Every browser and the TUI see the same lists. A deliberate run is recorded;
@@ -635,6 +639,8 @@ at the top of `tui/intake.go`.
 | | `enter` | Run the query (or accept a completion you moved to) |
 | | `ctrl+t` | Show every queryable attribute |
 | | `ctrl+n` | Ask for completions again |
+| | `ctrl+s` | Save the query under a name |
+| | `shift+delete` / `ctrl+x` | Forget the highlighted saved (☆) or recent (↺) query |
 | | `esc` | Dismiss the completions, then the field list, then the screen |
 | Categories | `enter` | Filter notes by the selected category |
 | | `s` | Open that category's subcategories |

@@ -1275,3 +1275,87 @@ func TestSubcategoryNoteCountsOverHTTP(t *testing.T) {
 		t.Errorf("counts = %v, want api:2 ops:1 (Home's links not counted)", counts)
 	}
 }
+
+// TestHTTPStoreSaveQueryWire covers the body SaveQuery sends and the two ways a
+// save is refused: a syntax error, which must come back as the positioned
+// *models.QueryError so the screen can underline it exactly as it does
+// locally, and any other 400, which is the server's sentence.
+func TestHTTPStoreSaveQueryWire(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody saveQueryBody
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		switch gotBody.Name {
+		case "broken":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": false, "error": "expected a value",
+				"data": models.QueryError{Msg: "expected a value", Pos: 8, Len: 1},
+			})
+		case "":
+			writeErr(w, http.StatusBadRequest, "a saved query needs a name")
+		default:
+			writeOK(w, http.StatusOK, models.SavedQuery{ID: 3, Kind: "saved", Name: gotBody.Name, Query: gotBody.Query})
+		}
+	}))
+	defer srv.Close()
+	t.Setenv(envTokenFile, filepath.Join(t.TempDir(), ".api_token"))
+	st := NewHTTPStore(srv.URL)
+
+	sq, err := st.SaveQuery("dags", "title CONTAINS 'dag'", "")
+	if err != nil {
+		t.Fatalf("SaveQuery: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/v1/notes/query/saved" {
+		t.Errorf("request = %s %s", gotMethod, gotPath)
+	}
+	if gotBody.Query != "title CONTAINS 'dag'" || sq.ID != 3 || sq.Name != "dags" {
+		t.Errorf("body = %+v, saved = %+v", gotBody, sq)
+	}
+
+	_, err = st.SaveQuery("broken", "title = ", "")
+	var qe *models.QueryError
+	if !errors.As(err, &qe) || qe.Pos != 8 {
+		t.Fatalf("a syntax refusal should be a positioned QueryError, got %v", err)
+	}
+
+	_, err = st.SaveQuery("", "title = 'x'", "")
+	if err == nil || errReason(err) != "a saved query needs a name" {
+		t.Fatalf("a non-syntax 400 should keep the server's sentence, got %v", err)
+	}
+}
+
+// TestHTTPStoreDeleteSavedQueryWire covers the path and the one status that is
+// not an error: a 404 means the row is already gone, which is what was asked.
+func TestHTTPStoreDeleteSavedQueryWire(t *testing.T) {
+	var gotMethod, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		switch r.URL.Path {
+		case "/api/v1/notes/query/saved/404":
+			writeErr(w, http.StatusNotFound, "saved query not found")
+		case "/api/v1/notes/query/saved/500":
+			writeErr(w, http.StatusInternalServerError, "database error")
+		default:
+			writeOK(w, http.StatusOK, map[string]int64{"id": 42})
+		}
+	}))
+	defer srv.Close()
+	t.Setenv(envTokenFile, filepath.Join(t.TempDir(), ".api_token"))
+	st := NewHTTPStore(srv.URL)
+
+	if err := st.DeleteSavedQuery(42, ""); err != nil {
+		t.Fatalf("DeleteSavedQuery: %v", err)
+	}
+	if gotMethod != http.MethodDelete || gotPath != "/api/v1/notes/query/saved/42" {
+		t.Errorf("request = %s %s", gotMethod, gotPath)
+	}
+	if err := st.DeleteSavedQuery(404, ""); err != nil {
+		t.Errorf("a row that is already gone should not be an error, got %v", err)
+	}
+	if err := st.DeleteSavedQuery(500, ""); err == nil {
+		t.Error("a server failure was swallowed")
+	}
+}

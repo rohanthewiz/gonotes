@@ -114,12 +114,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   *reappear* later, that is the sync path and needs its own investigation.
   Candidate for Closed if the symptom hasn't come back.
 
-- **N-048** · raised `2026-1003-1606-n034-saved-queries` · value low
-  The TUI query screen shows saved and recent queries (and runs them), but
-  cannot name a query or forget a row. Saving and forgetting are web-only
-  (☆ / `Shift+Delete`). The seam would need `SaveQuery` / `DeleteSavedQuery`
-  next to `RecordQuery` in `tui/store.go`.
-
 ## Roadmap
 
 Wanted, but deliberately not next. Parked, not declined. Seeded empty: no
@@ -143,6 +137,8 @@ session doc marked an item as deferred, so move items here from Open by hand.
 
 ## Closed
 
+- **N-048** · raised `2026-1003-1606-n034-saved-queries` · closed 2026-10-03, `2026-1003-2009-n048-tui-save-forget-queries` —
+  The TUI query screen showed saved and recent queries but could not name one or forget a row. Done: `SaveQuery` / `DeleteSavedQuery` sit next to `RecordQuery` on the Store seam (local → `models`, HTTP → `POST`/`DELETE /api/v1/notes/query/saved`). A syntax refusal comes back as the positioned `QueryError` in both modes, and an already-gone row is not an error. On the query screen, `ctrl+s` (and ⌘S) opens the shared name prompt, prefilled when the text is already saved. `shift+delete` (or `ctrl+x`) forgets the highlighted ☆/↺ row and re-completes. A `✓` line acknowledges both, and the footer shows forget only on a stored row. Tested against the fake store, the HTTP wire and the real local store.
 - **N-012** · raised `2026-0817-1046-tui-subcategory-support` · closed 2026-10-03, `2026-1003-1628-n012-subcategory-any-match` —
   Toggling several subcategories meant AND only, in both UIs. Done: an all/any switch, with AND still the default. `models.SubcategoryMatch` and `GetNotesByCategorySubcategoryMatch` (plus `GetNotesByCategoryAndAnySubcategory`), and the API takes `subcats_mode=any`. The TUI subcategory screen flips with `m`, and the heading and list title end in `(any)`. The web chips get a leading `all of` / `any of` button, and the query string shows `match:any`. Checked in headless Chrome against a scratch server.
 - **N-034** · raised `2026-0909-1858-advanced-sql-search` · closed 2026-10-03, `2026-1003-1606-n034-saved-queries` —

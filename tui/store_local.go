@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"gonotes/models"
@@ -138,6 +139,23 @@ func (s *localStore) CompleteQuery(query string, pos int, userGUID string) (*mod
 // UI's POST /notes/query/history reaches.
 func (s *localStore) RecordQuery(query, userGUID string) error {
 	return models.RecordQueryHistory(userGUID, query)
+}
+
+// SaveQuery names a query in-process; the same models call the web UI's
+// POST /notes/query/saved makes, parse check included.
+func (s *localStore) SaveQuery(name, query, userGUID string) (*models.SavedQuery, error) {
+	return models.SaveNamedQuery(userGUID, name, query)
+}
+
+// DeleteSavedQuery forgets a row in-process. ErrSavedQueryNotFound is folded
+// into success to match the interface's contract (and the HTTP store, which
+// treats the server's 404 the same way).
+func (s *localStore) DeleteSavedQuery(id int64, userGUID string) error {
+	err := models.DeleteSavedQuery(userGUID, id)
+	if errors.Is(err, models.ErrSavedQueryNotFound) {
+		return nil
+	}
+	return err
 }
 
 // ---- Categories ------------------------------------------------------------
