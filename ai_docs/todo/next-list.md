@@ -45,31 +45,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   migrated spoke must push its pre-existing notes to a hub without a full
   snapshot reconcile.
 
-- **N-015** · raised `2026-0817-1420-gonotes-note-locks` · value low
-  Mobile parity. The app is `github.com/rohanthewiz/gonotes_mobile`, not
-  cats-mobile, which is the cats agent client and has no notes. It is now
-  Go on grmob, on its `master` since 2026-10-05 (`ec71de1`). The Kotlin
-  spoke is archived in that repo. Re-checked 2026-10-05:
-  - **Locks and version guards: not applicable.** The app calls only the
-    auth and `/sync/*` endpoints, never `/notes`. Sync apply sits outside the
-    lock protocol by design, and the hub bumps `version` on apply, so a held
-    form gets the stale-write 409 instead of a silent clobber.
-  - **Sync affordance: done.** Hub setup, prompt/auto sync with a due banner
-    and snooze, and sync-now. Background sync while the app is closed is
-    gone with the Kotlin WorkManager job: grmob has no equivalent yet.
-  - **Duplicate action: done**, with the same dialog as gonotes.
-  - **Hub protocol: verified end to end.** The app's e2e test
-    (`internal/spoke/e2e_test.go`) drives two phones and the REST API against
-    a real hub built from this repo: push, pull, relay between phones,
-    refiling relay, delete, checksum parity. That test found the hub's
-    filing-relay gaps (N-052, fixed in `cf561e2`). The phone's workaround
-    is removed (`7b00746`), so it needs a hub at or past `cf561e2`.
-  - **Parity:** everything a user does on the web UI except server-only
-    features (admin, invites, edit locks, hub compaction) and Mermaid
-    rendering. Remaining mobile work (device checks, iOS run, background
-    sync, share intents) is tracked in that repo's session docs, not here.
-    This item is a candidate to close.
-
 - **N-021** · raised `2026-0818-1739-duplicate-note-dialog` · value low
   Whether a note's follow-up flag should carry over to a duplicate is left to
   a row in the dialog. If nobody ever ticks that row, changing its default is
@@ -134,6 +109,34 @@ session doc marked an item as deferred, so move items here from Open by hand.
   `2026-0817-0015-tui-mouse-filter-and-store-identity`.
 
 ## Closed
+
+- **N-015** · raised `2026-0817-1420-gonotes-note-locks` · closed
+  2026-10-05, no session doc — Mobile parity. The app is
+  `github.com/rohanthewiz/gonotes_mobile`, not cats-mobile, which is the cats
+  agent client and has no notes. It is now
+  Go on grmob, on its `master` since 2026-10-05 (`ec71de1`). The Kotlin
+  spoke is archived in that repo. Re-checked 2026-10-05:
+  - **Locks and version guards: not applicable.** The app calls only the
+    auth and `/sync/*` endpoints, never `/notes`. Sync apply sits outside the
+    lock protocol by design, and the hub bumps `version` on apply, so a held
+    form gets the stale-write 409 instead of a silent clobber.
+  - **Sync affordance: done.** Hub setup, prompt/auto sync with a due banner
+    and snooze, and sync-now. Background sync while the app is closed is
+    gone with the Kotlin WorkManager job: grmob has no equivalent yet.
+  - **Duplicate action: done**, with the same dialog as gonotes.
+  - **Hub protocol: verified end to end.** The app's e2e test
+    (`internal/spoke/e2e_test.go`) drives two phones and the REST API against
+    a real hub built from this repo: push, pull, relay between phones,
+    refiling relay, delete, checksum parity. That test found the hub's
+    filing-relay gaps (N-052, fixed in `cf561e2`). The phone's workaround
+    is removed (`7b00746`), so it needs a hub at or past `cf561e2`.
+  - **Parity:** everything a user does on the web UI except server-only
+    features (admin, invites, edit locks, hub compaction) and Mermaid
+    rendering.
+
+  Closed because every point above is resolved. The remaining mobile work
+  (device checks, iOS run, background sync, share intents) is tracked in
+  gonotes_mobile's own `ai_docs/todo/next-list.md`, not here.
 
 - **N-052** · raised `gonotes_mobile:2026-1005-0132-grmob-rewrite-gonotes-parity`
   · closed 2026-10-05, no session doc (branch `roh/relay-categories`) — The
