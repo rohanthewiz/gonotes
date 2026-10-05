@@ -31,7 +31,7 @@ with every item's premise re-checked against the code at `e0c2a39`.
 - Open and Roadmap stay in ID order. Edit an item's text in place when its
   premise changes; keep its ID and `raised`.
 
-**Next ID:** N-049
+**Next ID:** N-052
 
 ## Open
 
@@ -44,11 +44,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   The DuckDB→bytdb migration skips the sync change log. Revisit only if a
   migrated spoke must push its pre-existing notes to a hub without a full
   snapshot reconcile.
-
-- **N-004** · raised `2026-0812-1306-monaco-editor-option` · value low
-  Vendored Monaco (13MB, 105 files under `web/static/vendor/monaco/`) is
-  committed to git. If repo size becomes a concern, gitignore it and run
-  `scripts/vendor_monaco.sh` as a build step.
 
 - **N-005** · raised `2026-0812-1306-monaco-editor-option` · value low
   Binary size: `vs/language/typescript` (5.5MB) and non-English
@@ -67,11 +62,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   `-1934`). Premise unverified: the mobile app has since been rebuilt as a
   sync spoke (branch `roh/sync-spoke-rebuild`), so check that repo before
   acting.
-
-- **N-016** · raised `2026-0817-1420-gonotes-note-locks` · value low
-  The category and subcategory screens have no lock gate. Nothing is at risk
-  today because they don't edit notes, but any bulk note operation added
-  there later would need one. Contingent on such an operation existing.
 
 - **N-021** · raised `2026-0818-1739-duplicate-note-dialog` · value low
   Whether a note's follow-up flag should carry over to a duplicate is left to
@@ -93,20 +83,9 @@ with every item's premise re-checked against the code at `e0c2a39`.
   the hub then skips by GUID, wasting one entry per batch. Filter per
   direction only if it shows up in a profile.
 
-- **N-025** · raised `2026-0818-1934-spoke-user-guid-alignment` · value low
-  A local account named differently from `GONOTES_SYNC_USERNAME` is diagnosed
-  but can't be fixed in the app. There's no merge or rename affordance; the
-  log's advice is to re-register. A small admin endpoint or CLI subcommand
-  would close it.
-
 - **N-026** · raised `2026-0818-1934-spoke-user-guid-alignment` · value low
   Spokes synced to more than one hub are untested. `hubIdentityForUsername`
   takes the first `sync_state` row that matches. The design assumes one hub.
-
-- **N-028** · raised `2026-0819-1410-web-batch-delete` · value low
-  The web UI loads the whole library, with no limit and no "very large
-  library" signal. If this ever matters, the answer is real server-side
-  search and paging, not a silent cap.
 
 - **N-030** · raised `2026-0819-1410-web-batch-delete` · value low
   It was never confirmed that the batch-delete fix addressed the user's actual
@@ -114,10 +93,49 @@ with every item's premise re-checked against the code at `e0c2a39`.
   *reappear* later, that is the sync path and needs its own investigation.
   Candidate for Closed if the symptom hasn't come back.
 
+- **N-049** · raised `2026-1004-n016-bulk-lock-gate` · value low
+  The per-note category writes skip the lock gate. `POST`/`PUT`/`DELETE
+  /api/v1/notes/:id/categories[/:category_id]` never call
+  `authorizeNoteWrite`, and `localStore`'s category writers never call
+  `AuthorizeNoteWrite`. So a second session can refile a note another
+  session's form holds, and the holder's save then writes its own set back
+  over that change. Gating them with the holder's token, as `UpdateNote` is
+  gated, would close it. The holder's form already sends the token.
+
+- **N-050** · raised `2026-1004-2039-n025-account-rename-merge` · value medium
+  Nothing stops two processes opening the same databases. Neither bytdb nor
+  btypedb takes an OS file lock: `gonotes account list` opened the files
+  beside a live server without complaint. The code assumes a lock. `runTui`'s
+  fallback expects `InitDB` to fail when a server holds the files, and the
+  README tells users to stop the server before `import-gob`/`export-md`/
+  `import-md` because the databases are "single-writer". Nothing enforces
+  that. Two writers, or two background compactors, on one file is
+  corruption. `gonotes account` now probes for a live server first; the
+  other commands don't. An `flock` in `openDatabases` would make the
+  assumption true for all of them.
+
+- **N-051** · raised `2026-1004-2039-n025-account-rename-merge` · value low
+  The auth middleware trusts the JWT's user GUID without a lookup. After a
+  hub-identity reconcile or `gonotes account merge`, a session opened
+  earlier keeps acting as the old GUID until it signs in again. It sees no
+  notes, and anything it creates is owned by a GUID no account holds. The
+  CLI prints a "sign in again" line. A per-request check that the GUID
+  still exists (or a small cache of it) would close the gap.
+
 ## Roadmap
 
 Wanted, but deliberately not next. Parked, not declined. Seeded empty: no
 session doc marked an item as deferred, so move items here from Open by hand.
+
+- **N-004** · raised `2026-0812-1306-monaco-editor-option` · value low
+  Vendored Monaco (13MB, 105 files under `web/static/vendor/monaco/`) is
+  committed to git. If repo size becomes a concern, gitignore it and run
+  `scripts/vendor_monaco.sh` as a build step.
+
+- **N-028** · raised `2026-0819-1410-web-batch-delete` · value low
+  The web UI loads the whole library, with no limit and no "very large
+  library" signal. If this ever matters, the answer is real server-side
+  search and paging, not a silent cap.
 
 ## Non-goals
 
@@ -137,6 +155,40 @@ session doc marked an item as deferred, so move items here from Open by hand.
 
 ## Closed
 
+- **N-025** · raised `2026-0818-1934-spoke-user-guid-alignment` · closed
+  2026-10-04, `2026-1004-2039-n025-account-rename-merge` — A local account
+  named differently from `GONOTES_SYNC_USERNAME` was diagnosed but couldn't
+  be fixed in the app. Done as a CLI subcommand, `gonotes account list|rename|merge`
+  (`account_cmd.go`, `models/account_admin.go`), not a web endpoint. The
+  repair rewrites the identity of the account a web session is signed in
+  as. `list` shows each account, what it owns, and the recorded hub
+  identity, and prints the command that fixes a mismatch. `rename` handles
+  the case where only the misnamed account exists. `merge` handles the case
+  where the old advice was followed and both exist: it re-points every row
+  and deletes the source last, so a crashed merge re-runs. Both then run
+  `AlignLocalUserWithHub` so the hub GUID is adopted at once. Merge carries
+  admin rights over and names any category names the two accounts share; it
+  doesn't combine them. Along the way: the identity sweep missed
+  `saved_queries` (added after it), so a reconcile left saved queries under
+  the old GUID. The sweep and the new counters now share one inventory,
+  `userGUIDRefs()`. Checked end to end with a real hub and two spokes. It
+  raised N-050 (no cross-process DB lock) and N-051 (stale sessions after a
+  GUID change).
+
+- **N-016** · raised `2026-0817-1420-gonotes-note-locks` · closed 2026-10-04 —
+  The category screens had no lock gate. The premise had already changed:
+  subcategory rename (N-001, `f885eec`) is a bulk note operation that rewrites
+  every filed note's link, and an open form's save would write the old name
+  back. Done: `models.RenameSubcategory` finds every target in both databases,
+  checks them with `AuthorizeBulkNoteWrite`, and only then writes. A lease
+  held by any session, the caller's own included, blocks the rename, and a
+  refusal changes nothing. The refusal is a `*NotesLockedError` that lists
+  every blocking lease. Over HTTP it is a 409 with reason `notes_locked`, and
+  `httpStore` turns it back into the same type. It is not a
+  `NoteLockedError`, so the TUI shows a status line, not the one-note
+  contention dialog. `InitTestDB` now empties the lock registry, because leases
+  leaked by earlier tests were landing on reused note ids. Category rename and
+  delete don't touch note links, so they need no gate.
 - **N-048** · raised `2026-1003-1606-n034-saved-queries` · closed 2026-10-03, `2026-1003-2009-n048-tui-save-forget-queries` —
   The TUI query screen showed saved and recent queries but could not name one or forget a row. Done: `SaveQuery` / `DeleteSavedQuery` sit next to `RecordQuery` on the Store seam (local → `models`, HTTP → `POST`/`DELETE /api/v1/notes/query/saved`). A syntax refusal comes back as the positioned `QueryError` in both modes, and an already-gone row is not an error. On the query screen, `ctrl+s` (and ⌘S) opens the shared name prompt, prefilled when the text is already saved. `shift+delete` (or `ctrl+x`) forgets the highlighted ☆/↺ row and re-completes. A `✓` line acknowledges both, and the footer shows forget only on a stored row. Tested against the fake store, the HTTP wire and the real local store.
 - **N-012** · raised `2026-0817-1046-tui-subcategory-support` · closed 2026-10-03, `2026-1003-1628-n012-subcategory-any-match` —
