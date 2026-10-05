@@ -170,7 +170,7 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 					),
 					// Monaco editor opt-in — preference persists in localStorage.
 					// Reuses the privacy-toggle styling for a consistent checkbox look.
-					b.Label("class", "privacy-toggle", "title", "Full Monaco code editor with the complete monaco.editor API (loaded from CDN on demand)").R(
+					b.Label("class", "privacy-toggle", "title", "Full Monaco code editor with the complete monaco.editor API (loaded on demand from the bundled copy, CDN as fallback)").R(
 						b.Input("type", "checkbox", "class", "privacy-checkbox", "id", "edit-monaco-toggle",
 							"onchange", "app.toggleMonacoEditor(this.checked)"),
 						b.Span().T("Monaco editor"),

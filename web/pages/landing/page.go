@@ -142,7 +142,7 @@ func (p Page) renderBody(b *element.Builder) any {
 		// to the pinned CDN build. Refresh the vendored copy with
 		// scripts/vendor_monaco.sh. Loads after app.js/image_embed.js since
 		// it wraps their exposed hooks.
-		b.Script("src", "/static/js/monaco_editor.js?v=2").R(),
+		b.Script("src", "/static/js/monaco_editor.js?v=3").R(),
 		// Summarize buttons (toolbar + edit footer). Last, because it reaches
 		// into both app.js (_internal) and monaco_editor.js (the body sync it
 		// calls when the optional editor is active).

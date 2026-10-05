@@ -181,12 +181,31 @@
     setupImageHandlers(container, textarea);
   }
 
-  // Intercept image paste and drag-drop on the Monaco container, routing files
-  // through the existing image_embed.js resize dialog. Capture phase is used
-  // so we see the paste before Monaco's internal handler consumes it.
-  // Text paste/drop is left to Monaco's own handling.
+  // Intercept image paste and drag-drop inside the Monaco editor, routing
+  // files through the existing image_embed.js resize dialog. Text paste/drop
+  // is left to Monaco's own handling.
+  //
+  // The listeners go on the container's PARENT, in the capture phase, not on
+  // the container itself. Monaco's own paste controller (the "paste as"
+  // feature) registers a capture-phase paste listener on the container it is
+  // created in. Capture listeners on one node run in registration order, and
+  // monaco.editor.create runs before this function. So a listener here on the
+  // container ran second, after Monaco had already called preventDefault and
+  // stopImmediatePropagation on any paste carrying a file. Image paste never
+  // reached the resize dialog. Capture on an ancestor always runs before
+  // anything on the container:
+  //
+  //	document ─► … ─► .edit-body-wrapper (ours, capture) ─► #monaco-body-container
+  //	                                                         (Monaco's paste, capture)
+  //
+  // The parent also holds the plain textarea, which has its own handlers in
+  // image_embed.js, so each handler acts only on events aimed inside Monaco.
   function setupImageHandlers(container, textarea) {
-    container.addEventListener('paste', function(e) {
+    const host = container.parentElement || container;
+    const inMonaco = function(e) { return container.contains(e.target); };
+
+    host.addEventListener('paste', function(e) {
+      if (!inMonaco(e)) return;
       const items = e.clipboardData && e.clipboardData.items;
       if (!items || typeof window.app._insertImageFile !== 'function') return;
       for (let i = 0; i < items.length; i++) {
@@ -201,14 +220,16 @@
       }
     }, true);
 
-    container.addEventListener('dragover', function(e) {
+    host.addEventListener('dragover', function(e) {
+      if (!inMonaco(e)) return;
       if (e.dataTransfer && e.dataTransfer.types.includes('Files')) {
         e.preventDefault();
         e.dataTransfer.dropEffect = 'copy';
       }
     }, true);
 
-    container.addEventListener('drop', function(e) {
+    host.addEventListener('drop', function(e) {
+      if (!inMonaco(e)) return;
       const files = e.dataTransfer && e.dataTransfer.files;
       if (!files || files.length === 0 || typeof window.app._insertImageFile !== 'function') return;
       for (let i = 0; i < files.length; i++) {

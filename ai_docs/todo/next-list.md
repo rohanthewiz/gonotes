@@ -50,11 +50,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   `nls.messages.*` (~1.7MB) could be dropped from the vendor dir if "full"
   mode is ever relaxed.
 
-- **N-007** · raised `2026-0812-1306-monaco-editor-option` · value low
-  The Monaco surface has never been exercised end to end in a browser: typing,
-  toggling mid-edit, and image paste inside Monaco. The CDP harness (see
-  memory) makes this cheap now.
-
 - **N-015** · raised `2026-0817-1420-gonotes-note-locks` · value low
   Mobile parity. The app is `github.com/rohanthewiz/gonotes_mobile` (Kotlin),
   not cats-mobile, which is the cats agent client and has no notes. Checked
@@ -137,6 +132,28 @@ session doc marked an item as deferred, so move items here from Open by hand.
   `2026-0817-0015-tui-mouse-filter-and-store-identity`.
 
 ## Closed
+
+- **N-007** · raised `2026-0812-1306-monaco-editor-option` · closed
+  2026-10-04, `2026-1004-2329-n007-monaco-e2e-paste-fix` — The Monaco editor was exercised end to end in headless Chrome
+  over CDP, and that **found a bug: image paste inside Monaco had never
+  worked.** Monaco's own paste controller registers a capture-phase paste
+  listener on the container it's created in, before `setupImageHandlers`
+  ran, so it cancelled the event and stopped immediate propagation, and the
+  resize dialog never opened. Fixed by moving the app's paste, dragover and
+  drop handlers to the container's parent (capture on an ancestor runs
+  first), acting only on targets inside Monaco. Also: cache-buster to
+  `monaco_editor.js?v=3`, and the toggle tooltip no longer claims a CDN
+  load. Passing in the run:
+  - activation from the vendored copy
+  - typing mirrored into the textarea and saved
+  - toggling mid-edit in both directions
+  - image paste and drop through the dialog, undoable in one step
+  - paste into the plain textarea unaffected
+  - note switching without cross-note undo
+  - the preference surviving a reload
+  - no console errors
+  The script stayed in the scratchpad, and the harness is now a saved
+  memory (`cdp-browser-harness`).
 
 - **N-022** · raised `2026-0818-1824-sync-prompt-mode-and-compaction` · closed
   2026-10-04, `2026-1004-2318-n022-compact-one-note` — Compaction was all-or-nothing per peer. Done backend only, by
