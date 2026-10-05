@@ -1149,20 +1149,16 @@ func (s *httpStore) AddCategoryToNote(noteID, categoryID int64, _ string) error 
 	// An empty object rather than no body: the handler decodes the body only
 	// when it is non-empty, and this keeps the request shape identical to
 	// gn-clip.sh's, which is the shape the endpoint is exercised with daily.
-	if err := s.request(http.MethodPost, path, map[string]any{}, nil); err != nil {
-		return serr.Wrap(err, "failed to attach category")
-	}
-	return nil
+	return linkWriteErr(s.requestH(http.MethodPost, path, map[string]any{}, nil, s.lockHeaders(noteID)),
+		"failed to attach category")
 }
 
 func (s *httpStore) AddCategoryToNoteWithSubcategories(noteID, categoryID int64, subcategories []string, _ string) error {
 	path := "/api/v1/notes/" + strconv.FormatInt(noteID, 10) +
 		"/categories/" + strconv.FormatInt(categoryID, 10)
 	body := map[string]any{"subcategories": subcategories}
-	if err := s.request(http.MethodPost, path, body, nil); err != nil {
-		return serr.Wrap(err, "failed to attach category with subcategories")
-	}
-	return nil
+	return linkWriteErr(s.requestH(http.MethodPost, path, body, nil, s.lockHeaders(noteID)),
+		"failed to attach category with subcategories")
 }
 
 // SetNoteCategorySubcategories uses PUT on the link, which exists for exactly
@@ -1175,10 +1171,8 @@ func (s *httpStore) SetNoteCategorySubcategories(noteID, categoryID int64, subca
 	// empty selection, but sending the field explicitly says which of the two
 	// we meant.
 	body := map[string]any{"subcategories": subcategories}
-	if err := s.request(http.MethodPut, path, body, nil); err != nil {
-		return serr.Wrap(err, "failed to update note subcategories")
-	}
-	return nil
+	return linkWriteErr(s.requestH(http.MethodPut, path, body, nil, s.lockHeaders(noteID)),
+		"failed to update note subcategories")
 }
 
 // SetNoteCategories is one PUT on the note's category collection. The body
@@ -1191,19 +1185,40 @@ func (s *httpStore) SetNoteCategories(noteID int64, assignments []models.NoteCat
 		assignments = []models.NoteCategoryAssignment{}
 	}
 	body := map[string]any{"categories": assignments}
-	if err := s.request(http.MethodPut, path, body, nil); err != nil {
-		return serr.Wrap(err, "failed to set note categories")
-	}
-	return nil
+	return linkWriteErr(s.requestH(http.MethodPut, path, body, nil, s.lockHeaders(noteID)),
+		"failed to set note categories")
 }
 
 func (s *httpStore) RemoveCategoryFromNote(noteID, categoryID int64) error {
 	path := "/api/v1/notes/" + strconv.FormatInt(noteID, 10) +
 		"/categories/" + strconv.FormatInt(categoryID, 10)
-	if err := s.request(http.MethodDelete, path, nil, nil); err != nil {
-		return serr.Wrap(err, "failed to detach category")
+	return linkWriteErr(s.requestH(http.MethodDelete, path, nil, nil, s.lockHeaders(noteID)),
+		"failed to detach category")
+}
+
+// linkWriteErr finishes a note-category link write. The server gates these
+// writes on the note's lock as it gates UpdateNote, so each one carries this
+// session's token (lockHeaders), and a lock refusal comes back as the same
+// typed *models.NoteLockedError UpdateNote returns, unwrapped, so the screens
+// can match it with errors.As. Any other failure is wrapped with msg as before.
+//
+// Only a 409 whose body says reason "locked" is converted. asConflictError
+// treats ANY unrecognized 409 as a lock, which is right on the note endpoints
+// but not here: POST on a link also answers 409 for "category already added
+// to this note", and that must stay an ordinary error rather than open the
+// contention dialog for a note nobody holds.
+func linkWriteErr(err error, msg string) error {
+	if err == nil {
+		return nil
 	}
-	return nil
+	var ae *apiError
+	if asAPIError(err, &ae) && ae.status == http.StatusConflict && len(ae.data) > 0 {
+		var detail conflictDetail
+		if json.Unmarshal(ae.data, &detail) == nil && detail.Reason == "locked" {
+			return asConflictError(err)
+		}
+	}
+	return serr.Wrap(err, msg)
 }
 
 // ---- Sync ------------------------------------------------------------------

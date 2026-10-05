@@ -271,6 +271,15 @@ func AddCategoryToNote(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusBadRequest, "invalid note id")
 	}
 
+	// The lock gate, as on PUT /notes/:id. A note's links are part of what its
+	// edit form holds: the form loaded them when it opened, and its save sends
+	// the whole set back (PUT /notes/:id/categories). A refile let through here
+	// while another session holds the note would be silently undone by that
+	// save. The holder's own requests pass, since they carry its token.
+	if errResp, ok := authorizeNoteWrite(ctx, noteID); !ok {
+		return errResp
+	}
+
 	categoryIDStr := ctx.Request().Param("category_id")
 	categoryID, err := strconv.ParseInt(categoryIDStr, 10, 64)
 	if err != nil {
@@ -338,6 +347,11 @@ func UpdateNoteCategory(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusBadRequest, "invalid note id")
 	}
 
+	// The lock gate; see AddCategoryToNote for why link writes need it.
+	if errResp, ok := authorizeNoteWrite(ctx, noteID); !ok {
+		return errResp
+	}
+
 	categoryIDStr := ctx.Request().Param("category_id")
 	categoryID, err := strconv.ParseInt(categoryIDStr, 10, 64)
 	if err != nil {
@@ -395,6 +409,11 @@ func RemoveCategoryFromNote(ctx rweb.Context) error {
 	noteID, err := strconv.ParseInt(noteIDStr, 10, 64)
 	if err != nil {
 		return writeError(ctx, http.StatusBadRequest, "invalid note id")
+	}
+
+	// The lock gate; see AddCategoryToNote for why link writes need it.
+	if errResp, ok := authorizeNoteWrite(ctx, noteID); !ok {
+		return errResp
 	}
 
 	categoryIDStr := ctx.Request().Param("category_id")
@@ -488,6 +507,14 @@ func SetNoteCategories(ctx rweb.Context) error {
 	noteID, err := strconv.ParseInt(ctx.Request().Param("id"), 10, 64)
 	if err != nil {
 		return writeError(ctx, http.StatusBadRequest, "invalid note id")
+	}
+
+	// The lock gate. This is the request the holder's own save makes, so it
+	// carries the holder's token and passes; any other session's replacement
+	// set is refused rather than left for that save to overwrite. See
+	// AddCategoryToNote.
+	if errResp, ok := authorizeNoteWrite(ctx, noteID); !ok {
+		return errResp
 	}
 
 	var req SetNoteCategoriesRequest

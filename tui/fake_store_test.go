@@ -802,6 +802,11 @@ func (f *fakeStore) AddCategoryToNote(noteID, categoryID int64, userGUID string)
 func (f *fakeStore) AddCategoryToNoteWithSubcategories(noteID, categoryID int64, subcategories []string, userGUID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// The lock gate the real stores run on every link write (N-049), before
+	// anything is touched. AddCategoryToNote delegates here, so it is covered.
+	if err := models.AuthorizeNoteWrite(noteID, f.tokens.get(noteID)); err != nil {
+		return err
+	}
 	for _, l := range f.links[noteID] {
 		if l.catID == categoryID {
 			return serr.New("category already added to this note")
@@ -816,6 +821,10 @@ func (f *fakeStore) AddCategoryToNoteWithSubcategories(noteID, categoryID int64,
 func (f *fakeStore) SetNoteCategorySubcategories(noteID, categoryID int64, subcategories []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// The lock gate, as in AddCategoryToNoteWithSubcategories.
+	if err := models.AuthorizeNoteWrite(noteID, f.tokens.get(noteID)); err != nil {
+		return err
+	}
 	for i, l := range f.links[noteID] {
 		if l.catID == categoryID {
 			f.links[noteID][i].subs = slices.Clone(subcategories)
@@ -832,6 +841,10 @@ func (f *fakeStore) SetNoteCategorySubcategories(noteID, categoryID int64, subca
 func (f *fakeStore) SetNoteCategories(noteID int64, assignments []models.NoteCategoryAssignment, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// The lock gate, as in AddCategoryToNoteWithSubcategories.
+	if err := models.AuthorizeNoteWrite(noteID, f.tokens.get(noteID)); err != nil {
+		return err
+	}
 
 	desired := map[int64][]string{}
 	var order []int64
@@ -882,6 +895,10 @@ func (f *fakeStore) SetNoteCategories(noteID int64, assignments []models.NoteCat
 func (f *fakeStore) RemoveCategoryFromNote(noteID, categoryID int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// The lock gate, as in AddCategoryToNoteWithSubcategories.
+	if err := models.AuthorizeNoteWrite(noteID, f.tokens.get(noteID)); err != nil {
+		return err
+	}
 	for i, l := range f.links[noteID] {
 		if l.catID == categoryID {
 			f.links[noteID] = append(f.links[noteID][:i], f.links[noteID][i+1:]...)

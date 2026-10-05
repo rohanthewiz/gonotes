@@ -208,6 +208,9 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 
 	mux.HandleFunc("PUT /api/v1/notes/{id}/categories", auth(func(w http.ResponseWriter, r *http.Request) {
 		noteID := pathID(r, "id")
+		if !api.gateLinkWrite(w, r, noteID) {
+			return
+		}
 		var req struct {
 			Categories *[]models.NoteCategoryAssignment `json:"categories"`
 		}
@@ -226,6 +229,9 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 
 	mux.HandleFunc("POST /api/v1/notes/{id}/categories/{cid}", auth(func(w http.ResponseWriter, r *http.Request) {
 		noteID, catID := pathID(r, "id"), pathID(r, "cid")
+		if !api.gateLinkWrite(w, r, noteID) {
+			return
+		}
 		// The real handler decodes the body only when there is one and treats a
 		// missing subcategories field as "none", which is what lets the same
 		// endpoint serve both attach paths.
@@ -239,6 +245,9 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 
 	mux.HandleFunc("PUT /api/v1/notes/{id}/categories/{cid}", auth(func(w http.ResponseWriter, r *http.Request) {
 		noteID, catID := pathID(r, "id"), pathID(r, "cid")
+		if !api.gateLinkWrite(w, r, noteID) {
+			return
+		}
 		if err := api.data.SetNoteCategorySubcategories(noteID, catID, subcategoriesFromBody(r)); err != nil {
 			writeErr(w, http.StatusNotFound, err.Error())
 			return
@@ -248,6 +257,9 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 
 	mux.HandleFunc("DELETE /api/v1/notes/{id}/categories/{cid}", auth(func(w http.ResponseWriter, r *http.Request) {
 		noteID, catID := pathID(r, "id"), pathID(r, "cid")
+		if !api.gateLinkWrite(w, r, noteID) {
+			return
+		}
 		if err := api.data.RemoveCategoryFromNote(noteID, catID); err != nil {
 			writeErr(w, http.StatusNotFound, err.Error())
 			return
@@ -391,6 +403,33 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 	api.srv = httptest.NewServer(mux)
 	t.Cleanup(api.srv.Close)
 	return api
+}
+
+// gateLinkWrite is the lock gate the real link-write handlers run
+// (web/api/categories.go), with the real 409 shape. It returns false when it
+// has refused the request.
+//
+// On a pass it hands the request's token to a.data. a.data is a fakeStore, and
+// a fakeStore gates its link writes on its OWN token table, the way localStore
+// does. Here it stands in for the models layer behind the handler, so the
+// token it should see is the one the request presented. Without this, every
+// holder's write would be refused a second time by the data layer.
+func (a *fakeAPI) gateLinkWrite(w http.ResponseWriter, r *http.Request, noteID int64) bool {
+	tok := r.Header.Get(lockHeaderName)
+	var locked *models.NoteLockedError
+	if err := models.AuthorizeNoteWrite(noteID, tok); errors.As(err, &locked) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": false, "error": locked.Error(),
+			"data": map[string]any{"reason": "locked", "lock": locked.Lock}})
+		return false
+	}
+	if tok == "" {
+		a.data.tokens.clear(noteID)
+	} else {
+		a.data.tokens.set(noteID, tok)
+	}
+	return true
 }
 
 func (a *fakeAPI) authorized(r *http.Request) bool {

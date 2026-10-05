@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -382,3 +383,112 @@ func drain(t *testing.T, cmd tea.Cmd) {
 // secondReturn discards a screen and keeps the command, so an Update call can be
 // fed straight to drain.
 func secondReturn(_ screen, cmd tea.Cmd) tea.Cmd { return cmd }
+
+// ---- Link writes are lock-gated ------------------------------------------
+//
+// A note's category links are part of what its edit form holds: the form's
+// save sends its whole set back (SetNoteCategories), so a refile by another
+// session while the form is open would be silently undone. Both real stores
+// therefore gate every link write on the lease, and these tests pin that at
+// the Store seam: a second session is refused with the typed
+// *models.NoteLockedError the screens match on, and the holder is not.
+
+// linkWritesBy runs each of a Store's five link writers against noteID and
+// returns their errors keyed by writer name.
+func linkWritesBy(st Store, noteID, catID int64, userGUID string) map[string]error {
+	return map[string]error{
+		"AddCategoryToNote":                  st.AddCategoryToNote(noteID, catID, userGUID),
+		"AddCategoryToNoteWithSubcategories": st.AddCategoryToNoteWithSubcategories(noteID, catID, []string{"a"}, userGUID),
+		"SetNoteCategorySubcategories":       st.SetNoteCategorySubcategories(noteID, catID, []string{"a"}),
+		"RemoveCategoryFromNote":             st.RemoveCategoryFromNote(noteID, catID),
+		"SetNoteCategories": st.SetNoteCategories(noteID,
+			[]models.NoteCategoryAssignment{{CategoryID: catID}}, userGUID),
+	}
+}
+
+func assertAllLocked(t *testing.T, errs map[string]error) {
+	t.Helper()
+	for name, err := range errs {
+		var locked *models.NoteLockedError
+		if !errors.As(err, &locked) {
+			t.Errorf("a non-holder's %s returned %v, want a *models.NoteLockedError", name, err)
+		}
+	}
+}
+
+func TestLocalStoreLinkWritesAreLockGated(t *testing.T) {
+	models.ResetNoteLocksForTest()
+	user := setupTestDB(t)
+	holder, other := NewLocalStore(), NewLocalStore()
+
+	note, err := holder.CreateNote(models.NoteInput{GUID: "link-gate-local", Title: "Held"}, user.GUID)
+	if err != nil {
+		t.Fatalf("CreateNote: %v", err)
+	}
+	cat, err := holder.CreateCategory("LinkGate", user.GUID)
+	if err != nil {
+		t.Fatalf("CreateCategory: %v", err)
+	}
+	if _, err := holder.AcquireNoteLock(note.ID, user.GUID,
+		models.LockHolder{SessionID: "holder", Label: "holder", Client: "tui"}, false); err != nil {
+		t.Fatalf("AcquireNoteLock: %v", err)
+	}
+
+	assertAllLocked(t, linkWritesBy(other, note.ID, cat.ID, user.GUID))
+	if got, _ := holder.GetNoteCategories(note.ID, user.GUID); len(got) != 0 {
+		t.Fatalf("a refused link write landed: the note has %d categories", len(got))
+	}
+
+	// The holder's own save path, which is what the gate must not break.
+	if err := holder.SetNoteCategories(note.ID,
+		[]models.NoteCategoryAssignment{{CategoryID: cat.ID}}, user.GUID); err != nil {
+		t.Fatalf("the holder's SetNoteCategories: %v", err)
+	}
+}
+
+func TestHTTPStoreLinkWritesAreLockGated(t *testing.T) {
+	models.ResetNoteLocksForTest()
+	api := newFakeAPI(t)
+	holder, other := api.store(t), api.store(t)
+	for _, st := range []*httpStore{holder, other} {
+		if _, err := st.AuthenticateUser("api_user", fakeAPIPassword); err != nil {
+			t.Fatalf("login: %v", err)
+		}
+	}
+	guid := api.user.GUID
+
+	note, err := holder.CreateNote(models.NoteInput{Title: "Held"}, guid)
+	if err != nil {
+		t.Fatalf("CreateNote: %v", err)
+	}
+	cat, err := holder.CreateCategory("LinkGate", guid)
+	if err != nil {
+		t.Fatalf("CreateCategory: %v", err)
+	}
+	if _, err := holder.AcquireNoteLock(note.ID, guid,
+		models.LockHolder{SessionID: "holder", Label: "holder", Client: "tui"}, false); err != nil {
+		t.Fatalf("AcquireNoteLock: %v", err)
+	}
+
+	// other sends no token, so the server refuses each write with reason
+	// "locked", and the store hands back the typed error.
+	assertAllLocked(t, linkWritesBy(other, note.ID, cat.ID, guid))
+
+	// The holder's writes carry its token and go through.
+	if err := holder.AddCategoryToNote(note.ID, cat.ID, guid); err != nil {
+		t.Fatalf("the holder's attach: %v", err)
+	}
+	if err := holder.SetNoteCategories(note.ID,
+		[]models.NoteCategoryAssignment{{CategoryID: cat.ID, Subcategories: []string{"a"}}}, guid); err != nil {
+		t.Fatalf("the holder's SetNoteCategories: %v", err)
+	}
+
+	// The attach endpoint's other 409, "already added", is not a lock refusal
+	// and must not be reported as one: that would open the contention dialog
+	// for a note this session holds.
+	err = holder.AddCategoryToNote(note.ID, cat.ID, guid)
+	var locked *models.NoteLockedError
+	if err == nil || errors.As(err, &locked) {
+		t.Fatalf("a duplicate attach returned %v, want a plain error", err)
+	}
+}

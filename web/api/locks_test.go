@@ -388,3 +388,75 @@ func TestReleaseSessionNoteLocks(t *testing.T) {
 		t.Error("session beta's lease was released too")
 	}
 }
+
+// The per-note category writes go through the lock gate, as PUT /notes/:id
+// does. A refile from another session is refused while a form holds the note,
+// because that form's save sends its whole category set back and would undo
+// it. The holder's own link writes, which carry its token, go through.
+func TestCategoryLinkWritesAreLockGated(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	models.ResetNoteLocksForTest()
+	ts := newTestServer(t)
+	defer ts.cleanup()
+
+	noteID, _ := seedLockNote(t, ts, "link-gate", "Held note")
+	status, resp := ts.request("POST", "/api/v1/categories", map[string]interface{}{
+		"name": "LinkGate", "subcategories": []string{"a", "b"},
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("seeding a category returned %d: %v", status, resp)
+	}
+	catID := int64(resp["data"].(map[string]interface{})["id"].(float64))
+
+	_, resp = acquire(ts, noteID, "alpha", false)
+	token := resp["data"].(map[string]interface{})["token"].(string)
+
+	linkPath := "/api/v1/notes/" + itoa(noteID) + "/categories/" + itoa(catID)
+	setPath := "/api/v1/notes/" + itoa(noteID) + "/categories"
+	setBody := map[string]interface{}{"categories": []map[string]interface{}{
+		{"category_id": catID, "subcategories": []string{"b"}},
+	}}
+
+	// Each route in turn: refused with no token and with a wrong one, then
+	// allowed for the holder. The holder's writes run in an order that leaves
+	// each next request valid (attach, re-select, detach, set).
+	steps := []struct {
+		name, method, path string
+		body               interface{}
+	}{
+		{"attach", "POST", linkPath, map[string]interface{}{"subcategories": []string{"a"}}},
+		{"re-select", "PUT", linkPath, map[string]interface{}{"subcategories": []string{"b"}}},
+		{"detach", "DELETE", linkPath, nil},
+		{"set", "PUT", setPath, setBody},
+	}
+	for _, st := range steps {
+		for _, tok := range []string{"", "lk_wrong"} {
+			status, resp := ts.requestWithLock(st.method, st.path, tok, st.body)
+			if status != http.StatusConflict {
+				t.Fatalf("%s with token %q returned %d, want 409: %v", st.name, tok, status, resp)
+			}
+			if reason := resp["data"].(map[string]interface{})["reason"]; reason != "locked" {
+				t.Fatalf("%s's 409 reports reason %v, want \"locked\"", st.name, reason)
+			}
+		}
+		if status, resp := ts.requestWithLock(st.method, st.path, token, st.body); status/100 != 2 {
+			t.Fatalf("the holder's %s returned %d: %v", st.name, status, resp)
+		}
+	}
+
+	// Only the holder's writes landed: the final set is the holder's.
+	_, resp = ts.request("GET", setPath, nil)
+	links := resp["data"].([]interface{})
+	if len(links) != 1 {
+		t.Fatalf("the note has %d category links, want 1: %v", len(links), links)
+	}
+
+	// Once released, an unlocked note's links are writable without a token
+	// again: the gate is between sessions that hold leases, not a permission.
+	ts.requestWithLock("DELETE", "/api/v1/notes/"+itoa(noteID)+"/lock", token, nil)
+	if status, resp := ts.requestWithLock("DELETE", linkPath, "", nil); status != http.StatusOK {
+		t.Fatalf("detaching from an unlocked note returned %d: %v", status, resp)
+	}
+}

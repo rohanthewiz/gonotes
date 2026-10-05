@@ -218,25 +218,46 @@ func (s *localStore) GetNoteCategoryDetails(noteID int64, userGUID string) ([]mo
 	return models.GetNoteCategoryDetails(noteID, userGUID)
 }
 
+// The five link writers below are gated like UpdateNote, and for the same
+// reason the HTTP handlers in web/api/categories.go are: a note's links are
+// part of what its edit form holds, and the form's save writes its whole set
+// back (SetNoteCategories), undoing any refile that slipped in meanwhile. This
+// session's own form passes, because s.tokens holds its token.
+
 func (s *localStore) AddCategoryToNote(noteID, categoryID int64, userGUID string) error {
+	if err := models.AuthorizeNoteWrite(noteID, s.tokens.get(noteID)); err != nil {
+		return err
+	}
 	return models.AddCategoryToNote(noteID, categoryID, userGUID)
 }
 
 func (s *localStore) AddCategoryToNoteWithSubcategories(noteID, categoryID int64, subcategories []string, userGUID string) error {
+	if err := models.AuthorizeNoteWrite(noteID, s.tokens.get(noteID)); err != nil {
+		return err
+	}
 	return models.AddCategoryToNoteWithSubcategories(noteID, categoryID, subcategories, userGUID)
 }
 
 func (s *localStore) SetNoteCategorySubcategories(noteID, categoryID int64, subcategories []string) error {
+	if err := models.AuthorizeNoteWrite(noteID, s.tokens.get(noteID)); err != nil {
+		return err
+	}
 	return models.UpdateNoteCategorySubcategories(noteID, categoryID, subcategories)
 }
 
 func (s *localStore) SetNoteCategories(noteID int64, assignments []models.NoteCategoryAssignment, userGUID string) error {
+	if err := models.AuthorizeNoteWrite(noteID, s.tokens.get(noteID)); err != nil {
+		return err
+	}
 	// The changed flag only matters to the HTTP handler's log line.
 	_, err := models.SetNoteCategories(noteID, assignments, userGUID)
 	return err
 }
 
 func (s *localStore) RemoveCategoryFromNote(noteID, categoryID int64) error {
+	if err := models.AuthorizeNoteWrite(noteID, s.tokens.get(noteID)); err != nil {
+		return err
+	}
 	return models.RemoveCategoryFromNote(noteID, categoryID)
 }
 

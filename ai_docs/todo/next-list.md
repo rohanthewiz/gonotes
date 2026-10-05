@@ -93,15 +93,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   *reappear* later, that is the sync path and needs its own investigation.
   Candidate for Closed if the symptom hasn't come back.
 
-- **N-049** · raised `2026-1004-n016-bulk-lock-gate` · value low
-  The per-note category writes skip the lock gate. `POST`/`PUT`/`DELETE
-  /api/v1/notes/:id/categories[/:category_id]` never call
-  `authorizeNoteWrite`, and `localStore`'s category writers never call
-  `AuthorizeNoteWrite`. So a second session can refile a note another
-  session's form holds, and the holder's save then writes its own set back
-  over that change. Gating them with the holder's token, as `UpdateNote` is
-  gated, would close it. The holder's form already sends the token.
-
 - **N-050** · raised `2026-1004-2039-n025-account-rename-merge` · value medium
   Nothing stops two processes opening the same databases. Neither bytdb nor
   btypedb takes an OS file lock: `gonotes account list` opened the files
@@ -154,6 +145,23 @@ session doc marked an item as deferred, so move items here from Open by hand.
   `2026-0817-0015-tui-mouse-filter-and-store-identity`.
 
 ## Closed
+
+- **N-049** · raised `2026-1004-n016-bulk-lock-gate` · closed 2026-10-04,
+  `2026-1004-2045-n049-category-link-lock-gate` —
+  The per-note category writes skipped the lock gate, so a second session
+  could refile a note another session's form held and that form's save would
+  write its own set back over it. Done: all four link routes
+  (`POST`/`PUT`/`DELETE /notes/:id/categories/:category_id` and the whole-set
+  `PUT /notes/:id/categories`) call `authorizeNoteWrite`, and `localStore`'s
+  five link writers call `AuthorizeNoteWrite`, as `UpdateNote` does. The
+  premise was half right: the web form does send the token (`leaseHeaderFor`
+  matches every `/notes/:id/...` path), but `httpStore`'s link writers did
+  not, so gating alone would have refused the TUI's own save over HTTP. They
+  now send `lockHeaders` and return the typed `*NoteLockedError` on a 409 with
+  reason `locked`. Only that reason is converted: attach's other 409
+  ("already added") stays a plain error. The fakeStore and the fake API gate
+  the same way. The web batch bar already reports a 409 as a per-note
+  failure, so a held note shows up in its summary.
 
 - **N-025** · raised `2026-0818-1934-spoke-user-guid-alignment` · closed
   2026-10-04, `2026-1004-2039-n025-account-rename-merge` — A local account
