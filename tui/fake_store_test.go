@@ -685,6 +685,20 @@ func (f *fakeStore) RenameSubcategory(categoryID int64, from, to, userGUID strin
 		f.mu.Unlock()
 		return nil, 0, serr.New("subcategory not found")
 	}
+	// The same lock gate as models.RenameSubcategory: check every target
+	// before the first write, and refuse if any note is open in a form.
+	var targets []int64
+	for noteID, links := range f.links {
+		for _, l := range links {
+			if l.catID == categoryID && slices.Contains(l.subs, from) {
+				targets = append(targets, noteID)
+			}
+		}
+	}
+	if err := models.AuthorizeBulkNoteWrite(targets); err != nil {
+		f.mu.Unlock()
+		return nil, 0, err
+	}
 	changed := 0
 	for noteID, links := range f.links {
 		for i, l := range links {

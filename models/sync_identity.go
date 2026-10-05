@@ -154,11 +154,13 @@ func ReconcileHubUserGUID(hubUserGUID, hubUsername string) (bool, error) {
 		//
 		// If accounts DO exist here, though, none of them is the hub account,
 		// and pulled notes are owned by a user nobody can log in as. That is
-		// the visible symptom, and it is worth naming: the fix is to register
-		// locally under the sync username, which will then adopt the GUID.
+		// the visible symptom, and it is worth naming, along with the fix:
+		// `gonotes account` renames or merges the existing account into the
+		// sync username (see account_admin.go), after which it adopts the GUID.
 		if n, err := countLocalUsers(); err == nil && n > 0 {
 			logger.Info("No local account matches the sync username — notes pulled from the hub "+
-				"will not be visible until one is registered under that name",
+				"will not be visible until one does. Stop the server and run `gonotes account list` "+
+				"for the rename or merge that fixes it",
 				"sync_username", hubUsername, "local_users", n)
 		}
 		return false, nil
@@ -213,39 +215,59 @@ func countLocalUsers() (int, error) {
 	return n, nil
 }
 
+// userGUIDRef is one column that names a user by GUID, and the databases
+// that hold it.
+type userGUIDRef struct {
+	engines []*dbEngine
+	table   string
+	column  string
+}
+
+// userGUIDRefs is the single inventory of every column that stores a user
+// GUID. Both the identity sweep (rewriteUserGUIDReferences) and the account
+// admin tooling (CountUserGUIDReferences, MergeLocalUsers) walk it, so a new
+// per-user table has exactly one place to be registered — miss it here and
+// a reconcile or merge silently strands that table's rows under a GUID no
+// account holds.
+//
+// Notes and their change log are split across the public and private
+// databases (see noteEngine), so those run against both engines; the
+// categories catalog, its change log, and invite tokens live only in the
+// public database; saved_queries lives only in the private one (see
+// createPrivateOnlySchema). It is built per call because pubDB/privDB are
+// assigned when the databases open.
+func userGUIDRefs() []userGUIDRef {
+	both := []*dbEngine{pubDB, privDB}
+	pub := []*dbEngine{pubDB}
+	priv := []*dbEngine{privDB}
+	return []userGUIDRef{
+		{both, "notes", "created_by"},
+		{both, "notes", "updated_by"},
+		{both, "note_changes", "change_user"},
+		{pub, "categories", "created_by"},
+		{pub, "category_changes", "change_user"},
+		{pub, "invite_tokens", "created_by"},
+		{pub, "invite_tokens", "used_by"},
+		{priv, "saved_queries", "user_guid"},
+	}
+}
+
 // rewriteUserGUIDReferences re-points every row that names oldGUID at
-// newGUID. Notes and their change log are split across the public and
-// private databases (see noteEngine), so those run against both engines;
-// the categories catalog, its change log, and invite tokens live only in
-// the public database.
+// newGUID, across every column in userGUIDRefs.
 //
 // Each statement is `WHERE <col> = oldGUID`, which makes the whole sweep
 // idempotent and re-runnable — see the ordering note in ReconcileHubUserGUID.
 func rewriteUserGUIDReferences(oldGUID, newGUID string) error {
-	type stmt struct {
-		engines []*dbEngine
-		sql     string
-	}
-	both := []*dbEngine{pubDB, privDB}
-	pub := []*dbEngine{pubDB}
-
-	sweeps := []stmt{
-		{both, `UPDATE notes SET created_by = ? WHERE created_by = ?`},
-		{both, `UPDATE notes SET updated_by = ? WHERE updated_by = ?`},
-		{both, `UPDATE note_changes SET change_user = ? WHERE change_user = ?`},
-		{pub, `UPDATE categories SET created_by = ? WHERE created_by = ?`},
-		{pub, `UPDATE category_changes SET change_user = ? WHERE change_user = ?`},
-		{pub, `UPDATE invite_tokens SET created_by = ? WHERE created_by = ?`},
-		{pub, `UPDATE invite_tokens SET used_by = ? WHERE used_by = ?`},
-	}
-
 	var rewritten int64
-	for _, s := range sweeps {
-		for _, en := range s.engines {
-			res, err := en.Exec(s.sql, newGUID, oldGUID)
+	for _, ref := range userGUIDRefs() {
+		// Table and column names come from the fixed inventory above, never
+		// from input, so building the statement by concatenation is safe.
+		stmt := `UPDATE ` + ref.table + ` SET ` + ref.column + ` = ? WHERE ` + ref.column + ` = ?`
+		for _, en := range ref.engines {
+			res, err := en.Exec(stmt, newGUID, oldGUID)
 			if err != nil {
-				return serr.Wrap(err, "failed to re-point user references during identity adoption",
-					"statement", s.sql)
+				return serr.Wrap(err, "failed to re-point user references",
+					"statement", stmt)
 			}
 			n, _ := res.RowsAffected()
 			rewritten += n
@@ -253,7 +275,7 @@ func rewriteUserGUIDReferences(oldGUID, newGUID string) error {
 	}
 
 	if rewritten > 0 {
-		logger.Info("Re-pointed rows onto the hub user GUID",
+		logger.Info("Re-pointed rows onto a new user GUID",
 			"rows", rewritten, "old_guid", oldGUID, "new_guid", newGUID)
 	}
 	return nil

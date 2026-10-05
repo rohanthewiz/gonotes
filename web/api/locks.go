@@ -83,6 +83,14 @@ type lockConflictDetail struct {
 	Lock   *models.NoteLock `json:"lock"`   // redacted by the registry
 }
 
+// notesLockedConflictDetail is the 409 body when a lock blocks a BULK write,
+// such as a subcategory rename. It names every blocking lease. See
+// models.NotesLockedError.
+type notesLockedConflictDetail struct {
+	Reason string             `json:"reason"` // always "notes_locked"
+	Locks  []*models.NoteLock `json:"locks"`  // redacted by the registry
+}
+
 // staleConflictDetail is the 409 body when the version guard blocks the write.
 type staleConflictDetail struct {
 	Reason          string             `json:"reason"` // always "stale"

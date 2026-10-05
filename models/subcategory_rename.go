@@ -37,6 +37,15 @@ import (
 // operation is also safe to re-run: links already rewritten have nothing to
 // match, and the definition step is a plain replacement.
 //
+// LOCKS. Before anything is written, every note the rename would touch is
+// checked against the lock registry (AuthorizeBulkNoteWrite). If any note is
+// open in an edit form, in any session including the caller's, the rename
+// is refused with a *NotesLockedError and nothing changes. A form loaded its
+// categories before the rename. When it saves, it writes that set back, so it
+// would put the old name back on its note and re-add it to the definition. The
+// check finishes before the first write, so a refusal leaves no note half
+// renamed.
+//
 // Each rewritten link records one note mapping change, and the definition
 // update records one category change, so both reach sync peers as ordinary
 // edits.
@@ -64,9 +73,33 @@ func RenameSubcategory(categoryID int64, from, to, userGUID string) (*Category, 
 		return nil, 0, serr.New("subcategory not found")
 	}
 
+	// Phase 1: find every link to rewrite, in both databases, without writing
+	// anything. The lock gate needs the complete list before the first write.
+	// Checking one database and writing it before reading the other would let
+	// a lease in the second refuse a rename that had already half landed.
+	engines := []*dbEngine{pubDB, privDB}
+	hits := make([][]subcategoryLink, len(engines))
+	var noteIDs []int64
+	for i, en := range engines {
+		found, err := findSubcategoryLinks(en, categoryID, from)
+		if err != nil {
+			return nil, 0, err
+		}
+		hits[i] = found
+		for _, h := range found {
+			noteIDs = append(noteIDs, h.noteID)
+		}
+	}
+
+	// Phase 2: the lock gate (see LOCKS above).
+	if err := AuthorizeBulkNoteWrite(noteIDs); err != nil {
+		return nil, 0, err
+	}
+
+	// Phase 3: the writes.
 	notesChanged := 0
-	for _, en := range []*dbEngine{pubDB, privDB} {
-		n, err := renameSubcategoryInLinks(en, categoryID, from, to)
+	for i, en := range engines {
+		n, err := rewriteSubcategoryLinks(en, hits[i], categoryID, from, to)
 		notesChanged += n
 		if err != nil {
 			return nil, notesChanged, err
@@ -85,31 +118,33 @@ func RenameSubcategory(categoryID int64, from, to, userGUID string) (*Category, 
 	return updated, notesChanged, nil
 }
 
-// renameSubcategoryInLinks rewrites one database's links of a category whose
-// selection names `from`, returning how many notes changed.
+// subcategoryLink is one note's link to the category being renamed, with the
+// selection as it was read.
+type subcategoryLink struct {
+	noteID int64
+	subs   []string
+}
+
+// findSubcategoryLinks returns one database's links of a category whose
+// selection names `from`. It only reads.
 //
 // All the category's links are read and filtered in Go rather than matched
 // with a LIKE on the JSON text: a substring match on "api" would also hit
 // "rapid", and the Go side has to parse the array to rewrite it anyway. The
-// read finishes before the first write, so no cursor is open while writing.
-func renameSubcategoryInLinks(en *dbEngine, categoryID int64, from, to string) (int, error) {
-	type link struct {
-		noteID int64
-		subs   []string
-	}
-
+// read finishes before any write, so no cursor is open while writing.
+func findSubcategoryLinks(en *dbEngine, categoryID int64, from string) ([]subcategoryLink, error) {
 	rows, err := en.Query(`SELECT note_id, subcategories FROM note_categories
 		WHERE category_id = ? AND subcategories IS NOT NULL`, categoryID)
 	if err != nil {
-		return 0, serr.Wrap(err, "failed to read note category links")
+		return nil, serr.Wrap(err, "failed to read note category links")
 	}
-	var hits []link
+	var hits []subcategoryLink
 	for rows.Next() {
 		var noteID int64
 		var raw sql.NullString
 		if err := rows.Scan(&noteID, &raw); err != nil {
 			rows.Close()
-			return 0, serr.Wrap(err, "failed to scan note category link")
+			return nil, serr.Wrap(err, "failed to scan note category link")
 		}
 		var subs []string
 		if raw.Valid && raw.String != "" {
@@ -120,14 +155,19 @@ func renameSubcategoryInLinks(en *dbEngine, categoryID int64, from, to string) (
 			}
 		}
 		if slices.Contains(subs, from) {
-			hits = append(hits, link{noteID: noteID, subs: subs})
+			hits = append(hits, subcategoryLink{noteID: noteID, subs: subs})
 		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, serr.Wrap(err, "failed to read note category links")
+		return nil, serr.Wrap(err, "failed to read note category links")
 	}
+	return hits, nil
+}
 
+// rewriteSubcategoryLinks writes the renamed selection for each link found by
+// findSubcategoryLinks, returning how many notes changed.
+func rewriteSubcategoryLinks(en *dbEngine, hits []subcategoryLink, categoryID int64, from, to string) (int, error) {
 	changed := 0
 	for _, h := range hits {
 		col, err := subcategoriesColumn(renameInList(h.subs, from, to))

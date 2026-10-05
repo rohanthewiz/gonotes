@@ -270,3 +270,71 @@ func TestReleaseForUserSessionStaysWithinTheUser(t *testing.T) {
 		t.Fatal("another user's lease with the same session id was released")
 	}
 }
+
+// A bulk write is refused while any target has a live lease. The refusal
+// names every blocking lease, sorted and redacted. Notes that are not targets
+// don't count.
+func TestAuthorizeBulkNoteWrite(t *testing.T) {
+	ResetNoteLocksForTest()
+	defer ResetNoteLocksForTest()
+
+	if err := AuthorizeBulkNoteWrite([]int64{1, 2, 3}); err != nil {
+		t.Fatalf("no leases, but the bulk write was refused: %v", err)
+	}
+	if err := AuthorizeBulkNoteWrite(nil); err != nil {
+		t.Fatalf("an empty target list was refused: %v", err)
+	}
+
+	if _, err := AcquireNoteLock(3, "user-1", holder("a"), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcquireNoteLock(1, "user-1", holder("b"), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcquireNoteLock(9, "user-1", holder("c"), false); err != nil {
+		t.Fatal(err)
+	}
+
+	err := AuthorizeBulkNoteWrite([]int64{3, 2, 1})
+	var locked *NotesLockedError
+	if !errors.As(err, &locked) {
+		t.Fatalf("got %v, want a *NotesLockedError", err)
+	}
+	if !errors.Is(err, ErrNoteLocked) {
+		t.Error("a bulk refusal must still be in the ErrNoteLocked class")
+	}
+	var single *NoteLockedError
+	if errors.As(err, &single) {
+		t.Error("a bulk refusal must not read as a one-note lock; it would open the contention dialog")
+	}
+	if len(locked.Locks) != 2 || locked.Locks[0].NoteID != 1 || locked.Locks[1].NoteID != 3 {
+		t.Fatalf("blocking leases = %+v, want notes 1 and 3 in id order (9 is not a target)", locked.Locks)
+	}
+	for _, l := range locked.Locks {
+		if l.Token != "" {
+			t.Errorf("note %d's lease went out with its token", l.NoteID)
+		}
+	}
+}
+
+// The bulk gate takes no token, so a lease blocks even the session that holds
+// it. That session's open form would write the old selection back on save.
+func TestAuthorizeBulkNoteWriteBlocksTheHolderToo(t *testing.T) {
+	ResetNoteLocksForTest()
+	defer ResetNoteLocksForTest()
+
+	lock, err := AcquireNoteLock(7, "user-1", holder("a"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := AuthorizeNoteWrite(7, lock.Token); err != nil {
+		t.Fatalf("the holder's own single-note write was refused: %v", err)
+	}
+	if err := AuthorizeBulkNoteWrite([]int64{7}); !errors.Is(err, ErrNoteLocked) {
+		t.Fatalf("bulk write over the caller's own lease = %v, want a refusal", err)
+	}
+	ReleaseNoteLock(7, lock.Token)
+	if err := AuthorizeBulkNoteWrite([]int64{7}); err != nil {
+		t.Fatalf("after release the bulk write is still refused: %v", err)
+	}
+}

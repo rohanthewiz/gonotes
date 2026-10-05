@@ -154,6 +154,7 @@ func main() {
 					return runImportMd(c.String("dir"), c.String("in"), c.String("user"))
 				},
 			},
+			accountCommand(defaultDir),
 		},
 	}
 

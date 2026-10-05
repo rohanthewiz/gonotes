@@ -1,8 +1,11 @@
 package models
 
 import (
+	"cmp"
 	"crypto/rand"
 	"encoding/hex"
+	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -179,6 +182,53 @@ func (e *NoteLockedError) Error() string {
 }
 
 func (e *NoteLockedError) Unwrap() error { return ErrNoteLocked }
+
+// NotesLockedError refuses a BULK write, one that rewrites many notes at
+// once, because some of those notes have a live lease. It lists every blocking
+// lease, not only the first. A bulk operation is one decision about many
+// notes, so the person retrying it needs to know how many forms to close.
+// Reporting them one at a time would turn that into a loop of refusals.
+//
+// It is deliberately a different type from NoteLockedError, though it
+// unwraps to the same ErrNoteLocked class. NoteLockedError means "this ONE
+// note is held". The TUI answers it with the contention dialog (open
+// read-only, take over, go to their pane). None of those answers makes sense
+// for a rename of thirty notes, so lockedBy must not match this. A caller
+// that only asks errors.Is(err, ErrNoteLocked) still gets the right answer.
+type NotesLockedError struct {
+	// Locks holds one redacted lease per blocking note, in note-id order.
+	Locks []*NoteLock `json:"locks"`
+}
+
+// Error reads correctly on its own, because the web UI toasts it with nothing
+// around it. The TUI prefixes "Failed to rename subcategory: ".
+func (e *NotesLockedError) Error() string {
+	switch len(e.Locks) {
+	case 0:
+		// Only reachable through a 409 whose body didn't decode. The status
+		// alone still says what happened.
+		return "some of these notes are open for editing in another session"
+	case 1:
+		return "a note this change touches is open for editing (" + lockDescription(e.Locks[0]) +
+			") — close it there, then try again"
+	default:
+		return strconv.Itoa(len(e.Locks)) + " notes this change touches are open for editing (one " +
+			lockDescription(e.Locks[0]) + ") — close them, then try again"
+	}
+}
+
+func (e *NotesLockedError) Unwrap() error { return ErrNoteLocked }
+
+// lockDescription names a lease the way a status line can show it: who holds
+// it and for how long. It uses the same wording as NoteLockedError.Error so
+// both refusals read alike.
+func lockDescription(l *NoteLock) string {
+	who := l.Holder.Label
+	if who == "" {
+		who = "another session"
+	}
+	return "held by " + who + " since " + humanizeAge(l.Age()) + " ago"
+}
 
 // humanizeAge renders a duration the way a status line wants it: one unit,
 // no decimals, biggest unit that is not zero.
@@ -470,6 +520,48 @@ func AuthorizeNoteWrite(noteID int64, token string) error {
 		return nil // the holder
 	}
 	return &NoteLockedError{Lock: l.Redacted()}
+}
+
+// AuthorizeBulkNoteWrite is the lock gate for a write that rewrites many
+// notes in one operation, such as a subcategory rename. It returns a
+// *NotesLockedError naming every note in noteIDs that has a live lease, or
+// nil when none does.
+//
+// It differs from AuthorizeNoteWrite on purpose: it takes NO token, so a
+// lease blocks the bulk write whoever holds it, the caller's own session
+// included. The hazard is not a foreign writer. It is the form that holds
+// the lease. That form loaded the note's categories before the bulk write ran.
+// Its next save sends that whole set back (SetNoteCategories) and quietly undoes
+// the bulk change for that note. That happens just the same when the form
+// belongs to the session asking for the rename, so "you hold it, go ahead"
+// would be wrong here.
+//
+// Callers check every target BEFORE the first write. Bulk operations here
+// have no transaction to roll back, and refusing up front means a blocked
+// rename leaves every note as it was, instead of leaving some renamed and
+// others not.
+//
+// The check covers this instant and nothing later. A lease taken after it
+// returns, during the writes, is not seen. Closing that window would mean
+// holding the registry mutex across database writes, which would stall every
+// heartbeat for as long as the bulk write runs. A lease taken in that window
+// belongs to a form that is still opening, and that form is very likely to
+// read the rewritten links.
+func AuthorizeBulkNoteWrite(noteIDs []int64) error {
+	noteLocks.mu.Lock()
+	defer noteLocks.mu.Unlock()
+
+	var blocking []*NoteLock
+	for _, id := range noteIDs {
+		if l := noteLocks.liveLocked(id); l != nil {
+			blocking = append(blocking, l.Redacted())
+		}
+	}
+	if len(blocking) == 0 {
+		return nil
+	}
+	slices.SortFunc(blocking, func(a, b *NoteLock) int { return cmp.Compare(a.NoteID, b.NoteID) })
+	return &NotesLockedError{Locks: blocking}
 }
 
 // ResetNoteLocksForTest empties the registry. Tests only — the registry is

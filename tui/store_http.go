@@ -241,8 +241,9 @@ func isNotFound(err error) bool {
 // carries. One struct rather than two, because the tag has to be read before
 // the rest can be interpreted and a single decode is simpler than a probe.
 type conflictDetail struct {
-	Reason          string             `json:"reason"` // "locked" | "lost" | "stale"
+	Reason          string             `json:"reason"` // "locked" | "lost" | "stale" | "notes_locked"
 	Lock            *models.NoteLock   `json:"lock,omitempty"`
+	Locks           []*models.NoteLock `json:"locks,omitempty"` // "notes_locked" only
 	ExpectedVersion int64              `json:"expected_version,omitempty"`
 	Current         *models.NoteOutput `json:"current,omitempty"`
 }
@@ -282,6 +283,12 @@ func asConflictError(err error) error {
 			stale.Current = &note
 		}
 		return stale
+	case "notes_locked":
+		// A bulk write (subcategory rename) refused because notes it would
+		// touch are open in edit forms. It must not become a NoteLockedError:
+		// lockedBy would match that and offer the one-note contention dialog,
+		// which has nothing to offer a rename of many notes.
+		return &models.NotesLockedError{Locks: detail.Locks}
 	default:
 		// "locked", "lost", and anything unrecognized. A conflict with no
 		// reason we know is still somebody else holding the note — that is what
@@ -1068,6 +1075,11 @@ func (s *httpStore) RenameSubcategory(categoryID int64, from, to, _ string) (*mo
 		"/api/v1/categories/"+strconv.FormatInt(categoryID, 10)+"/subcategories/rename",
 		map[string]string{"from": from, "to": to}, &out)
 	if err != nil {
+		// A 409 means notes it would rename are open for editing. It comes back as
+		// the same *models.NotesLockedError the local store raises.
+		if c := asConflictError(err); c != nil {
+			return nil, 0, c
+		}
 		return nil, 0, serr.Wrap(err, "failed to rename subcategory")
 	}
 	updated := categoryFromOutput(out.Category)

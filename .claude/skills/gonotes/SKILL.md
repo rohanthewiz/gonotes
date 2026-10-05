@@ -522,9 +522,15 @@ holds the signing key), records it in `sync_state.hub_user_guid` /
 `hub_username`, and then either hands it to the next local registration
 (`CreateUser` → `adoptableHubUserGUID`) or makes an existing same-named account
 adopt it (`ReconcileHubUserGUID`, sweeping `notes`, `note_changes`,
-`categories`, `category_changes`, `invite_tokens` across both engines, users row
-last so a crashed sweep re-runs). Matching is by **username**; a local account
-under a different name is left alone and logged. The push direction was never
+`categories`, `category_changes`, `invite_tokens`, `saved_queries` — the one
+inventory is `userGUIDRefs()` — users row last so a crashed sweep re-runs).
+Matching is by **username**; a local account under a different name is left
+alone and logged, and the operator fixes it with `gonotes account
+list|rename|merge` (`account_cmd.go`, `models/account_admin.go`): rename makes
+the name match, merge re-points one account's rows onto another and deletes it
+(source row last), and both then run `AlignLocalUserWithHub`. The command
+refuses while a server answers for the same data dir — bytdb takes no OS file
+lock, so nothing else would stop it. The push direction was never
 broken — the hub's `PushChanges` already overwrites `change.User` with the
 authenticated GUID.
 

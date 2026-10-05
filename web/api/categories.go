@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -187,6 +188,15 @@ func RenameSubcategory(ctx rweb.Context) error {
 
 	category, changed, err := models.RenameSubcategory(id, req.From, req.To, userGUID)
 	if err != nil {
+		// A note the rename would touch is open in an edit form. It is a 409 like
+		// every other lock refusal. The detail lists every blocking lease so the
+		// client can say how many forms to close, and its distinct reason keeps
+		// the client from treating it as a one-note "locked" conflict.
+		var locked *models.NotesLockedError
+		if errors.As(err, &locked) {
+			return writeConflict(ctx, locked.Error(),
+				notesLockedConflictDetail{Reason: "notes_locked", Locks: locked.Locks})
+		}
 		// Same string-matched sentinels as the other category handlers.
 		switch msg := err.Error(); msg {
 		case "category not found", "subcategory not found":

@@ -177,8 +177,21 @@ its cached hub token on restart) and records it, then:
 The one case the spoke will not resolve on its own is a local account registered
 under a *different* name from `GONOTES_SYNC_USERNAME`: two names are two
 accounts as far as the spoke can tell, so it refuses to merge them and logs that
-no local account matches the sync username. Register under the sync username to
-fix it.
+no local account matches the sync username. You can say what it won't guess,
+with the `account` command (stop the server first; the command checks):
+
+```bash
+./gonotes account list   -d ~/.gonotes                          # accounts, what each owns, the hub identity, and a suggested fix
+./gonotes account rename -d ~/.gonotes --from bob --to rob      # only "bob" exists: rename it to the sync username
+./gonotes account merge  -d ~/.gonotes --from bob --into rob    # both exist (e.g. "rob" was registered later): fold bob into rob
+```
+
+Both take `--dry-run`. After either, the account under the sync username adopts
+the hub GUID on the spot, so pulled notes appear on the next start. A rename
+keeps the password; a merge keeps the surviving account's password and carries
+admin rights over. Categories are not combined — if both accounts had one of
+the same name, the merged account lists it twice (the command names them).
+Sign in again afterwards on any open browser or TUI session.
 
 ### When does a sync actually happen?
 

@@ -1110,4 +1110,36 @@ func TestRenameSubcategoryAPI(t *testing.T) {
 	if status, _ := rename("http", "a/b"); status != http.StatusBadRequest {
 		t.Errorf("renaming to a name with a slash returned %d, want 400", status)
 	}
+
+	// A note filed under the subcategory is open in an edit form. The rename is
+	// a 409 that names the holder and carries no token, and nothing changes.
+	lock, err := models.AcquireNoteLock(noteID, "",
+		models.LockHolder{SessionID: "form-session", Label: "pane w1:p3"}, false)
+	if err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	defer models.ReleaseNoteLock(noteID, lock.Token)
+
+	status, data = rename("http", "web")
+	if status != http.StatusConflict {
+		t.Fatalf("rename over a locked note returned %d, want 409", status)
+	}
+	if data["reason"] != "notes_locked" {
+		t.Errorf("conflict reason = %v, want notes_locked", data["reason"])
+	}
+	locks, _ := data["locks"].([]interface{})
+	if len(locks) != 1 {
+		t.Fatalf("conflict lists %d locks, want 1", len(locks))
+	}
+	l := locks[0].(map[string]interface{})
+	if int64(l["note_id"].(float64)) != noteID {
+		t.Errorf("blocking lock is on note %v, want %d", l["note_id"], noteID)
+	}
+	if tok, _ := l["token"].(string); tok != "" {
+		t.Error("the 409 body carries the holder's lock token")
+	}
+	details, _ = models.GetNoteCategoryDetails(noteID, "")
+	if len(details) != 1 || details[0].SelectedSubcategories[0] != "http" {
+		t.Errorf("note selection = %+v after a refused rename, want [http]", details)
+	}
 }

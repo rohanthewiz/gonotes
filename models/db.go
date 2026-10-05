@@ -86,7 +86,14 @@ func InitDB() error {
 
 // InitTestDB opens both databases under dir, for isolated tests. Callers
 // pass a temp directory; the two files are created inside it.
+//
+// It also empties the lock registry. Leases are keyed by note id, and a fresh
+// database hands out ids from 1 again. So a lease left behind by an earlier
+// test would land on an unrelated note in this one. A bulk write such as a
+// subcategory rename would then be refused against a session that never
+// existed.
 func InitTestDB(dir string) error {
+	ResetNoteLocksForTest()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return serr.Wrap(err, "failed to create test data directory")
 	}

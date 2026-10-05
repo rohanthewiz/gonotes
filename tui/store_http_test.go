@@ -309,6 +309,15 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 			return
 		}
 		updated, n, err := api.data.RenameSubcategory(pathID(r, "id"), in.From, in.To, api.user.GUID)
+		var locked *models.NotesLockedError
+		if errors.As(err, &locked) {
+			// The real handler's 409 shape (web/api/categories.go).
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": false, "error": locked.Error(),
+				"data": map[string]any{"reason": "notes_locked", "locks": locked.Locks}})
+			return
+		}
 		if err != nil {
 			writeErr(w, http.StatusNotFound, err.Error())
 			return
@@ -1242,6 +1251,28 @@ func TestRenameSubcategoryOverHTTP(t *testing.T) {
 	if got := updated.SubcategoryList(); !slices.Equal(got, []string{"http"}) {
 		t.Errorf("definition = %v, want [http]", got)
 	}
+
+	// A note filed under the subcategory is open in an edit form. The server's
+	// 409 comes back as the same *models.NotesLockedError the local store
+	// raises, and NOT as a one-note lock, which would open the contention
+	// dialog.
+	lock, err := models.AcquireNoteLock(note.ID, api.user.GUID,
+		models.LockHolder{SessionID: "other-pane", Label: "pane w1:p3"}, false)
+	if err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	_, _, err = st.RenameSubcategory(cat.ID, "http", "web", api.user.GUID)
+	var locked *models.NotesLockedError
+	if !errors.As(err, &locked) || len(locked.Locks) != 1 || locked.Locks[0].NoteID != note.ID {
+		t.Fatalf("rename over a locked note = %v, want a *NotesLockedError naming note %d", err, note.ID)
+	}
+	if _, ok := lockedBy(err); ok {
+		t.Error("a bulk refusal reads as a one-note lock")
+	}
+	if !strings.Contains(errReason(err), "pane w1:p3") {
+		t.Errorf("status text %q doesn't say who holds the note", errReason(err))
+	}
+	models.ReleaseNoteLock(note.ID, lock.Token)
 
 	renamed, err := st.RenameCategory(*updated, "Job", api.user.GUID)
 	if err != nil {
