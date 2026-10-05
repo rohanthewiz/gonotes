@@ -205,10 +205,26 @@ func runAccountList() error {
 		return nil
 	}
 
+	// Only the current hub gets alignment advice. A spoke keeps a sync_state
+	// row for every hub it has used, but adopts only the identity on the hub
+	// it syncs with now (models.currentHubState). Advice about an earlier
+	// hub's account would be acted on and then do nothing: `rename` to that
+	// name would not adopt its GUID.
 	fmt.Println()
+	anyCurrent := false
 	for _, h := range hubs {
-		fmt.Printf("Hub %s: signed in as %q (guid %s)\n", h.HubURL, h.Username, h.UserGUID)
+		if !h.Current {
+			fmt.Printf("Hub %s (earlier hub): signed in as %q (guid %s)\n", h.HubURL, h.Username, h.UserGUID)
+			fmt.Println("  · not the hub this spoke syncs with now; its identity is not adopted")
+			continue
+		}
+		anyCurrent = true
+		fmt.Printf("Hub %s (current): signed in as %q (guid %s)\n", h.HubURL, h.Username, h.UserGUID)
 		describeHubMatch(users, h)
+	}
+	if !anyCurrent {
+		fmt.Println("The hub this spoke syncs with now has no recorded identity yet; " +
+			"it is recorded at the next sync login.")
 	}
 	return nil
 }
@@ -379,7 +395,9 @@ func printHubAlignmentPreview(username string) {
 		return
 	}
 	for _, h := range hubs {
-		if h.Username != username {
+		// Only the current hub's identity is adopted (AlignLocalUserWithHub),
+		// so only it is previewed.
+		if !h.Current || h.Username != username {
 			continue
 		}
 		// After a merge the survivor may already hold the hub GUID (it was

@@ -100,11 +100,22 @@ type HubIdentity struct {
 	HubURL   string
 	UserGUID string
 	Username string
+	// Current marks the hub this spoke synced with most recently, the only
+	// one whose identity is adopted (see currentHubState). Rows left from
+	// hubs it used before are listed but never adopted.
+	Current bool
 }
 
 // RecordedHubIdentities returns the hub identities this instance has learned.
-// Rows from a hub that has never been logged in to (no GUID yet) are skipped.
+// Rows from a hub that has never been logged in to (no GUID yet) are skipped,
+// so when the current hub has not been logged in to yet, no entry has
+// Current set.
 func RecordedHubIdentities() ([]HubIdentity, error) {
+	cur, _, err := currentHubState()
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := pubDB.Query(
 		`SELECT hub_url, hub_user_guid, hub_username FROM sync_state
 		 WHERE hub_user_guid IS NOT NULL AND hub_user_guid <> ''
@@ -121,7 +132,8 @@ func RecordedHubIdentities() ([]HubIdentity, error) {
 		if err := rows.Scan(&url, &guid, &name); err != nil {
 			return nil, serr.Wrap(err, "failed to scan hub identity")
 		}
-		out = append(out, HubIdentity{HubURL: url, UserGUID: guid.String, Username: name.String})
+		out = append(out, HubIdentity{HubURL: url, UserGUID: guid.String, Username: name.String,
+			Current: url == cur.HubURL})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, serr.Wrap(err, "failed to iterate hub identities")

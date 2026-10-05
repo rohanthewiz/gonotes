@@ -314,3 +314,130 @@ func TestSyncClientStartupRecoversIdentityFromACachedToken(t *testing.T) {
 			reloaded.GUID, hubGUID)
 	}
 }
+
+// ---- More than one hub (N-026) ---------------------------------------------
+//
+// A spoke keeps a sync_state row for every hub URL it has synced with. Only
+// the current one, the most recently active, speaks for its identity. The
+// URLs below are chosen so the stale hub sorts FIRST: the old `LIMIT 1`
+// lookup came back in hub_url order, so this is the layout that returned the
+// stale GUID.
+
+const (
+	staleHubURL = "http://a-old-hub:8981"
+	freshHubURL = "http://z-new-hub:8981"
+)
+
+// useHub is one login to hubURL as idHubUsername: the row is created if it
+// is new, and the identity is recorded, which also makes it current.
+func useHub(t *testing.T, hubURL, hubUserGUID string) {
+	t.Helper()
+	if _, err := GetOrCreateSyncState(hubURL); err != nil {
+		t.Fatalf("failed to create sync state for %s: %v", hubURL, err)
+	}
+	if err := RecordHubIdentity(hubURL, hubUserGUID, idHubUsername); err != nil {
+		t.Fatalf("failed to record hub identity for %s: %v", hubURL, err)
+	}
+}
+
+// After a move to a different hub instance, the same username has a new
+// GUID there. A new account must be born with the CURRENT hub's GUID, the one
+// pulled notes carry, whatever order the URLs sort in.
+func TestNewLocalUserAdoptsTheCurrentHubNotAnEarlierOne(t *testing.T) {
+	for _, tc := range []struct{ name, earlier, current string }{
+		{"stale hub sorts first", staleHubURL, freshHubURL},
+		{"stale hub sorts last", freshHubURL, staleHubURL},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setupIdentityTestDB(t)
+			earlierGUID, currentGUID := uuid.New().String(), uuid.New().String()
+			useHub(t, tc.earlier, earlierGUID)
+			useHub(t, tc.current, currentGUID)
+
+			u := newTestUser(t, idHubUsername)
+			if u.GUID != currentGUID {
+				t.Fatalf("new user GUID = %q, want the current hub's %q (earlier hub's was %q)",
+					u.GUID, currentGUID, earlierGUID)
+			}
+		})
+	}
+}
+
+// Switched to a new hub but not logged in to it yet: the current row has no
+// identity. The earlier hub's must NOT stand in for it, since no note pulled
+// from the new hub carries that GUID. Nothing is offered, so the account gets
+// a fresh GUID, and the first login reconciles it.
+func TestAnEarlierHubIsNotAFallbackForTheCurrentOne(t *testing.T) {
+	setupIdentityTestDB(t)
+	earlierGUID := uuid.New().String()
+	useHub(t, staleHubURL, earlierGUID)
+
+	// What NewSyncClient does for a newly configured hub.
+	if _, err := GetOrCreateSyncState(freshHubURL); err != nil {
+		t.Fatalf("failed to create sync state: %v", err)
+	}
+	if err := MarkCurrentHub(freshHubURL); err != nil {
+		t.Fatalf("MarkCurrentHub: %v", err)
+	}
+
+	if got := adoptableHubUserGUID(idHubUsername); got != "" {
+		t.Fatalf("adoption offered %q, the identity of a hub this spoke no longer syncs with", got)
+	}
+}
+
+// Switching BACK to a hub used before: its row already exists, so only
+// MarkCurrentHub (run at sync client startup) can make it current again
+// before the next login.
+func TestMarkCurrentHubSwitchesBack(t *testing.T) {
+	setupIdentityTestDB(t)
+	firstGUID, secondGUID := uuid.New().String(), uuid.New().String()
+	useHub(t, freshHubURL, firstGUID)
+	useHub(t, staleHubURL, secondGUID)
+
+	if got, _ := hubIdentityForUsername(idHubUsername); got != secondGUID {
+		t.Fatalf("before switching back: %q, want %q", got, secondGUID)
+	}
+	if err := MarkCurrentHub(freshHubURL); err != nil {
+		t.Fatalf("MarkCurrentHub: %v", err)
+	}
+	if got, _ := hubIdentityForUsername(idHubUsername); got != firstGUID {
+		t.Fatalf("after switching back: %q, want %q", got, firstGUID)
+	}
+}
+
+// The real startup path: a local account aligned to an earlier hub, and the
+// sync client now configured for another hub whose identity is already
+// recorded but whose row is not the most recent. Construction must mark that
+// hub current and align the account to it.
+func TestSyncClientStartupMakesItsHubCurrent(t *testing.T) {
+	setupIdentityTestDB(t)
+	configuredGUID, otherGUID := uuid.New().String(), uuid.New().String()
+	useHub(t, freshHubURL, configuredGUID)
+	useHub(t, staleHubURL, otherGUID) // most recent, but not the configured hub
+
+	local := newTestUser(t, idHubUsername)
+	if local.GUID != otherGUID {
+		t.Fatalf("setup: new user GUID = %q, want %q", local.GUID, otherGUID)
+	}
+
+	if _, err := NewSyncClient(&SyncConfig{
+		Enabled:     true,
+		HubURL:      freshHubURL,
+		Username:    idHubUsername,
+		Password:    "correct-horse",
+		Interval:    defaultSyncInterval,
+		Mode:        SyncModePrompt,
+		PromptAfter: defaultPromptAfter,
+	}); err != nil {
+		t.Fatalf("failed to construct sync client: %v", err)
+	}
+	t.Cleanup(func() { syncClientInstance = nil })
+
+	if got, _ := hubIdentityForUsername(idHubUsername); got != configuredGUID {
+		t.Fatalf("after startup the current identity is %q, want the configured hub's %q", got, configuredGUID)
+	}
+	reloaded, _ := GetUserByUsername(idHubUsername)
+	if reloaded == nil || reloaded.GUID != configuredGUID {
+		t.Fatalf("startup left the local account on %+v, want GUID %q", reloaded, configuredGUID)
+	}
+}

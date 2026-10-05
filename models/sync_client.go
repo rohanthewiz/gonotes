@@ -131,7 +131,9 @@ type SyncClientStatus struct {
 
 // Schema for sync_state lives in schema.go (public database only). Keyed
 // by hub_url so a spoke could theoretically sync with multiple hubs
-// (though the current design assumes one).
+// (though the current design assumes one). In practice a spoke gathers a row
+// per hub it has ever used, and only the most recently active one speaks for
+// its identity; see currentHubState in sync_identity.go.
 
 // NewSyncClient creates and configures a sync client.
 // Loads or generates the peer ID from the sync_state table so it remains
@@ -158,6 +160,15 @@ func NewSyncClient(config *SyncConfig) (*SyncClient, error) {
 		return nil, serr.Wrap(err, "failed to initialize sync state")
 	}
 	client.peerID = state.PeerID
+
+	// This is now the hub this spoke syncs with, so make its row the current
+	// one for identity lookups (see currentHubState) before anything reads
+	// them, including the adoption just below. A failure only means an older
+	// hub's row may still look current until the first login or cycle stamps
+	// this one, so it is logged, not fatal.
+	if err := MarkCurrentHub(config.HubURL); err != nil {
+		logger.LogErr(err, "failed to mark the configured hub as current")
+	}
 
 	// Restore cached auth token if available (avoids unnecessary login on restart)
 	if state.AuthToken.Valid && state.AuthToken.String != "" {

@@ -216,3 +216,36 @@ func TestListingHelpers(t *testing.T) {
 		t.Fatalf("RecordedHubIdentities = %+v (err=%v)", ids, err)
 	}
 }
+
+// With two hubs recorded, the listing marks only the current one, and align
+// adopts only the current one's identity (N-026).
+func TestAlignAndListingUseOnlyTheCurrentHub(t *testing.T) {
+	setupIdentityTestDB(t)
+	bob := newTestUser(t, "bob")
+
+	earlierGUID, currentGUID := uuid.New().String(), uuid.New().String()
+	useHub(t, staleHubURL, earlierGUID)
+	useHub(t, freshHubURL, currentGUID)
+
+	ids, err := RecordedHubIdentities()
+	if err != nil || len(ids) != 2 {
+		t.Fatalf("RecordedHubIdentities = %+v (err=%v)", ids, err)
+	}
+	for _, id := range ids {
+		if want := id.HubURL == freshHubURL; id.Current != want {
+			t.Errorf("%s: Current = %v, want %v", id.HubURL, id.Current, want)
+		}
+	}
+
+	if _, err := RenameLocalUser("bob", idHubUsername); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if changed, err := AlignLocalUserWithHub(idHubUsername); err != nil || !changed {
+		t.Fatalf("align: changed=%v err=%v", changed, err)
+	}
+	u, _ := GetUserByUsername(idHubUsername)
+	if u == nil || u.GUID != currentGUID {
+		t.Fatalf("align adopted %+v, want the current hub's GUID %q (bob was %q, earlier hub %q)",
+			u, currentGUID, bob.GUID, earlierGUID)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/rohanthewiz/logger"
@@ -63,13 +64,16 @@ import (
 // every successful login, because it is cheap and because the hub is free to
 // be re-registered under a new account; the last successful login is the
 // truth about which hub identity this spoke is currently carrying.
+//
+// It also stamps updated_at: a login is activity on that hub, and the most
+// recently active row is what currentHubState treats as the current hub.
 func RecordHubIdentity(hubURL, hubUserGUID, hubUsername string) error {
 	if hubURL == "" || hubUserGUID == "" {
 		return nil // Nothing learned — not an error, just no news
 	}
 	_, err := pubDB.Exec(
-		`UPDATE sync_state SET hub_user_guid = ?, hub_username = ? WHERE hub_url = ?`,
-		hubUserGUID, hubUsername, hubURL,
+		`UPDATE sync_state SET hub_user_guid = ?, hub_username = ?, updated_at = ? WHERE hub_url = ?`,
+		hubUserGUID, hubUsername, time.Now(), hubURL,
 	)
 	if err != nil {
 		return serr.Wrap(err, "failed to record hub user identity", "hub_url", hubURL)
@@ -77,28 +81,104 @@ func RecordHubIdentity(hubURL, hubUserGUID, hubUsername string) error {
 	return nil
 }
 
-// hubIdentityForUsername returns the hub user GUID this spoke has recorded
-// for the given username, or "" if there is none. Matching on the username
-// rather than just taking the single sync_state row is the safety catch:
-// adopting a GUID is only correct when the two accounts are the same account,
-// and the username is the only evidence of that we have locally.
-func hubIdentityForUsername(username string) (string, error) {
-	var guid sql.NullString
-	err := pubDB.QueryRow(
-		`SELECT hub_user_guid FROM sync_state
-		 WHERE hub_username = ? AND hub_user_guid IS NOT NULL AND hub_user_guid <> ''
-		 LIMIT 1`, username,
-	).Scan(&guid)
-	if err == sql.ErrNoRows {
-		return "", nil
+// ---- Which hub is current ---------------------------------------------------
+//
+// sync_state is keyed by hub_url, so a spoke keeps one row per hub URL it
+// has ever synced with, and nothing removes the old ones. The client syncs
+// with exactly one hub at a time (SyncConfig.HubURL), so after a move:
+//
+//	sync_state
+//	  http://old-hub:8444   hub_user_guid = G1   updated_at = March   ← stale
+//	  https://new-hub       hub_user_guid = G2   updated_at = today   ← current
+//
+// Same username on both, different GUIDs if the new hub is a different
+// instance. Notes pulled from now on carry G2. An identity lookup that
+// returned G1 (the old `LIMIT 1` did, whenever the old URL sorted first)
+// would give a new local account a GUID that no incoming note uses. The next
+// server start would then reconcile it to G2 and rewrite every row it owned.
+//
+// The current hub is the most recently active row. Every write to a row
+// comes from the sync client for its configured hub, so updated_at follows
+// the active hub: NewSyncClient stamps it at startup (MarkCurrentHub), and
+// login (RecordHubIdentity), token saves and completed cycles stamp it too.
+// No hub URL from the environment is consulted, because `gonotes account` runs
+// from a shell that may not have the server's sync settings.
+
+// currentHubState returns the sync_state row of the hub this spoke synced
+// with most recently, and false when there are no rows (not a spoke).
+//
+// The row can carry no identity yet: a hub just switched to, before its first
+// login. That is reported as-is rather than skipped. Falling back to an
+// older row would hand out the previous hub's identity, which is the bug this
+// function exists to prevent.
+//
+// The choice is made in Go over every row rather than with ORDER BY ...
+// LIMIT 1: there are only a handful of rows, and doing it here makes the tie
+// break (hub_url) and a NULL updated_at (treated as oldest) explicit rather
+// than up to the engine.
+func currentHubState() (HubIdentity, bool, error) {
+	rows, err := pubDB.Query(`SELECT hub_url, hub_user_guid, hub_username, updated_at FROM sync_state`)
+	if err != nil {
+		return HubIdentity{}, false, serr.Wrap(err, "failed to read sync state")
 	}
+	defer rows.Close()
+
+	var (
+		best     HubIdentity
+		bestTime time.Time
+		found    bool
+	)
+	for rows.Next() {
+		var url string
+		var guid, name sql.NullString
+		var updated sql.NullTime
+		if err := rows.Scan(&url, &guid, &name, &updated); err != nil {
+			return HubIdentity{}, false, serr.Wrap(err, "failed to scan sync state")
+		}
+		ts := updated.Time // zero when NULL, so a NULL row loses to any stamped one
+		if !found || ts.After(bestTime) || (ts.Equal(bestTime) && url > best.HubURL) {
+			best = HubIdentity{HubURL: url, UserGUID: guid.String, Username: name.String}
+			bestTime = ts
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return HubIdentity{}, false, serr.Wrap(err, "failed to iterate sync state")
+	}
+	return best, found, nil
+}
+
+// MarkCurrentHub stamps hubURL's sync_state row as the most recently active,
+// making it the current hub for identity lookups. NewSyncClient calls it at
+// startup. Without it, a spoke switched back to a hub it used before would
+// keep treating the other hub as current until the first login or cycle.
+func MarkCurrentHub(hubURL string) error {
+	if _, err := pubDB.Exec(`UPDATE sync_state SET updated_at = ? WHERE hub_url = ?`,
+		time.Now(), hubURL); err != nil {
+		return serr.Wrap(err, "failed to mark the current hub", "hub_url", hubURL)
+	}
+	return nil
+}
+
+// hubIdentityForUsername returns the hub user GUID this spoke has recorded
+// for the given username on its CURRENT hub (see currentHubState), or "" if
+// there is none.
+//
+// Two checks, both safety catches:
+//   - Current hub only. An identity recorded on a hub this spoke no longer
+//     syncs with is not the GUID incoming notes carry, so it is never offered,
+//     even when the current hub has no identity recorded yet.
+//   - Username match. Adopting a GUID is only correct when the two accounts
+//     are the same account, and the username is the only local evidence.
+func hubIdentityForUsername(username string) (string, error) {
+	cur, ok, err := currentHubState()
 	if err != nil {
 		return "", serr.Wrap(err, "failed to look up recorded hub identity", "username", username)
 	}
-	if !guid.Valid {
+	if !ok || cur.UserGUID == "" || cur.Username != username {
 		return "", nil
 	}
-	return guid.String, nil
+	return cur.UserGUID, nil
 }
 
 // adoptableHubUserGUID reports the GUID a newly created local user named

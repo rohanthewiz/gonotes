@@ -83,10 +83,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   the hub then skips by GUID, wasting one entry per batch. Filter per
   direction only if it shows up in a profile.
 
-- **N-026** · raised `2026-0818-1934-spoke-user-guid-alignment` · value low
-  Spokes synced to more than one hub are untested. `hubIdentityForUsername`
-  takes the first `sync_state` row that matches. The design assumes one hub.
-
 - **N-030** · raised `2026-0819-1410-web-batch-delete` · value low
   It was never confirmed that the batch-delete fix addressed the user's actual
   bug; the lock conflict was reproduced synthetically. If deleted notes
@@ -145,6 +141,24 @@ session doc marked an item as deferred, so move items here from Open by hand.
   `2026-0817-0015-tui-mouse-filter-and-store-identity`.
 
 ## Closed
+
+- **N-026** · raised `2026-0818-1934-spoke-user-guid-alignment` · closed
+  2026-10-04, `2026-1004-2051-n026-current-hub-identity` — Spokes with more than one hub were untested, and testing them
+  found a bug. A spoke keeps a `sync_state` row for every hub URL it has
+  used. When the stale hub's URL sorted first, the old `LIMIT 1` lookup
+  returned that hub's GUID, so a newly registered account (and
+  `account rename`/`merge`) adopted a GUID no incoming note carries, until
+  the next server start rewrote every row back. Done: `currentHubState`
+  treats the most recently active row as the current hub, and
+  `hubIdentityForUsername` consults only that row. An earlier hub never
+  stands in, even before the new hub's first login. `NewSyncClient` stamps
+  its hub current (`MarkCurrentHub`), and `RecordHubIdentity` stamps
+  `updated_at`, so switching back to an old hub works too. No env var is
+  read, because `gonotes account` may run without the server's settings.
+  `RecordedHubIdentities` marks `Current`. `account list` advises only on
+  the current hub, labels the others "earlier hub", and the dry-run preview
+  follows the same rule. Tests cover both URL orders, a not-yet-logged-in
+  new hub, switching back, startup and align, and the list output.
 
 - **N-049** · raised `2026-1004-n016-bulk-lock-gate` · closed 2026-10-04,
   `2026-1004-2045-n049-category-link-lock-gate` —
