@@ -237,6 +237,14 @@ func GetSyncClient() *SyncClient {
 	return syncClientInstance
 }
 
+// ResetSyncClientForTest forgets the package-level sync client. Tests only:
+// NewSyncClient installs itself globally, and a client left behind would turn
+// every later test's server into a spoke (the sync-control endpoints answer,
+// and HubCompact refuses).
+func ResetSyncClientForTest() {
+	syncClientInstance = nil
+}
+
 // Start launches the background sync goroutine.
 //
 // In auto mode the first cycle runs immediately (passive sync on startup) and
@@ -407,6 +415,18 @@ func (sc *SyncClient) Compact() (*CompactionResult, error) {
 // save (see PreviewCompaction).
 func (sc *SyncClient) PreviewCompact() (*CompactionResult, error) {
 	return PreviewCompaction(sc.peerID, "")
+}
+
+// CompactNote is Compact scoped to one note (see CompactNotePendingChanges).
+// Unlike Compact it takes the caller's userGUID: it names a note, so the note
+// must be the caller's, even on a spoke that several local accounts share.
+func (sc *SyncClient) CompactNote(noteGUID, userGUID string) (*CompactionResult, error) {
+	return CompactNotePendingChanges(sc.peerID, userGUID, noteGUID)
+}
+
+// PreviewCompactNote is CompactNote without the writes.
+func (sc *SyncClient) PreviewCompactNote(noteGUID, userGUID string) (*CompactionResult, error) {
+	return PreviewNoteCompaction(sc.peerID, userGUID, noteGUID)
 }
 
 // SyncOnExit runs the final cycle during shutdown, if one is warranted.

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -243,6 +244,11 @@ func SyncControlMode(ctx rweb.Context) error {
 // answer different questions: this one is "my change log has grown while I
 // have been offline and I want it tidied", which is worth being able to do
 // while the hub is unreachable — exactly when it accumulates.
+//
+// ?note_guid=<guid> scopes it to that one note: its pending changes collapse
+// and nothing else is touched (models.CompactNotePendingChanges). The
+// counts in "compaction" are then that note's. A note that does not exist or
+// is not the caller's answers 404.
 func SyncControlCompact(ctx rweb.Context) error {
 	userGUID := GetCurrentUserGUID(ctx)
 	if userGUID == "" {
@@ -254,7 +260,16 @@ func SyncControlCompact(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusServiceUnavailable, "sync is not configured")
 	}
 
-	res, err := client.Compact()
+	var res *models.CompactionResult
+	var err error
+	if noteGUID := ctx.Request().QueryParam("note_guid"); noteGUID != "" {
+		res, err = client.CompactNote(noteGUID, userGUID)
+		if errors.Is(err, models.ErrCompactNoteNotFound) {
+			return writeError(ctx, http.StatusNotFound, "note not found")
+		}
+	} else {
+		res, err = client.Compact()
+	}
 	if err != nil {
 		logger.LogErr(serr.Wrap(err, "change log compaction failed"), "user_guid", userGUID)
 		return writeError(ctx, http.StatusInternalServerError, "failed to compact changes")
@@ -269,6 +284,7 @@ func SyncControlCompact(ctx rweb.Context) error {
 // SyncControlCompactPreview handles GET /api/v1/sync/control/compact: what
 // POST would do right now, with nothing written. The web banner reads it to
 // say how far "Compact" would pack the pending log before the user picks it.
+// It takes the same ?note_guid= scope as the POST, with the same 404.
 func SyncControlCompactPreview(ctx rweb.Context) error {
 	userGUID := GetCurrentUserGUID(ctx)
 	if userGUID == "" {
@@ -278,7 +294,16 @@ func SyncControlCompactPreview(ctx rweb.Context) error {
 	if client == nil {
 		return writeError(ctx, http.StatusServiceUnavailable, "sync is not configured")
 	}
-	res, err := client.PreviewCompact()
+	var res *models.CompactionResult
+	var err error
+	if noteGUID := ctx.Request().QueryParam("note_guid"); noteGUID != "" {
+		res, err = client.PreviewCompactNote(noteGUID, userGUID)
+		if errors.Is(err, models.ErrCompactNoteNotFound) {
+			return writeError(ctx, http.StatusNotFound, "note not found")
+		}
+	} else {
+		res, err = client.PreviewCompact()
+	}
 	if err != nil {
 		logger.LogErr(serr.Wrap(err, "compaction preview failed"), "user_guid", userGUID)
 		return writeError(ctx, http.StatusInternalServerError, "failed to preview compaction")

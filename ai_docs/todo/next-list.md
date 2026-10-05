@@ -69,13 +69,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   a one-line change. This is a wait-and-see item and a candidate for
   Non-goals.
 
-- **N-022** · raised `2026-0818-1824-sync-prompt-mode-and-compaction` · value low
-  Compaction is all-or-nothing per peer: there's no "compact just this note".
-  The dry-run half is done (`models.PreviewCompaction`,
-  `GET /api/v1/sync/control/compact`, shown in the web banner's compact-button
-  tooltips, in `2026-0923-1203-next-list-batches`), so this item is now only
-  the per-note part.
-
 - **N-030** · raised `2026-0819-1410-web-batch-delete` · value low
   It was never confirmed that the batch-delete fix addressed the user's actual
   bug; the lock conflict was reproduced synthetically. If deleted notes
@@ -134,6 +127,21 @@ session doc marked an item as deferred, so move items here from Open by hand.
   `2026-0817-0015-tui-mouse-filter-and-store-identity`.
 
 ## Closed
+
+- **N-022** · raised `2026-0818-1824-sync-prompt-mode-and-compaction` · closed
+  2026-10-04, `2026-1004-2318-n022-compact-one-note` — Compaction was all-or-nothing per peer. Done backend only, by
+  the user's choice (no web or TUI button, since pending rows are invisible
+  to users). `models.CompactNotePendingChanges` / `PreviewNoteCompaction`
+  (`models/sync_compact_note.go`) collapse one note's pending tail with the
+  whole-log machinery (`groupNoteChanges`, `compactNoteGroup`) and leave
+  every other note and category alone. Counts are that note's. Ownership is
+  checked against the note row in either database, soft-deleted included,
+  so a tail ending in a delete still compacts. Unknown and foreign notes get
+  the same `ErrCompactNoteNotFound`. Exposed as `?note_guid=` on `GET` and
+  `POST /api/v1/sync/control/compact` (404 for the error) via
+  `SyncClient.CompactNote` / `PreviewCompactNote`. The decline rule moved
+  into `noteGroupCompactable`, shared by both previews. New
+  `models.ResetSyncClientForTest` lets API tests stand up a spoke.
 
 - **N-023** · raised `2026-0818-1824-sync-prompt-mode-and-compaction` · closed
   2026-10-04, `2026-1004-2055-n023-push-carries-no-relays` — A spoke's push batch was thought to carry the relay

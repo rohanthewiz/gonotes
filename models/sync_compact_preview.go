@@ -57,13 +57,9 @@ func PreviewCompaction(peerID string, userGUID string) (*CompactionResult, error
 	noteOrder, noteGroups := groupNoteChanges(noteChanges)
 	for _, guid := range noteOrder {
 		grp := noteGroups[guid]
-		if len(grp) < 2 {
+		// The same rule PreviewNoteCompaction applies to a single note.
+		if !noteGroupCompactable(guid, grp) {
 			continue
-		}
-		if netNoteOperation(grp) != OperationDelete {
-			if note, err := GetNoteByGUID(guid); err != nil || note == nil {
-				continue
-			}
 		}
 		res.NotesCompacted++
 		removed += len(grp) - 1
