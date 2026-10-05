@@ -76,13 +76,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   tooltips, in `2026-0923-1203-next-list-batches`), so this item is now only
   the per-note part.
 
-- **N-023** · raised `2026-0818-1824-sync-prompt-mode-and-compaction` · value low
-  `GetUnsentChangesForPeer` returns operation 9 (relay) rows. First written
-  down as a missing operation filter. `2026-0818-1859` reframed it: with
-  relays that behaviour is correct, but a spoke's push batch can carry relays
-  the hub then skips by GUID, wasting one entry per batch. Filter per
-  direction only if it shows up in a profile.
-
 - **N-030** · raised `2026-0819-1410-web-batch-delete` · value low
   It was never confirmed that the batch-delete fix addressed the user's actual
   bug; the lock conflict was reproduced synthetically. If deleted notes
@@ -141,6 +134,22 @@ session doc marked an item as deferred, so move items here from Open by hand.
   `2026-0817-0015-tui-mouse-filter-and-store-identity`.
 
 ## Closed
+
+- **N-023** · raised `2026-0818-1824-sync-prompt-mode-and-compaction` · closed
+  2026-10-04, `2026-1004-2055-n023-push-carries-no-relays` — A spoke's push batch was thought to carry the relay
+  (operation 9) rows it records while pulling. Measured, and it doesn't:
+  `applyChangeWithConflictDetection` marks each pulled change as delivered
+  to the hub (`MarkChangeGUIDSyncedToPeer`, added in `cff9559`, the same
+  relay work whose follow-up raised this), so `GetUnifiedChangesForPeer`
+  never returns them for the hub's peer. A relay reaches a push only if that
+  best-effort mark fails or the process dies between apply and mark. That
+  costs one entry, once: the hub skips it by GUID and accepts it, and the
+  spoke then marks it. No filter added. The hub direction must keep
+  returning relays, since they are what other spokes pull.
+  `TestASpokesPushCarriesNoRelaysItPulled` drives a mixed pull (relayed
+  create, update, privacy flip, delete, category create and rename) through
+  the real apply path and checks the push batch. With the mark removed, it
+  fails on all seven relays.
 
 - **N-026** · raised `2026-0818-1934-spoke-user-guid-alignment` · closed
   2026-10-04, `2026-1004-2051-n026-current-hub-identity` — Spokes with more than one hub were untested, and testing them
