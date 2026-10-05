@@ -75,6 +75,12 @@ func ApplySyncNoteCreate(noteGUID, title string, fragment NoteFragment, authored
 		return nil, serr.Wrap(err, "failed to insert synced note")
 	}
 
+	// File the note BEFORE recording the relay, so the relay can carry the
+	// filing. A create once recorded only the plain fields here and left the
+	// mappings to its caller, so a note filed at birth reached the hub filed
+	// and every other peer unfiled.
+	applyIncomingFiling(noteGUID, fragment)
+
 	// Record OperationSync so it won't be pushed back to the originator.
 	syncFragment := createFragmentFromInput(NoteInput{
 		Title:       title,
@@ -83,6 +89,16 @@ func ApplySyncNoteCreate(noteGUID, title string, fragment NoteFragment, authored
 		Tags:        nullStringToPtr(tags),
 		IsPrivate:   isPrivate,
 	}, FragmentTitle|FragmentDescription|FragmentBody|FragmentTags|FragmentIsPrivate)
+	// The categories bit is claimed only when the incoming change claimed
+	// it: a create that said nothing about filing must not relay "unfiled"
+	// over a peer's own filing. The value is re-read from disk rather than
+	// copied from the fragment, for the same reason the update path
+	// snapshots — it is what this machine actually holds (a mapping whose
+	// category has not arrived yet is skipped above, and so is absent here).
+	if fragment.Bitmask&FragmentCategories != 0 {
+		syncFragment.Bitmask |= FragmentCategories
+		syncFragment.Categories = note.categoriesSnapshotForRelay()
+	}
 	if fragmentID, err := insertNoteFragment(en, syncFragment); err != nil {
 		logger.LogErr(err, "failed to record sync note create fragment", "note_guid", noteGUID)
 	} else {
@@ -108,9 +124,13 @@ func ApplySyncNoteUpdate(noteGUID string, fragment NoteFragment, authoredAt time
 		return serr.New("note not found for sync update: " + noteGUID)
 	}
 
-	// If no mutable field bits are set, there is nothing to update.
-	const mutableBits = FragmentTitle | FragmentDescription | FragmentBody | FragmentTags | FragmentIsPrivate
-	if fragment.Bitmask&mutableBits == 0 {
+	// fieldBits are the fields stored on the note row itself. Categories live
+	// in link rows, so a change can be real — and must be relayed — while
+	// naming none of these. Returning early on fieldBits alone (as this once
+	// did) applied a refiling locally via the caller but never recorded it,
+	// so a hub swallowed every categories-only edit instead of fanning it out.
+	const fieldBits = FragmentTitle | FragmentDescription | FragmentBody | FragmentTags | FragmentIsPrivate
+	if fragment.Bitmask&(fieldBits|FragmentCategories) == 0 {
 		return nil
 	}
 
@@ -153,7 +173,13 @@ func ApplySyncNoteUpdate(noteGUID string, fragment NoteFragment, authoredAt time
 	// sync_conflict.go) and its job is to land the result, not to ask again.
 	// Bumping still matters — a local form that had the pre-sync note open must
 	// be told its base moved, which is exactly what the counter is for.
-	if src == dst {
+	switch {
+	case fragment.Bitmask&fieldBits == 0:
+		// Categories only: the note row is untouched, version included. A
+		// local refiling does not bump the version either (link rows sit
+		// outside the optimistic-concurrency guard), and an apply must not
+		// make an open editor report a conflict over a field it never edits.
+	case src == dst:
 		_, err = src.Exec(`
 			UPDATE notes SET title = ?, description = ?, body = ?, tags = ?, is_private = ?,
 			    authored_at = ?, synced_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP,
@@ -165,7 +191,7 @@ func ApplySyncNoteUpdate(noteGUID string, fragment NoteFragment, authoredAt time
 		if err != nil {
 			return serr.Wrap(err, "failed to update note from sync")
 		}
-	} else {
+	default:
 		// Privacy flip: move the note (and its links) to the other database,
 		// preserving id/guid/created_at.
 		insertQuery := `
@@ -186,6 +212,13 @@ func ApplySyncNoteUpdate(noteGUID string, fragment NoteFragment, authoredAt time
 			return serr.Wrap(err, "failed to delete note from source database during sync privacy flip")
 		}
 	}
+
+	// File the note before the relay is recorded: noteRelayFragment re-reads
+	// the links for the categories bit, and reading them before this point
+	// relayed the PREVIOUS filing — "null" for a note being filed for the
+	// first time, which peers apply as "unfile". After a privacy flip the
+	// links have already moved to dst, which is where this writes.
+	applyIncomingFiling(noteGUID, fragment)
 
 	// Record OperationSync in the destination engine — from the RESOLVED
 	// state, not from the incoming fragment.
@@ -320,6 +353,24 @@ func ApplySyncCategoryDelete(categoryGUID, originChangeGUID string) error {
 		logger.LogErr(err, "failed to record sync category delete change", "category_guid", categoryGUID)
 	}
 	return nil
+}
+
+// applyIncomingFiling lands an incoming fragment's category mappings, when it
+// carries them. It runs inside ApplySyncNoteCreate/Update, between the note
+// write and the relay record, because the relay snapshots the filing from
+// disk; the ordering is the whole point:
+//
+//	note row ──► links (here) ──► relay row snapshots links ──► peers pull
+//
+// A failure is logged, not returned: the note's fields have already landed,
+// and the relay's snapshot then says what this machine really holds.
+func applyIncomingFiling(noteGUID string, fragment NoteFragment) {
+	if fragment.Bitmask&FragmentCategories == 0 || !fragment.Categories.Valid {
+		return
+	}
+	if err := ApplySyncNoteCategoryMapping(noteGUID, fragment.Categories.String); err != nil {
+		logger.LogErr(err, "failed to apply synced category mappings", "note_guid", noteGUID)
+	}
 }
 
 // ApplySyncNoteCategoryMapping replaces a note's entire category set from a

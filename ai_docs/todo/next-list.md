@@ -31,7 +31,7 @@ with every item's premise re-checked against the code at `e0c2a39`.
 - Open and Roadmap stay in ID order. Edit an item's text in place when its
   premise changes; keep its ID and `raised`.
 
-**Next ID:** N-052
+**Next ID:** N-053
 
 ## Open
 
@@ -127,6 +127,24 @@ session doc marked an item as deferred, so move items here from Open by hand.
   `2026-0817-0015-tui-mouse-filter-and-store-identity`.
 
 ## Closed
+
+- **N-052** · raised `gonotes_mobile:2026-1005-0132-grmob-rewrite-gonotes-parity`
+  · closed 2026-10-05, no session doc (branch `roh/relay-categories`) — The
+  hub dropped note filing from its relays, which affects desktop spokes as well
+  as the phone. The mobile e2e test found three gaps:
+  - A create's relay carried only the plain fields.
+  - A categories-only update returned early in `ApplySyncNoteUpdate`, so it
+    was never relayed. Desktop's own refiling is exactly this shape.
+  - An update's relay snapshotted the links *before* the caller applied the
+    new mapping, so it relayed the old filing (`null` for a first filing,
+    which peers apply as "unfile").
+
+  Done: both apply functions now land the mappings themselves
+  (`applyIncomingFiling`), between the note write and the relay record. The
+  create relay claims the categories bit when the incoming change did. A
+  categories-only update leaves the note row and its version alone.
+  `models/sync_relay_categories_test.go` covers each gap and fails on the old
+  code. The mobile app's `filingEcho` workaround can now go.
 
 - **N-005** · raised `2026-0812-1306-monaco-editor-option` · closed
   2026-10-04, `2026-1004-2338-n005-drop-monaco-locales` — Binary size from the vendored Monaco. **Locales dropped; the

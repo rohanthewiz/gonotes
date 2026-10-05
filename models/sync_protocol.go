@@ -378,7 +378,8 @@ func getCategoryUpdatedAt(categoryGUID string) (time.Time, error) {
 //	entity_type=category, op=3 (Delete) -> ApplySyncCategoryDelete()
 //
 // If a note fragment includes FragmentCategories (0x04), the category mappings
-// are applied via ApplySyncNoteCategoryMapping after the note update.
+// are applied inside ApplySyncNoteCreate/Update, before the relay row is
+// recorded, so the relay carries the new filing (see applyIncomingFiling).
 //
 // Idempotency: if the change GUID already exists in the change log, the
 // operation is skipped (returns nil without error).
@@ -443,16 +444,10 @@ func applyIncomingNoteChange(change SyncChange) error {
 			title = fragment.Title.String
 		}
 
+		// Category mappings are applied inside, ahead of the relay record.
 		_, err = ApplySyncNoteCreate(change.EntityGUID, title, fragment, change.AuthoredAt, change.User, change.GUID)
 		if err != nil {
 			return serr.Wrap(err, "failed to apply sync note create")
-		}
-
-		// If the fragment includes category mappings, apply them
-		if fragment.Bitmask&FragmentCategories != 0 && fragment.Categories.Valid {
-			if err := ApplySyncNoteCategoryMapping(change.EntityGUID, fragment.Categories.String); err != nil {
-				logger.LogErr(err, "failed to apply category mappings during note create", "note_guid", change.EntityGUID)
-			}
 		}
 		return nil
 
@@ -474,16 +469,13 @@ func applyIncomingNoteChange(change SyncChange) error {
 // applyIncomingNoteUpdate lands an edit and, when the fragment carries them,
 // the note's category mappings. Shared by the update arm and by a relayed
 // change that turned out to be about a note this machine already has.
+//
+// The mappings are applied inside ApplySyncNoteUpdate rather than here after
+// it returns: the relay row it records snapshots the filing, and applying
+// the mappings afterwards relayed the filing as it was BEFORE this change.
 func applyIncomingNoteUpdate(change SyncChange, fragment NoteFragment) error {
 	if err := ApplySyncNoteUpdate(change.EntityGUID, fragment, change.AuthoredAt, change.GUID); err != nil {
 		return serr.Wrap(err, "failed to apply sync note update")
-	}
-
-	// If the fragment includes category mappings, apply them
-	if fragment.Bitmask&FragmentCategories != 0 && fragment.Categories.Valid {
-		if err := ApplySyncNoteCategoryMapping(change.EntityGUID, fragment.Categories.String); err != nil {
-			logger.LogErr(err, "failed to apply category mappings during note update", "note_guid", change.EntityGUID)
-		}
 	}
 	return nil
 }
