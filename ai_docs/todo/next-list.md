@@ -56,12 +56,22 @@ with every item's premise re-checked against the code at `e0c2a39`.
   memory) makes this cheap now.
 
 - **N-015** · raised `2026-0817-1420-gonotes-note-locks` · value low
-  cats-mobile parity. The same app came up three times: unaware of note locks
-  and version guards (`2026-0817-1420`), no duplicate action
-  (`2026-0818-1739`), and no sync affordance (`2026-0818-1824`, `-1859`,
-  `-1934`). Premise unverified: the mobile app has since been rebuilt as a
-  sync spoke (branch `roh/sync-spoke-rebuild`), so check that repo before
-  acting.
+  Mobile parity. The app is `github.com/rohanthewiz/gonotes_mobile` (Kotlin),
+  not cats-mobile, which is the cats agent client and has no notes. Checked
+  2026-10-04 against branch `roh/sync-spoke-rebuild` (`ab46321`, 2026-07-04):
+  - **Locks and version guards: not applicable.** The rebuild calls only the
+    auth and `/sync/*` endpoints, never `/notes`. Sync apply sits outside the
+    lock protocol by design, and the hub bumps `version` on apply, so a held
+    form gets the stale-write 409 instead of a silent clobber.
+  - **Sync affordance: done on the branch.** Hub setup screen, sync-now and
+    a pending count on the note list, and WorkManager background sync.
+  - **Duplicate action: still missing.**
+  - **Today's hub protocol: compatible on paper.** It upserts relays
+    (operation 9), never re-records applied changes, matches the note and
+    category bitmasks and the subcategory mapping, all 8 endpoints it calls
+    exist, and the checksum algorithm is unchanged since the bytdb move.
+    Never run end to end against a hub (the branch's own open item).
+  - **The branch is unmerged** (8 commits ahead of `master`).
 
 - **N-021** · raised `2026-0818-1739-duplicate-note-dialog` · value low
   Whether a note's follow-up flag should carry over to a duplicate is left to
