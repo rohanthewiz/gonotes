@@ -46,22 +46,29 @@ with every item's premise re-checked against the code at `e0c2a39`.
   snapshot reconcile.
 
 - **N-015** · raised `2026-0817-1420-gonotes-note-locks` · value low
-  Mobile parity. The app is `github.com/rohanthewiz/gonotes_mobile` (Kotlin),
-  not cats-mobile, which is the cats agent client and has no notes. Checked
-  2026-10-04 against branch `roh/sync-spoke-rebuild` (`ab46321`, 2026-07-04):
-  - **Locks and version guards: not applicable.** The rebuild calls only the
+  Mobile parity. The app is `github.com/rohanthewiz/gonotes_mobile`, not
+  cats-mobile, which is the cats agent client and has no notes. It is now
+  Go on grmob, on its `master` since 2026-10-05 (`ec71de1`). The Kotlin
+  spoke is archived in that repo. Re-checked 2026-10-05:
+  - **Locks and version guards: not applicable.** The app calls only the
     auth and `/sync/*` endpoints, never `/notes`. Sync apply sits outside the
     lock protocol by design, and the hub bumps `version` on apply, so a held
     form gets the stale-write 409 instead of a silent clobber.
-  - **Sync affordance: done on the branch.** Hub setup screen, sync-now and
-    a pending count on the note list, and WorkManager background sync.
-  - **Duplicate action: still missing.**
-  - **Today's hub protocol: compatible on paper.** It upserts relays
-    (operation 9), never re-records applied changes, matches the note and
-    category bitmasks and the subcategory mapping, all 8 endpoints it calls
-    exist, and the checksum algorithm is unchanged since the bytdb move.
-    Never run end to end against a hub (the branch's own open item).
-  - **The branch is unmerged** (8 commits ahead of `master`).
+  - **Sync affordance: done.** Hub setup, prompt/auto sync with a due banner
+    and snooze, and sync-now. Background sync while the app is closed is
+    gone with the Kotlin WorkManager job: grmob has no equivalent yet.
+  - **Duplicate action: done**, with the same dialog as gonotes.
+  - **Hub protocol: verified end to end.** The app's e2e test
+    (`internal/spoke/e2e_test.go`) drives two phones and the REST API against
+    a real hub built from this repo: push, pull, relay between phones,
+    refiling relay, delete, checksum parity. That test found the hub's
+    filing-relay gaps (N-052, fixed in `cf561e2`). The phone's workaround
+    is removed (`7b00746`), so it needs a hub at or past `cf561e2`.
+  - **Parity:** everything a user does on the web UI except server-only
+    features (admin, invites, edit locks, hub compaction) and Mermaid
+    rendering. Remaining mobile work (device checks, iOS run, background
+    sync, share intents) is tracked in that repo's session docs, not here.
+    This item is a candidate to close.
 
 - **N-021** · raised `2026-0818-1739-duplicate-note-dialog` · value low
   Whether a note's follow-up flag should carry over to a duplicate is left to
