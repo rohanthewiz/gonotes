@@ -34,5 +34,14 @@ cp -R "$TMP_DIR/package/min/vs" "$VENDOR_DIR/vs"
 cp "$TMP_DIR/package/LICENSE" "$VENDOR_DIR/LICENSE"
 echo "$MONACO_VERSION" > "$VENDOR_DIR/VERSION"
 
+# Drop the non-English UI message bundles (vs/nls.messages.<lang>.js, ~1.8MB
+# across 9 locales). English is built into editor.main.js; a bundle is only
+# fetched when require.config sets 'vs/nls': { availableLanguages: { '*': '<lang>' } }
+# (see the nls.messages-loader in editor.main.js), and monaco_editor.js never
+# does. Every bundle is dead weight in the binary. The monaco.* API is not
+# affected. If a locale is ever wanted, keep its file here and set it in
+# loadMonaco's require.config.
+rm -f "$VENDOR_DIR"/vs/nls.messages.*.js
+
 echo "Vendored monaco-editor@${MONACO_VERSION} -> $VENDOR_DIR ($(du -sh "$VENDOR_DIR" | cut -f1))"
 echo "Rebuild gonotes to embed the new files."

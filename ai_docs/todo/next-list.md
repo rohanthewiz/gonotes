@@ -45,11 +45,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   migrated spoke must push its pre-existing notes to a hub without a full
   snapshot reconcile.
 
-- **N-005** · raised `2026-0812-1306-monaco-editor-option` · value low
-  Binary size: `vs/language/typescript` (5.5MB) and non-English
-  `nls.messages.*` (~1.7MB) could be dropped from the vendor dir if "full"
-  mode is ever relaxed.
-
 - **N-015** · raised `2026-0817-1420-gonotes-note-locks` · value low
   Mobile parity. The app is `github.com/rohanthewiz/gonotes_mobile` (Kotlin),
   not cats-mobile, which is the cats agent client and has no notes. Checked
@@ -132,6 +127,20 @@ session doc marked an item as deferred, so move items here from Open by hand.
   `2026-0817-0015-tui-mouse-filter-and-store-identity`.
 
 ## Closed
+
+- **N-005** · raised `2026-0812-1306-monaco-editor-option` · closed
+  2026-10-04, `2026-1004-2338-n005-drop-monaco-locales` — Binary size from the vendored Monaco. **Locales dropped; the
+  TypeScript language kept by the user's choice.** The 9 non-English
+  `vs/nls.messages.*.js` bundles (1.8MB) never load: editor.main.js's
+  `nls.messages-loader` fetches one only when `require.config` sets
+  `'vs/nls': { availableLanguages }`, which `monaco_editor.js` never does.
+  So removing them leaves the full `monaco.*` API intact, with no need to
+  relax "full" mode. They are deleted from the vendor dir, and
+  `scripts/vendor_monaco.sh` strips them on every re-vendor. The binary went
+  from 48.8MB to 47.0MB. The headless-Chrome Monaco run passes with no
+  locale request and no 404. `vs/language/typescript` (5.5MB) stays,
+  because dropping it would remove `monaco.languages.typescript`, part of
+  the full build that was asked for.
 
 - **N-007** · raised `2026-0812-1306-monaco-editor-option` · closed
   2026-10-04, `2026-1004-2329-n007-monaco-e2e-paste-fix` — The Monaco editor was exercised end to end in headless Chrome

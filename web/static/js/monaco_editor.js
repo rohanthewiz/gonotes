@@ -102,7 +102,11 @@
       const script = document.createElement('script');
       script.src = base + '/vs/loader.js';
       script.onload = function() {
-        // 'require' here is Monaco's AMD loader, not Node's
+        // 'require' here is Monaco's AMD loader, not Node's.
+        // No 'vs/nls' locale is configured, so Monaco runs with its built-in
+        // English messages and requests no nls.messages.<lang>.js. The
+        // vendored copy omits those bundles (scripts/vendor_monaco.sh), so
+        // configuring a locale here would also mean vendoring its file.
         window.require.config({ paths: { vs: base + '/vs' } });
         window.require(['vs/editor/editor.main'], function() {
           resolve();
