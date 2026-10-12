@@ -35,6 +35,13 @@ with every item's premise re-checked against the code at `e0c2a39`.
 
 ## Open
 
+Nothing open right now.
+
+## Roadmap
+
+Wanted, but deliberately not next. Parked, not declined. Seeded empty: no
+session doc marked an item as deferred, so move items here from Open by hand.
+
 - **N-002** · raised `2026-0722-1558-migrate-duckdb-to-bytdb` · value low
   Sequential fan-outs remain in low-frequency paths: `GetSyncStatus` counts,
   `computeSyncChecksum`, `changeGUIDExists` (`models/sync_protocol.go`). They
@@ -44,11 +51,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   The DuckDB→bytdb migration skips the sync change log. Revisit only if a
   migrated spoke must push its pre-existing notes to a hub without a full
   snapshot reconcile.
-
-## Roadmap
-
-Wanted, but deliberately not next. Parked, not declined. Seeded empty: no
-session doc marked an item as deferred, so move items here from Open by hand.
 
 - **N-004** · raised `2026-0812-1306-monaco-editor-option` · value low
   Vendored Monaco (12MB, 96 files under `web/static/vendor/monaco/` since
