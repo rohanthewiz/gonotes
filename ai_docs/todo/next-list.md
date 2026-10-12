@@ -45,12 +45,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   migrated spoke must push its pre-existing notes to a hub without a full
   snapshot reconcile.
 
-- **N-021** · raised `2026-0818-1739-duplicate-note-dialog` · value low
-  Whether a note's follow-up flag should carry over to a duplicate is left to
-  a row in the dialog. If nobody ever ticks that row, changing its default is
-  a one-line change. This is a wait-and-see item and a candidate for
-  Non-goals.
-
 ## Roadmap
 
 Wanted, but deliberately not next. Parked, not declined. Seeded empty: no
@@ -81,6 +75,12 @@ session doc marked an item as deferred, so move items here from Open by hand.
   few rows in a `lipgloss.Place`d box, so hit-testing means repeating the
   centering math, and a two-choice dialog doesn't earn that. Raised in
   `2026-0817-0015-tui-mouse-filter-and-store-identity`.
+- **N-021** · declined `2026-1011-2315-n021-dup-flag-non-goal` — Changing whether a duplicate
+  carries the follow-up flag by default. The duplicate dialog already offers
+  it as a row (`dup-flagged` in `web/static/js/app.js`, and the TUI's
+  dialog), so whoever wants the flag on the copy ticks it. The item was
+  wait-and-see and named Non-goals as its likely end, and no session since
+  has raised the default again. Raised in `2026-0818-1739-duplicate-note-dialog`.
 
 ## Closed
 
