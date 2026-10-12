@@ -86,13 +86,57 @@ func JWTAuthMiddleware(c rweb.Context) error {
 		return c.Next()
 	}
 
-	// Valid token - set user context including admin status for authorization checks
-	c.Set("user_guid", claims.UserGUID)
-	c.Set("username", claims.Username)
-	c.Set("is_admin", claims.IsAdmin)
+	// A valid signature proves the token was issued, not that its account
+	// still exists. The GUID can go away under a live session: a hub-identity
+	// reconcile (AlignLocalUserWithHub) re-keys the local account to the hub's
+	// GUID, and `gonotes account merge` deletes the source account. Trusting
+	// the claim would leave that session acting as a GUID no account holds:
+	// it sees no notes, and anything it creates is owned by nobody. So the
+	// account is looked up on every authenticated request.
+	user := currentUserForToken(claims)
+	if user == nil {
+		// Treated like an invalid token: unauthenticated, so RequireAuth
+		// answers 401 and the client goes back to sign-in, which issues a
+		// token for the account as it is now.
+		c.Set("user_guid", "")
+		c.Set("authenticated", false)
+		return c.Next()
+	}
+
+	// Valid token, live account. Username and admin status come from the
+	// record rather than the claims: the row is already loaded, and a rename
+	// or an admin change should not wait for the token to expire.
+	c.Set("user_guid", user.GUID)
+	c.Set("username", user.Username)
+	c.Set("is_admin", user.IsAdmin)
 	c.Set("authenticated", true)
 
 	return c.Next()
+}
+
+// currentUserForToken returns the account a validated token belongs to, or nil
+// when the token should no longer authenticate: the GUID matches no account,
+// or the account is disabled (the same rule Login and RefreshToken apply).
+//
+// There is deliberately no cache. The lookup is one indexed read (guid is
+// UNIQUE) against bytdb, which holds every row in memory, so it costs far less
+// than the handler it guards. A cache would need invalidating from the
+// in-server reconcile, and an entry that outlived its account is exactly the
+// stale-GUID gap this check exists to close.
+//
+// A lookup error fails closed: a request that cannot be tied to a live account
+// is not authenticated. It is logged, unlike a bad token, because it means the
+// database is unhealthy rather than that a client is guessing.
+func currentUserForToken(claims *models.TokenClaims) *models.User {
+	user, err := models.GetUserByGUID(claims.UserGUID)
+	if err != nil {
+		logger.LogErr(err, "auth: looking up the token's account", "user_guid", claims.UserGUID)
+		return nil
+	}
+	if user == nil || !user.IsActive {
+		return nil
+	}
+	return user
 }
 
 // RequireAuth is a middleware that blocks unauthenticated requests.

@@ -57,14 +57,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   *reappear* later, that is the sync path and needs its own investigation.
   Candidate for Closed if the symptom hasn't come back.
 
-- **N-051** · raised `2026-1004-2039-n025-account-rename-merge` · value low
-  The auth middleware trusts the JWT's user GUID without a lookup. After a
-  hub-identity reconcile or `gonotes account merge`, a session opened
-  earlier keeps acting as the old GUID until it signs in again. It sees no
-  notes, and anything it creates is owned by a GUID no account holds. The
-  CLI prints a "sign in again" line. A per-request check that the GUID
-  still exists (or a small cache of it) would close the gap.
-
 ## Roadmap
 
 Wanted, but deliberately not next. Parked, not declined. Seeded empty: no
@@ -97,6 +89,20 @@ session doc marked an item as deferred, so move items here from Open by hand.
   `2026-0817-0015-tui-mouse-filter-and-store-identity`.
 
 ## Closed
+
+- **N-051** · raised `2026-1004-2039-n025-account-rename-merge` · closed
+  2026-10-11 — Stale JWT GUIDs. `JWTAuthMiddleware` now looks up the token's
+  account on every authenticated request (`currentUserForToken` in
+  `web/middleware.go`). A GUID no account holds, or a disabled account (the
+  rule Login and Refresh already apply), is treated as unauthenticated, so
+  `RequireAuth` answers 401: the web UI goes to `/login`, and the TUI's HTTP
+  store re-logs in silently. Username and admin come from the record, not the
+  claims. No cache: one indexed read in memory is cheap, and a cache would need
+  invalidating from the in-server reconcile, which is the same gap again.
+  Checked with `web/api/auth_stale_guid_test.go`: after a merge the old token
+  gets 401 on GET and POST `/notes` (on the old middleware it got 200 and an
+  empty list), signing in again works, and a rename keeps the session. Full
+  suite green.
 
 - **N-050** · raised `2026-1004-2039-n025-account-rename-merge` · closed
   2026-10-11 — Two processes on one database. bytdb bumped v0.11.0 → v0.21.2
