@@ -51,12 +51,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   a one-line change. This is a wait-and-see item and a candidate for
   Non-goals.
 
-- **N-030** · raised `2026-0819-1410-web-batch-delete` · value low
-  It was never confirmed that the batch-delete fix addressed the user's actual
-  bug; the lock conflict was reproduced synthetically. If deleted notes
-  *reappear* later, that is the sync path and needs its own investigation.
-  Candidate for Closed if the symptom hasn't come back.
-
 ## Roadmap
 
 Wanted, but deliberately not next. Parked, not declined. Seeded empty: no
@@ -89,6 +83,13 @@ session doc marked an item as deferred, so move items here from Open by hand.
   `2026-0817-0015-tui-mouse-filter-and-store-identity`.
 
 ## Closed
+
+- **N-030** · raised `2026-0819-1410-web-batch-delete` · closed
+  2026-10-11 — Batch-delete fix vs. the user's real bug. Closed on the item's
+  own condition: the symptom hasn't come back. None of the 21 session docs
+  since 2026-08-19 reports deleted notes reappearing (searched for
+  reappear/resurrect/undelete/came back; the only hits are unrelated). If
+  deleted notes ever do come back, that is the sync path and gets a new item.
 
 - **N-051** · raised `2026-1004-2039-n025-account-rename-merge` · closed
   2026-10-11 — Stale JWT GUIDs. `JWTAuthMiddleware` now looks up the token's
