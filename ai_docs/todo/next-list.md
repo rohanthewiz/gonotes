@@ -57,17 +57,27 @@ with every item's premise re-checked against the code at `e0c2a39`.
   *reappear* later, that is the sync path and needs its own investigation.
   Candidate for Closed if the symptom hasn't come back.
 
-- **N-050** · raised `2026-1004-2039-n025-account-rename-merge` · value medium
-  Nothing stops two processes opening the same databases. Neither bytdb nor
-  btypedb takes an OS file lock: `gonotes account list` opened the files
-  beside a live server without complaint. The code assumes a lock. `runTui`'s
-  fallback expects `InitDB` to fail when a server holds the files, and the
-  README tells users to stop the server before `import-gob`/`export-md`/
-  `import-md` because the databases are "single-writer". Nothing enforces
-  that. Two writers, or two background compactors, on one file is
-  corruption. `gonotes account` now probes for a live server first; the
-  other commands don't. An `flock` in `openDatabases` would make the
-  assumption true for all of them.
+- **N-050** · raised `2026-1004-2039-n025-account-rename-merge` · value high
+  Nothing stops two processes opening the same databases. The bytdb that
+  gonotes pins (v0.11.0, over btypedb v0.7.0) takes no OS file lock:
+  `gonotes account list` opened the files beside a live server without
+  complaint. The code assumes a lock. `runTui`'s fallback expects `InitDB` to
+  fail when a server holds the files. README line 56 says the second process
+  "won't be able to open them", and the README tells users to stop the server
+  before `import-gob`/`export-md`/`import-md` because the databases are
+  "single-writer". Nothing enforces that. Two writers, or two background
+  compactors, on one file is corruption. `gonotes account` now probes for a
+  live server first, as a workaround; the other commands don't.
+  **Updated 2026-10-11 (`/next-list`): the lock now exists upstream, so no
+  `flock` of our own is needed.** bytdb v0.17.0 added a non-blocking
+  `<path>.lock` sidecar `flock`. v0.18.0 moved it into btypedb (v0.8.0+), so
+  it holds through compaction's rename. A second `Open` fails fast with
+  `bytdb.ErrLocked` (= `btypedb.ErrLocked`). v0.21.2 is current. The work is:
+  bump bytdb (v0.11 → v0.21 spans several releases, so run the full suite);
+  turn `ErrLocked` from `openDatabases` into a plain "a server has these
+  files open" message; check that `runTui`'s fallback triggers on it; and
+  decide whether `account`'s health probe stays as the friendlier message.
+  Add `*.bytdb.lock` to `.gitignore` if a data dir can land in the repo.
 
 - **N-051** · raised `2026-1004-2039-n025-account-rename-merge` · value low
   The auth middleware trusts the JWT's user GUID without a lookup. After a
@@ -83,8 +93,8 @@ Wanted, but deliberately not next. Parked, not declined. Seeded empty: no
 session doc marked an item as deferred, so move items here from Open by hand.
 
 - **N-004** · raised `2026-0812-1306-monaco-editor-option` · value low
-  Vendored Monaco (13MB, 105 files under `web/static/vendor/monaco/`) is
-  committed to git. If repo size becomes a concern, gitignore it and run
+  Vendored Monaco (12MB, 96 files under `web/static/vendor/monaco/` since
+  N-005 dropped the locales; 13MB/105 when raised) is committed to git. If repo size becomes a concern, gitignore it and run
   `scripts/vendor_monaco.sh` as a build step.
 
 - **N-028** · raised `2026-0819-1410-web-batch-delete` · value low
