@@ -33,9 +33,9 @@ import (
 //	                      is deleted. rob then aligns with the hub as usual.
 //
 // Both run with the databases opened by the CLI process itself, so the server
-// must be stopped first. The storage layer takes no OS file lock and would not
-// stop a second opener; the CLI probes for a live server instead (see
-// serverHoldingDataDir in account_cmd.go).
+// must be stopped first. bytdb's "<db>.lock" flock enforces that (InitDB fails
+// with models.IsDBLocked); the CLI also probes for a live server first, for a
+// message that names its URL (see serverHoldingDataDir in account_cmd.go).
 //
 // Like the reconcile sweep, nothing here records sync changes: ownership is
 // not part of a note fragment (the hub stamps created_by from the

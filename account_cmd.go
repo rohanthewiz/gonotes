@@ -119,6 +119,9 @@ func withAccountDB(dir string, fn func() error) error {
 	}
 
 	if err := models.InitDB(); err != nil {
+		if models.IsDBLocked(err) {
+			return serr.Wrap(err, "stop the GoNotes server (or the MacApp) using "+dir+", then re-run")
+		}
 		return serr.Wrap(err, "failed to open the databases")
 	}
 	defer models.CloseDB()
@@ -129,11 +132,15 @@ func withAccountDB(dir string, fn func() error) error {
 // serverHoldingDataDir reports whether a live GoNotes server on this machine
 // is serving dataDir, and at which URL.
 //
-// WHY THIS IS NEEDED. Neither bytdb nor btypedb takes an OS-level file lock,
-// so nothing stops a second process from opening databases a server already
-// has open — verified by running `account list` beside a live server. Two
+// WHY IT IS KEPT. It was written when neither bytdb nor btypedb took an OS
+// file lock, so `account list` could open databases a live server held. Two
 // writers on one WAL (and two background compactors) is corruption, and a
-// rename or merge is exactly a burst of writes. So the command checks first.
+// rename or merge is exactly a burst of writes, so the command had to check
+// first. Since bytdb v0.17 the engine holds a "<db>.lock" flock and InitDB
+// fails with models.IsDBLocked, which is now the actual guarantee. The probe
+// stays because it says more: it names the server's URL, where the lock can
+// only say "another process" and a PID. If the probe misses (a server on a
+// port none of the candidates name), the lock still refuses.
 //
 // HOW. The same /api/v1/health probe the TUI uses, at every URL a local
 // server is likely to be on: GONOTES_URL, the port from GONOTES_PORT / PORT

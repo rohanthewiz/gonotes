@@ -1,9 +1,11 @@
 package models
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 
+	"github.com/rohanthewiz/bytdb"
 	"github.com/rohanthewiz/logger"
 	"github.com/rohanthewiz/serr"
 )
@@ -102,6 +104,32 @@ func InitTestDB(dir string) error {
 	return openDatabases(pub, priv)
 }
 
+// LockedMessage is what a second process sees when the databases are already open.
+// It is phrased for the person at the terminal, not the engine: the usual
+// holder is a running server or the MacApp (which embeds one), and the answer
+// is to stop it or go through it. The engine's own error, which stays wrapped
+// underneath, adds the lock file and the holder's PID.
+const LockedMessage = "these notes are already open in another GoNotes process " +
+	"(a running server, the MacApp, or a local-mode TUI); stop it first, or use it instead"
+
+// IsDBLocked reports whether err is InitDB failing because another process
+// already holds the databases.
+//
+// bytdb (from v0.17, held in btypedb since v0.18) takes a non-blocking,
+// exclusive flock on a "<path>.lock" sidecar for as long as an engine is open,
+// and a second Open fails fast with bytdb.ErrLocked. That lock is what makes
+// "single-writer" true rather than a request in the README: two engines over
+// one file would each replay the WAL into their own memory, append
+// independently, and run two compactors over one path. Callers use this to
+// tell "busy" (go through the server instead, or say who to stop) from
+// "broken" (a real error to report).
+//
+// It lives here, not at each call site, so the rest of the program never has
+// to import bytdb to ask the question.
+func IsDBLocked(err error) bool {
+	return errors.Is(err, bytdb.ErrLocked)
+}
+
 // openDatabases is the shared open+schema path for InitDB and InitTestDB.
 func openDatabases(pubPath, privPath string) error {
 	// Load the encryption key if the environment provides one, so the
@@ -117,9 +145,23 @@ func openDatabases(pubPath, privPath string) error {
 
 	var err error
 	if pubDB, err = openEngine(pubPath, nil); err != nil {
+		if IsDBLocked(err) {
+			return serr.Wrap(err, LockedMessage)
+		}
 		return serr.Wrap(err, "failed to open public database")
 	}
 	if privDB, err = openEngine(privPath, key); err != nil {
+		// The public engine is open and holds its file lock. Release it, so a
+		// failure here leaves nothing locked behind: a caller that falls back
+		// (or a test that retries) must not then trip over its own half-open
+		// pair. The two databases are opened in a fixed order, so a contender
+		// that already holds both fails on the public one above and never gets
+		// here; this path is a private-only holder or a bad key.
+		_ = pubDB.Close()
+		pubDB = nil
+		if IsDBLocked(err) {
+			return serr.Wrap(err, LockedMessage)
+		}
 		return serr.Wrap(err, "failed to open private database")
 	}
 

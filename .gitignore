@@ -19,6 +19,8 @@ test_db/
 *.sqlite
 *.ddb
 *.bytdb
+# bytdb's per-database flock sidecar ("<db>.lock"), left on disk after close by design.
+*.bytdb.lock
 data/
 
 .env

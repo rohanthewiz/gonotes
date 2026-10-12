@@ -53,7 +53,7 @@ Override defaults with environment variables, e.g. `GN_PORT=9000 ./mac-install.s
 | `GN_APP_NAME` | `GoNotes` | App (and window) name |
 | `GN_PORT` | `8444` | Port the app's server listens on |
 
-> **Note:** the databases are single-writer. Don't run the app and a terminal `gonotes` at the same time — they share `~/.gonotes/data/notes_public.bytdb` and `notes_private.bytdb`, and the second to start won't be able to open them.
+> **Note:** the databases are single-writer. Don't run the app and a terminal `gonotes` at the same time — they share `~/.gonotes/data/notes_public.bytdb` and `notes_private.bytdb`, and the second to start won't be able to open them. That is enforced: while a process has the databases open it holds an OS lock on a `.lock` file beside each one (`notes_public.bytdb.lock`, `notes_private.bytdb.lock`), and a second process is refused with "these notes are already open in another GoNotes process". The lock is released when the process exits, even after a crash, so a leftover `.lock` file is harmless; don't delete it while GoNotes is running.
 
 ## Storage
 
@@ -733,7 +733,7 @@ Notes:
 
 ### Important: stop the server first
 
-As with `import-gob`, the databases are single-writer, so stop the running server before invoking `export-md` or `import-md`.
+As with `import-gob`, the databases are single-writer, so stop the running server before invoking `export-md` or `import-md`. If you forget, the command refuses to start rather than opening files the server has open.
 
 ---
 
@@ -771,7 +771,7 @@ import-gob: 42 imported, 0 skipped (duplicate GUID), 0 errored (of 42 total)
 
 ### Important: stop the server first
 
-The bytdb databases are single-writer, so the running server must be stopped before invoking `import-gob`. After the import completes, restart the server normally.
+The bytdb databases are single-writer, so the running server must be stopped before invoking `import-gob` (it refuses to start while the server holds the files). After the import completes, restart the server normally.
 
 ### Field mapping
 

@@ -57,28 +57,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
   *reappear* later, that is the sync path and needs its own investigation.
   Candidate for Closed if the symptom hasn't come back.
 
-- **N-050** · raised `2026-1004-2039-n025-account-rename-merge` · value high
-  Nothing stops two processes opening the same databases. The bytdb that
-  gonotes pins (v0.11.0, over btypedb v0.7.0) takes no OS file lock:
-  `gonotes account list` opened the files beside a live server without
-  complaint. The code assumes a lock. `runTui`'s fallback expects `InitDB` to
-  fail when a server holds the files. README line 56 says the second process
-  "won't be able to open them", and the README tells users to stop the server
-  before `import-gob`/`export-md`/`import-md` because the databases are
-  "single-writer". Nothing enforces that. Two writers, or two background
-  compactors, on one file is corruption. `gonotes account` now probes for a
-  live server first, as a workaround; the other commands don't.
-  **Updated 2026-10-11 (`/next-list`): the lock now exists upstream, so no
-  `flock` of our own is needed.** bytdb v0.17.0 added a non-blocking
-  `<path>.lock` sidecar `flock`. v0.18.0 moved it into btypedb (v0.8.0+), so
-  it holds through compaction's rename. A second `Open` fails fast with
-  `bytdb.ErrLocked` (= `btypedb.ErrLocked`). v0.21.2 is current. The work is:
-  bump bytdb (v0.11 → v0.21 spans several releases, so run the full suite);
-  turn `ErrLocked` from `openDatabases` into a plain "a server has these
-  files open" message; check that `runTui`'s fallback triggers on it; and
-  decide whether `account`'s health probe stays as the friendlier message.
-  Add `*.bytdb.lock` to `.gitignore` if a data dir can land in the repo.
-
 - **N-051** · raised `2026-1004-2039-n025-account-rename-merge` · value low
   The auth middleware trusts the JWT's user GUID without a lookup. After a
   hub-identity reconcile or `gonotes account merge`, a session opened
@@ -119,6 +97,23 @@ session doc marked an item as deferred, so move items here from Open by hand.
   `2026-0817-0015-tui-mouse-filter-and-store-identity`.
 
 ## Closed
+
+- **N-050** · raised `2026-1004-2039-n025-account-rename-merge` · closed
+  2026-10-11 — Two processes on one database. bytdb bumped v0.11.0 → v0.21.2
+  (btypedb v0.7.0 → v0.9.0). Every open engine now holds a `<db>.lock` flock,
+  and a second `InitDB` fails with `models.IsDBLocked`, worded for a person
+  (`models.LockedMessage`). `main` prints it as a plain stderr line ahead of
+  the structured log. `openDatabases` now closes the public engine when the
+  private open fails, so a failed open leaves nothing locked. `runTui`'s
+  server fallback now fires only on the lock: a corrupt WAL or a bad key is
+  reported instead of being redirected to someone else's notes. `account`'s
+  health probe stays as the friendlier message, since it names the server's
+  URL, with the lock as the backstop. README, the gonotes skill, comments and
+  `.gitignore` (`*.bytdb.lock`) updated. Checked with the full suite on the
+  new bytdb, new `models/db_lock_test.go`, and a scratch server: `account
+  list`, `export-md` and `tui --local` beside it are all refused, naming the
+  holder PID. The `runTui` fallback itself wasn't driven end to end (that
+  needs a second server on 8444, which here is the user's live one).
 
 - **N-015** · raised `2026-0817-1420-gonotes-note-locks` · closed
   2026-10-05, no session doc — Mobile parity. The app is

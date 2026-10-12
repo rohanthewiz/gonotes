@@ -31,8 +31,11 @@ opened the private DB with the key serves **plaintext** over the API. There is
 no per-note ciphertext to worry about (`Note.EncryptionIV` survives only for
 transport compatibility).
 
-**bytdb is single-process.** Whoever opens the two files owns them. That still
-governs the CLI:
+**bytdb is single-process.** Whoever opens the two files owns them, and since
+bytdb v0.17 that is enforced: each open engine holds an exclusive flock on a
+`<db>.lock` sidecar, and a second `InitDB` fails fast (`models.IsDBLocked`;
+the CLI prints "these notes are already open in another GoNotes process").
+That still governs the CLI:
 
 - `import-md`, `export-md`, `import-gob` open the databases directly → the
   server (or `GoNotes.app`) must be **stopped**.
@@ -529,8 +532,8 @@ alone and logged, and the operator fixes it with `gonotes account
 list|rename|merge` (`account_cmd.go`, `models/account_admin.go`): rename makes
 the name match, merge re-points one account's rows onto another and deletes it
 (source row last), and both then run `AlignLocalUserWithHub`. The command
-refuses while a server answers for the same data dir — bytdb takes no OS file
-lock, so nothing else would stop it. The push direction was never
+refuses while a server answers for the same data dir, naming its URL; behind
+that, bytdb's `<db>.lock` flock refuses any second opener anyway. The push direction was never
 broken — the hub's `PushChanges` already overwrites `change.User` with the
 authenticated GUID.
 

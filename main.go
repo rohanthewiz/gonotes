@@ -159,6 +159,14 @@ func main() {
 	}
 
 	if err := app.Run(os.Args); err != nil {
+		// A held database is the one failure every subcommand can hit just by
+		// being run beside the app, and the structured log line buries the
+		// explanation in fields.msg behind the engine's own wording (serr's
+		// Error() is the root error by design). So say it plainly first. The
+		// log line still follows, with the lock file and the holder's PID.
+		if models.IsDBLocked(err) {
+			fmt.Fprintln(os.Stderr, "gonotes: "+models.LockedMessage)
+		}
 		logger.LogErr(err)
 		os.Exit(1)
 	}
@@ -272,8 +280,11 @@ func runTui(dir string, force storeForce) error {
 		// than handing over to that server, which is the one move --local rules
 		// out.
 		if force == forceLocal {
-			return serr.Wrap(err, "--local: could not open the notes in "+dir+
-				" (is a GoNotes server running against it?)")
+			if models.IsDBLocked(err) {
+				return serr.Wrap(err, "--local: the notes in "+dir+
+					" are held by another GoNotes process")
+			}
+			return serr.Wrap(err, "--local: could not open the notes in "+dir)
 		}
 		// Insurance for the case the identity check is supposed to make
 		// impossible. Choosing local mode over a live server is a bet that the
@@ -282,7 +293,13 @@ func runTui(dir string, force storeForce) error {
 		// worse answer than the server we just declined. Reachable only when
 		// something answered the probe, so it never turns a genuinely broken
 		// database into a silent redirect on a machine with no server at all.
-		if up {
+		//
+		// It keys on the lock specifically (bytdb's ErrLocked, held in a
+		// "<db>.lock" sidecar since bytdb v0.17). "The files are busy" is the
+		// only failure the server can answer for; a corrupt WAL or a wrong
+		// encryption key is a real problem with THESE files, and redirecting
+		// would hide it behind someone else's notes.
+		if up && models.IsDBLocked(err) {
 			return tui.Run(tui.NewHTTPStore(serverURL), tui.Mode{
 				Badge:  badgeForURL(serverURL),
 				Notice: "Local notes would not open — using the server at " + serverURL,
