@@ -85,14 +85,14 @@ session doc marked an item as deferred, so move items here from Open by hand.
 ## Closed
 
 - **N-030** · raised `2026-0819-1410-web-batch-delete` · closed
-  2026-10-11 — Batch-delete fix vs. the user's real bug. Closed on the item's
+  2026-10-11, `2026-1011-2314-n050-n051-n030-db-lock-stale-jwt` — Batch-delete fix vs. the user's real bug. Closed on the item's
   own condition: the symptom hasn't come back. None of the 21 session docs
   since 2026-08-19 reports deleted notes reappearing (searched for
   reappear/resurrect/undelete/came back; the only hits are unrelated). If
   deleted notes ever do come back, that is the sync path and gets a new item.
 
 - **N-051** · raised `2026-1004-2039-n025-account-rename-merge` · closed
-  2026-10-11 — Stale JWT GUIDs. `JWTAuthMiddleware` now looks up the token's
+  2026-10-11, `2026-1011-2314-n050-n051-n030-db-lock-stale-jwt` — Stale JWT GUIDs. `JWTAuthMiddleware` now looks up the token's
   account on every authenticated request (`currentUserForToken` in
   `web/middleware.go`). A GUID no account holds, or a disabled account (the
   rule Login and Refresh already apply), is treated as unauthenticated, so
@@ -106,7 +106,7 @@ session doc marked an item as deferred, so move items here from Open by hand.
   suite green.
 
 - **N-050** · raised `2026-1004-2039-n025-account-rename-merge` · closed
-  2026-10-11 — Two processes on one database. bytdb bumped v0.11.0 → v0.21.2
+  2026-10-11, `2026-1011-2314-n050-n051-n030-db-lock-stale-jwt` — Two processes on one database. bytdb bumped v0.11.0 → v0.21.2
   (btypedb v0.7.0 → v0.9.0). Every open engine now holds a `<db>.lock` flock,
   and a second `InitDB` fails with `models.IsDBLocked`, worded for a person
   (`models.LockedMessage`). `main` prints it as a plain stderr line ahead of
