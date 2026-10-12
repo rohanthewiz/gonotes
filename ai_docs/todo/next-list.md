@@ -25,17 +25,33 @@ with every item's premise re-checked against the code at `e0c2a39`.
 - **Open** is what we intend to pick up next. **Roadmap** is wanted but
   deliberately later. **Non-goals** is what we are likely never to do, kept so
   it stays visibly declined.
-- Nothing leaves Open or Roadmap without a line in another section (Closed,
-  Non-goals, or a move between Open and Roadmap). Deleting a line outright is
-  the leak this file exists to prevent.
-- Open and Roadmap stay in ID order. Edit an item's text in place when its
-  premise changes; keep its ID and `raised`.
+- **Validate** sits directly below Open: items whose remaining work is purely
+  testing (a hand check in a real terminal or app, a run on real data or
+  hardware, or a test to write or repair), with no product change planned. A
+  check that finds a defect raises it as a new Open item; an Open item whose
+  fix has landed but is unchecked moves to Validate.
+- Nothing leaves Open, Validate or Roadmap without a line in another section
+  (Closed, Non-goals, or a move among Open, Validate and Roadmap). Deleting a
+  line outright is the leak this file exists to prevent.
+- Open, Validate and Roadmap stay in ID order. Edit an item's text in place
+  when its premise changes; keep its ID and `raised`.
 
 **Next ID:** N-053
 
 ## Open
 
 Nothing open right now.
+
+## Validate
+
+Items whose remaining work is purely testing: hand checks in a real terminal
+or app, runs on real data or hardware, and tests to write or repair. No
+product change is planned unless a check finds a defect, which is then raised
+as a new Open item. Added 2026-10-07 and seeded empty: N-030, the one item
+first moved here, closed on 2026-10-11 before the section landed. Move items
+here from Open by hand, keeping their ID and `raised`.
+
+Nothing to validate right now.
 
 ## Roadmap
 
