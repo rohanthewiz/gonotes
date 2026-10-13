@@ -36,11 +36,16 @@ with every item's premise re-checked against the code at `e0c2a39`.
 - Open, Validate and Roadmap stay in ID order. Edit an item's text in place
   when its premise changes; keep its ID and `raised`.
 
-**Next ID:** N-053
+**Next ID:** N-055
 
 ## Open
 
-Nothing open right now.
+- **N-053** · raised `2026-1013-1525-ui-reorder-filter-bar-sync-panel` · value low
+  After regex mode is switched off by the toolbar's Clear (`clearSearchBar`)
+  or the filter bar's Reset (`clearAllFilters`), the search input keeps the
+  "Search by regex pattern..." placeholder. Both reset `state.filters.regex`
+  and the button's `active` class but not the placeholder, which only
+  `toggleRegex` sets (`web/static/js/app.js`). Pre-dates the UI reorder.
 
 ## Validate
 
@@ -51,7 +56,12 @@ as a new Open item. Added 2026-10-07 and seeded empty: N-030, the one item
 first moved here, closed on 2026-10-11 before the section landed. Move items
 here from Open by hand, keeping their ID and `raised`.
 
-Nothing to validate right now.
+- **N-054** · raised `2026-1013-1525-ui-reorder-filter-bar-sync-panel` · value low
+  Hand check of the UI reorder in a real browser: the filter row above the
+  list (pills light up via CSS `:has()`), sort beside select-all, the ⚙
+  Sync/Settings panel (Resolve opens the conflict list on top of it), and
+  search-term marks in the preview. Verified only in headless Chrome over
+  CDP, at 1400px and 700px, in both themes.
 
 ## Roadmap
 
