@@ -1202,6 +1202,9 @@
     // Render any mermaid diagrams found in the preview content
     renderMermaidDiagrams();
 
+    // Mark the toolbar search term in the freshly rendered description/body.
+    applyListSearchHighlights();
+
     // If the in-note search bar is open, re-run the query against the new content.
     if (window.app.refreshNoteSearch) window.app.refreshNoteSearch();
   }
@@ -1704,9 +1707,12 @@
     if (select) select.value = '';
     window.app._renderSubcategoryChips([]);
 
-    // Reset filter panel UI
-    document.querySelectorAll('input[name="privacy"]')[0].checked = true;
-    document.querySelectorAll('input[name="date"]')[0].checked = true;
+    // Reset the filter bar UI (privacy/date are <select>s since the sidebar
+    // became a row above the list; 'all' is the first option of each).
+    const privacyEl = document.getElementById('filter-privacy');
+    if (privacyEl) privacyEl.value = 'all';
+    const dateEl = document.getElementById('filter-date');
+    if (dateEl) dateEl.value = 'all';
     const unsyncedEl = document.getElementById('filter-unsynced');
     if (unsyncedEl) unsyncedEl.checked = false;
     const flaggedEl = document.getElementById('filter-flagged');
@@ -2450,6 +2456,36 @@
     if (queryPopupText) {
       queryPopupText.textContent = fullQuery;
     }
+
+    // Every filter change funnels through here (search text, regex toggle,
+    // clear, advanced query on/off, sort, category…), which makes it the one
+    // place that keeps the preview's search marks in step with the filter.
+    applyListSearchHighlights();
+  }
+
+  // applyListSearchHighlights marks the toolbar search term inside the
+  // previewed note's description and body (the mechanics live in
+  // note_search.js). It decides *whether* to mark: only while a plain search
+  // is narrowing the list, a note is previewed, and it is not being edited.
+  // An advanced (SQL) query replaces the plain search entirely (see
+  // getFilteredNotes), so its leftover term must not be marked.
+  //
+  // lastListHighlight remembers which (note, mode, term) was last marked, so
+  // the first hit is scrolled into view only when one of those changes, not
+  // every time an unrelated filter (sort, date) re-runs this.
+  let lastListHighlight = '';
+  function applyListSearchHighlights() {
+    if (!window.app._highlightListSearch) return;
+    const term = (state.filters.search || '').trim();
+    const active = term && !state.advanced.active && state.currentNote && !state.isEditing;
+    if (!active) {
+      window.app._clearListSearch();
+      lastListHighlight = '';
+      return;
+    }
+    const key = state.currentNote.id + '\u0000' + (state.filters.regex ? 're' : 'txt') + '\u0000' + term;
+    window.app._highlightListSearch(term, state.filters.regex, key !== lastListHighlight);
+    lastListHighlight = key;
   }
 
   // copyCodeBlock — copies a rendered code block's original source to clipboard.
@@ -2529,14 +2565,56 @@
   // Settings Modal
   // ============================================
 
+  // The Sync + Settings panel (SettingsPanel in web/pages/landing). It is its
+  // own overlay, not the shared #modal: the sync controls in its Sync tab are
+  // static markup that sync.js binds to by id at page load, so they must never
+  // be wiped by a modal's innerHTML. Tabs are plain show/hide of two panes.
+  window.app.openSettingsPanel = function(tab) {
+    // Close any open dropdown (the user menu, when opened from "Settings").
+    document.querySelectorAll('.dropdown-menu.open').forEach(m => m.classList.remove('open'));
+    window.app.showSettingsTab(tab || 'sync');
+    document.getElementById('settings-overlay').classList.add('open');
+  };
+
+  window.app.closeSettingsPanel = function() {
+    const overlay = document.getElementById('settings-overlay');
+    if (overlay) overlay.classList.remove('open');
+  };
+
+  function isSettingsPanelOpen() {
+    const overlay = document.getElementById('settings-overlay');
+    return !!(overlay && overlay.classList.contains('open'));
+  }
+
+  window.app.showSettingsTab = function(tab) {
+    ['sync', 'settings'].forEach(name => {
+      const on = name === tab;
+      const btn = document.getElementById('settings-tab-btn-' + name);
+      const pane = document.getElementById('settings-tab-' + name);
+      if (btn) {
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-selected', on ? 'true' : 'false');
+      }
+      if (pane) pane.hidden = !on;
+    });
+    // Rebuilt on every visit rather than once at load: its content depends on
+    // state.user, which is filled in asynchronously after init, and an admin's
+    // half-typed password should not survive closing the panel.
+    if (tab === 'settings') {
+      const pane = document.getElementById('settings-tab-settings');
+      if (pane) pane.innerHTML = buildSettingsHtml();
+    }
+  };
+
+  // showSettings is kept as the entry point other code may call; it now opens
+  // the panel on its Settings tab instead of filling the shared modal.
   window.app.showSettings = function() {
-    const modalTitle = document.getElementById('modal-title');
-    const modalBody = document.getElementById('modal-body');
-    const modalFooter = document.getElementById('modal-footer');
+    window.app.openSettingsPanel('settings');
+  };
 
-    modalTitle.textContent = 'Settings';
-
-    // Build settings content — export section visible only to admins
+  // buildSettingsHtml returns the Settings tab's content. The export section
+  // is visible only to admins.
+  function buildSettingsHtml() {
     let html = '';
     if (state.user && state.user.is_admin) {
       html += `
@@ -2560,12 +2638,8 @@
     if (!html) {
       html = '<p>No settings available.</p>';
     }
-
-    modalBody.innerHTML = html;
-    // Hide default footer buttons — this modal uses its own inline buttons
-    modalFooter.style.display = 'none';
-    document.getElementById('modal-overlay').classList.add('open');
-  };
+    return html;
+  }
 
   // exportSpokeConfig sends the admin's password to the hub, which verifies
   // it and returns a downloadable JSON file containing all spoke env vars.
@@ -2610,7 +2684,7 @@
       window.URL.revokeObjectURL(url);
 
       showToast('Spoke config exported successfully', 'success');
-      window.app.closeModal();
+      window.app.closeSettingsPanel();
     } catch (err) {
       console.error('Export error:', err);
       showToast('Network error during export', 'error');
@@ -2688,6 +2762,16 @@
       if (e.key === 'Escape') {
         e.preventDefault();
         window.app.closeModal();
+      }
+      return;
+    }
+    // The Sync + Settings panel gets the same treatment. Checked after the
+    // shared modal because that one can open on top of it (Resolve conflicts),
+    // and Escape should peel off the top layer only.
+    if (isSettingsPanelOpen()) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        window.app.closeSettingsPanel();
       }
       return;
     }

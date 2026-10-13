@@ -25,10 +25,41 @@ func (n NoteList) Render(b *element.Builder) any {
 			b.Span("class", "batch-count", "id", "batch-count").T("0 selected"),
 		),
 
-		// List header
+		// Filters (flagged, privacy, date, unsynced) — formerly the left sidebar.
+		element.RenderComponents(b, FilterBar{}),
+
+		// List header: [☐ select all] [Modified | ▼] NOTES
+		//
+		// The sort control lives here, beside select-all, rather than in the
+		// toolbar: it orders exactly the rows below it, so it reads as a column
+		// header the way a file manager's does, and it freed toolbar width for
+		// the search controls. Ids (sort-label, sort-menu, sort-dir-icon) are
+		// unchanged, so app.setSort / app.cycleSortDir work as before.
 		b.DivClass("list-header").R(
 			b.Input("type", "checkbox", "class", "select-all-checkbox", "id", "select-all",
 				"onchange", "app.toggleSelectAll(this.checked)", "title", "Select all"),
+			// Two-part control: the field name opens a picker (Modified /
+			// Created / Title); the arrow cycles desc (▼) → asc (▲) → default.
+			b.DivClass("sort-control").R(
+				b.DivClass("dropdown").R(
+					b.ButtonClass("sort-field-btn", "onclick", "app.toggleSortMenu()",
+						"title", "Choose sort field").R(
+						b.Span("id", "sort-label").T("Modified"),
+					),
+					// .dropdown-menu-left: the default menu anchors right:0,
+					// which at the list's left edge would push it off-screen.
+					b.Div("class", "dropdown-menu dropdown-menu-left", "id", "sort-menu").R(
+						b.Div("class", "dropdown-item", "data-sort", "updated_at", "onclick", "app.setSort('updated_at')").T("Modified"),
+						b.Div("class", "dropdown-item", "data-sort", "created_at", "onclick", "app.setSort('created_at')").T("Created"),
+						b.Div("class", "dropdown-item", "data-sort", "title", "onclick", "app.setSort('title')").T("Title"),
+					),
+				),
+				b.Button("class", "sort-dir-btn", "id", "sort-dir-btn",
+					"onclick", "app.cycleSortDir()",
+					"title", "Toggle sort direction").R(
+					b.Span("id", "sort-dir-icon").T("▼"),
+				),
+			),
 			b.SpanClass("list-header-title").T("Notes"),
 		),
 

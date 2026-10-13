@@ -4,9 +4,12 @@ import "github.com/rohanthewiz/element"
 
 // Toolbar is a single-row bar with three visual groups separated by a flex spacer:
 //
-//	Left:  [🔍 Search] [.* regex] [{ } SQL] [All Categories ▾] [Sort ▾] [subcats…] [Clear]
+//	Left:  [🔍 Search] [.* regex] [{ } SQL] [All Categories ▾] [subcats…] [Clear]
 //	       --- flexible space ---
-//	Right: [✒ new-note] [☀/☾ theme] [user menu]
+//	Right: [✒ new-note] [summarize] [⚙ sync/settings] [☀/☾ theme] [user menu]
+//
+// Sort moved down to the note list's header (see NoteList), and the other
+// filters to the row above it (FilterBar).
 type Toolbar struct{}
 
 // Render implements the element.Component interface
@@ -42,27 +45,6 @@ func (t Toolbar) Render(b *element.Builder) any {
 			b.Select("class", "search-bar-select", "id", "search-category-select",
 				"onchange", "app.handleCategoryFilter(this.value)").R(
 				b.Option("value", "").T("All Categories"),
-			),
-			// Sort control — two-part: column name opens dropdown, arrow cycles direction
-			// Clicking column name: shows field picker (Modified / Created / Title)
-			// Clicking arrow: cycles desc (▼) → asc (▲) → off (—)
-			b.DivClass("sort-control").R(
-				b.DivClass("dropdown").R(
-					b.ButtonClass("sort-field-btn", "onclick", "app.toggleSortMenu()",
-						"title", "Choose sort field").R(
-						b.Span("id", "sort-label").T("Modified"),
-					),
-					b.Div("class", "dropdown-menu", "id", "sort-menu").R(
-						b.Div("class", "dropdown-item", "data-sort", "updated_at", "onclick", "app.setSort('updated_at')").T("Modified"),
-						b.Div("class", "dropdown-item", "data-sort", "created_at", "onclick", "app.setSort('created_at')").T("Created"),
-						b.Div("class", "dropdown-item", "data-sort", "title", "onclick", "app.setSort('title')").T("Title"),
-					),
-				),
-				b.Button("class", "sort-dir-btn", "id", "sort-dir-btn",
-					"onclick", "app.cycleSortDir()",
-					"title", "Toggle sort direction").R(
-					b.Span("id", "sort-dir-icon").T("▼"),
-				),
 			),
 			// Subcategory chips container — hidden until a category with subcats is chosen
 			b.Div("class", "search-bar-subcats", "id", "search-subcats-container").R(),
@@ -112,6 +94,16 @@ func (t Toolbar) Render(b *element.Builder) any {
 				"title", "Summarize the clipboard into a new note", "aria-label", "Summarize clipboard").R(
 				b.Text(`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"/><rect x="9" y="2.5" width="6" height="3.5" rx="1" fill="currentColor" fill-opacity="0.25"/><line x1="8.5" y1="10.5" x2="15.5" y2="10.5"/><line x1="8.5" y1="14" x2="13" y2="14"/><line x1="8.5" y1="17.5" x2="11" y2="17.5"/></svg>`),
 			),
+			// Sync + Settings — opens SettingsPanel on its Sync tab. A gear rather
+			// than a sync glyph because the panel holds both, and sync is the tab
+			// people reach for most, so it is the one the button lands on.
+			b.Button("class", "theme-toggle", "id", "btn-settings-panel",
+				"onclick", "app.openSettingsPanel('sync')",
+				"title", "Sync and settings", "aria-label", "Sync and settings").R(
+				// Inline SVG gear, sized like the neighboring icons; the U+2699
+				// text glyph renders noticeably smaller than them in most fonts.
+				b.Text(`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`),
+			),
 			// Theme toggle — just left of user menu
 			b.Button("class", "theme-toggle", "id", "btn-theme-toggle", "onclick", "app.toggleTheme()", "title", "Toggle theme").T("\u2600"),
 			// Init toggle icon based on current theme
@@ -123,7 +115,8 @@ func (t Toolbar) Render(b *element.Builder) any {
 					b.Span("id", "username-display").T(""),
 				),
 				b.Div("class", "dropdown-menu", "id", "user-menu").R(
-					b.Div("class", "dropdown-item", "onclick", "app.showSettings()").T("Settings"),
+					// Opens the same panel as ⚙, on its Settings tab.
+					b.Div("class", "dropdown-item", "onclick", "app.openSettingsPanel('settings')").T("Settings"),
 					b.DivClass("dropdown-divider").R(),
 					b.Div("class", "dropdown-item danger", "onclick", "app.logout()").T("Logout"),
 				),

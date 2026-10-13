@@ -547,18 +547,10 @@ input, textarea, select {
 }
 
 /* ============================================
-   Left Panel - Filter & Search
+   Sidebar-era search box styles. The left panel that hosted this box is
+   gone (filters are now .filter-bar) and no current markup uses these
+   classes; left in place rather than deleted alongside an unrelated change.
    ============================================ */
-.left-panel {
-  width: var(--left-panel-width);
-  min-width: var(--left-panel-width);
-  background: var(--bg-primary);
-  border-right: 1px solid var(--border-light);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
 .search-box {
   padding: var(--spacing-md);
   border-bottom: 1px solid var(--border-light);
@@ -606,138 +598,132 @@ input, textarea, select {
   display: block;
 }
 
-.filter-sections {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--spacing-sm) 0;
-}
-
-.filter-section {
-  border-bottom: 1px solid var(--border-light);
-}
-
-.filter-section:last-child {
-  border-bottom: none;
-}
-
-.filter-header {
+/* ============================================
+   Filter Bar — one wrapping row above the note list
+   ============================================
+   Replaced the 220px left sidebar. Controls are pills of one height so the
+   row reads as a single strip; it wraps rather than scrolls when the list
+   pane is narrow, so no filter is ever hidden off to the side. */
+.filter-bar {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--spacing-md) var(--spacing-lg);
-  cursor: pointer;
-  user-select: none;
-}
-
-.filter-header:hover {
-  background: var(--bg-secondary);
-}
-
-.filter-title {
-  font-weight: 600;
-  font-size: var(--font-size-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-secondary);
-  flex: 1;
-  cursor: pointer;
-}
-
-.filter-header-actions {
-  margin-right: var(--spacing-sm);
-}
-
-.filter-action-link {
-  font-size: var(--font-size-xs);
-  color: var(--color-primary);
-  text-decoration: none;
-  text-transform: none;
-  letter-spacing: normal;
-  font-weight: normal;
-}
-
-.filter-action-link:hover {
-  text-decoration: underline;
-}
-
-.filter-toggle {
-  color: var(--text-muted);
-  transition: transform var(--transition-fast);
-}
-
-.filter-section.collapsed .filter-toggle {
-  transform: rotate(-90deg);
-}
-
-.filter-content {
-  padding: 0 var(--spacing-lg) var(--spacing-md);
-}
-
-.filter-section.collapsed .filter-content {
-  display: none;
-}
-
-.filter-item {
-  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-sm);
-  padding: var(--spacing-xs) 0;
-  cursor: pointer;
-}
-
-.filter-item:hover {
-  color: var(--primary);
-}
-
-.filter-checkbox {
-  width: 16px;
-  height: 16px;
-  border: 1px solid var(--border-dark);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  accent-color: var(--primary);
-}
-
-.filter-label {
-  flex: 1;
+  padding: var(--spacing-sm) var(--spacing-lg);
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border-light);
   font-size: var(--font-size-sm);
 }
 
-.filter-count {
-  font-size: var(--font-size-xs);
-  color: var(--text-muted);
-  background: var(--bg-tertiary);
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
+/* Checkbox pill: the label is the click target. The native box stays in the
+   DOM (keyboard focus, screen readers) but is visually replaced by the pill's
+   on/off styling, driven by :has(:checked). */
+.filter-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 var(--spacing-md);
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: all var(--transition-fast);
 }
 
-.filter-radio {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--primary);
+.filter-chip input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.filter-chip:hover {
+  border-color: var(--border-dark);
+  color: var(--text-primary);
+}
+
+.filter-chip:has(input:checked) {
+  background: var(--primary-alpha-20);
+  border-color: var(--primary);
+  color: var(--text-primary);
+}
+
+.filter-chip:has(input:focus-visible) {
+  box-shadow: 0 0 0 3px var(--primary-alpha-20);
+}
+
+/* Labelled select pill: "Privacy [All ▾]". The pill highlights when its value
+   is anything but the default, so an active filter is visible at a glance
+   (JS-free: :has() on the selected option). */
+.filter-select-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  height: 28px;
+  padding: 0 var(--spacing-xs) 0 var(--spacing-md);
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
   cursor: pointer;
 }
 
-.subcategory-item {
-  padding-left: var(--spacing-lg);
+.filter-select-wrap:has(option[value="all"]:not(:checked)) {
+  background: var(--primary-alpha-20);
+  border-color: var(--primary);
+  color: var(--text-primary);
 }
 
-.filter-actions {
-  padding: var(--spacing-md) var(--spacing-lg);
-  border-top: 1px solid var(--border-light);
+.filter-select-label {
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
-.btn-clear-filters {
-  width: 100%;
-  padding: var(--spacing-sm);
+.filter-select {
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.filter-select:focus {
+  outline: none;
+}
+
+.filter-select-wrap:has(.filter-select:focus-visible) {
+  box-shadow: 0 0 0 3px var(--primary-alpha-20);
+}
+
+/* Right-aligned link-style actions (Manage categories · Reset) */
+.filter-bar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  margin-left: auto;
+}
+
+.filter-bar-link {
+  padding: 2px var(--spacing-xs);
   color: var(--text-secondary);
-  text-align: center;
+  font-size: var(--font-size-xs);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
 }
 
-.btn-clear-filters:hover {
-  color: var(--danger);
-  background: var(--danger-light);
-  border-radius: var(--radius-md);
+.filter-bar-link:hover {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+.filter-bar-sep {
+  color: var(--text-muted);
 }
 
 /* ============================================
@@ -1073,10 +1059,9 @@ input, textarea, select {
 /* ============================================
    Focus Mode — expand preview to full width
    ============================================
-   When .app-main has .focus-mode, the left filter panel and center note
-   list collapse away so the preview panel fills the viewport. A thin
+   When .app-main has .focus-mode, the center note list (with its filter
+   bar) collapses away so the preview panel fills the viewport. A thin
    vertical handle on the left edge restores the normal layout. */
-.app-main.focus-mode .left-panel,
 .app-main.focus-mode .center-panel,
 .app-main.focus-mode .panel-splitter {
   display: none;
@@ -1226,6 +1211,17 @@ input, textarea, select {
 
 #btn-search-word {
   text-decoration: underline;
+}
+
+/* Marks for the toolbar search term in the previewed note (note_search.js,
+   highlightListSearch). Theme-tinted and softer than the in-note find marks
+   below, which win visually when both are on the same text. */
+mark.list-search-hit {
+  background: var(--warning-light);
+  color: inherit;
+  padding: 0;
+  border-radius: 2px;
+  box-shadow: inset 0 -2px 0 var(--warning);
 }
 
 mark.note-search-hit {
@@ -2264,6 +2260,14 @@ mark.note-search-hit-current {
   display: block;
 }
 
+/* For a dropdown near the left edge (the list header's sort picker): anchor
+   the menu to the trigger's left side so it opens into the pane, not off it. */
+.dropdown-menu-left {
+  left: 0;
+  right: auto;
+  min-width: 140px;
+}
+
 .dropdown-item {
   display: flex;
   align-items: center;
@@ -2681,21 +2685,6 @@ mark.note-search-hit-current {
     display: none;
   }
 
-  .left-panel {
-    position: fixed;
-    left: 0;
-    top: var(--toolbar-height);
-    bottom: var(--status-bar-height);
-    z-index: 50;
-    transform: translateX(-100%);
-    transition: transform var(--transition-normal);
-    box-shadow: var(--shadow-lg);
-  }
-
-  .left-panel.open {
-    transform: translateX(0);
-  }
-
   .right-panel {
     position: fixed;
     right: 0;
@@ -2745,14 +2734,6 @@ mark.note-search-hit-current {
 
   .toolbar-left .view-indicator {
     display: none;
-  }
-
-  .sort-field-btn {
-    display: none;
-  }
-
-  .left-panel {
-    width: var(--left-panel-width);
   }
 
   .right-panel {
@@ -3682,4 +3663,57 @@ mark.note-search-hit-current {
 
 .aq-help-loading {
   color: var(--text-muted);
+}
+
+/* ============================================
+   Sync + Settings panel (SettingsPanel, toolbar ⚙)
+   ============================================
+   Reuses .modal-overlay/.modal for the backdrop and card, but sits one layer
+   below the shared modal (1000) so a dialog opened from inside it — the
+   conflict list behind "Resolve" — appears on top rather than underneath. */
+.settings-overlay {
+  z-index: 900;
+}
+
+.settings-panel {
+  max-width: 460px;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-panel-header {
+  padding-top: var(--spacing-sm);
+  padding-bottom: 0;
+  align-items: flex-end;
+}
+
+.settings-tabs {
+  display: flex;
+  gap: var(--spacing-xs);
+}
+
+.settings-tab {
+  padding: var(--spacing-sm) var(--spacing-lg);
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+
+.settings-tab:hover {
+  color: var(--text-primary);
+}
+
+.settings-tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+.settings-panel-body {
+  max-height: calc(80vh - 60px);
+}
+
+.settings-panel-body .sync-control-row {
+  margin-bottom: var(--spacing-md);
 }
