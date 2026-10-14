@@ -40,13 +40,6 @@ with every item's premise re-checked against the code at `e0c2a39`.
 
 ## Open
 
-- **N-053** · raised `2026-1013-1525-ui-reorder-filter-bar-sync-panel` · value low
-  After regex mode is switched off by the toolbar's Clear (`clearSearchBar`)
-  or the filter bar's Reset (`clearAllFilters`), the search input keeps the
-  "Search by regex pattern..." placeholder. Both reset `state.filters.regex`
-  and the button's `active` class but not the placeholder, which only
-  `toggleRegex` sets (`web/static/js/app.js`). Pre-dates the UI reorder.
-
 ## Validate
 
 Items whose remaining work is purely testing: hand checks in a real terminal
@@ -111,6 +104,16 @@ session doc marked an item as deferred, so move items here from Open by hand.
   has raised the default again. Raised in `2026-0818-1739-duplicate-note-dialog`.
 
 ## Closed
+
+- **N-053** · raised `2026-1013-1525-ui-reorder-filter-bar-sync-panel` · closed
+  2026-10-13, `2026-1013-1922-n053-regex-placeholder` — Regex placeholder left
+  behind by Clear/Reset. Done: one helper,
+  `syncRegexControls` (`web/static/js/app.js`), sets both the button's
+  `active` class and the search placeholder from `state.filters.regex`, and
+  `toggleRegex`, `clearSearchBar` and `clearAllFilters` all call it instead of
+  touching the controls themselves. `app.js?v=18`. Checked in headless Chrome
+  against a scratch server: regex on, then Clear or Reset, gives back
+  "Search by text or ID..." and an inactive button.
 
 - **N-030** · raised `2026-0819-1410-web-batch-delete` · closed
   2026-10-11, `2026-1011-2314-n050-n051-n030-db-lock-stale-jwt` — Batch-delete fix vs. the user's real bug. Closed on the item's

@@ -1575,18 +1575,29 @@
     }, 300);
   };
 
-  window.app.toggleRegex = function() {
-    state.filters.regex = !state.filters.regex;
+  // syncRegexControls — makes the regex button and the search input's
+  // placeholder reflect state.filters.regex. The two are one piece of UI
+  // state, so every path that changes the flag (toggle, Clear, Reset) calls
+  // this rather than touching them separately; when only the button was reset,
+  // the input kept advertising regex mode after it was off.
+  function syncRegexControls() {
     const btn = document.getElementById('regex-toggle');
     if (btn) {
       btn.classList.toggle('active', state.filters.regex);
     }
     const input = document.getElementById('search-input');
     if (input) {
+      // The text-mode string must match the server-rendered default in
+      // web/pages/landing/toolbar.go.
       input.placeholder = state.filters.regex
         ? 'Search by regex pattern...'
         : 'Search by text or ID...';
     }
+  }
+
+  window.app.toggleRegex = function() {
+    state.filters.regex = !state.filters.regex;
+    syncRegexControls();
     // Re-apply the current search with updated mode
     renderNoteList();
     updateResultCount();
@@ -1614,8 +1625,7 @@
 
     // Reset regex toggle
     state.filters.regex = false;
-    const regexBtn = document.getElementById('regex-toggle');
-    if (regexBtn) regexBtn.classList.remove('active');
+    syncRegexControls();
 
     // Reset category dropdown
     const select = document.getElementById('search-category-select');
@@ -1701,8 +1711,7 @@
 
     // Reset search bar UI
     document.getElementById('search-input').value = '';
-    const regexBtn = document.getElementById('regex-toggle');
-    if (regexBtn) regexBtn.classList.remove('active');
+    syncRegexControls();
     const select = document.getElementById('search-category-select');
     if (select) select.value = '';
     window.app._renderSubcategoryChips([]);
