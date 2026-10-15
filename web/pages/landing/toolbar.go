@@ -21,6 +21,12 @@ func (t Toolbar) Render(b *element.Builder) any {
 			b.A("href", "/", "class", "toolbar-logo", "title", "GoNotes").R(
 				b.Text(`<svg width="34" height="34" viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg"><rect width="500" height="500" rx="60" fill="#6b9f7b"/><text x="250" y="310" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif" font-weight="800" font-size="240" fill="white" text-anchor="middle" letter-spacing="-12">GN</text><rect x="175" y="370" width="150" height="26" rx="13" fill="white" fill-opacity="0.85"/></svg>`),
 			),
+			// Build badge placeholder: buildbadge's script appends the short
+			// commit hash here (hover for the subject and commit time). It is a
+			// sibling of the logo rather than inside it, so hovering or clicking
+			// the hash never navigates home. Left empty for an unknown build,
+			// and app.css hides it then so the toolbar's gap doesn't double.
+			b.Span("class", "toolbar-build", "data-build-badge", "").R(),
 			// Search input — reuses id="search-input" so "/" shortcut keeps working
 			b.DivClass("search-bar-input-wrapper").R(
 				b.SpanClass("search-bar-icon").T("🔍"),

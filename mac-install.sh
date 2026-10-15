@@ -223,13 +223,16 @@ install_go_local() {
 
 # ---- build -----------------------------------------------------------------
 
+# scripts/stamp.sh adds the commit (hash, subject, time) for the web UI's build
+# badge, so the app names the build it is running; it prints nothing rather
+# than failing when the badge package can't be resolved.
 build_gonotes() {
   local build_id
   build_id="$(git -C "$GN_DIR" rev-parse --short HEAD)"
   info "building gonotes (cgo/DuckDB — this can take a minute)"
   ( cd "$GN_DIR" && \
     CGO_ENABLED=1 "$GO_BIN" build -trimpath \
-      -ldflags "-s -w" \
+      -ldflags "-s -w $(GO="$GO_BIN" sh scripts/stamp.sh)" \
       -o gonotes . )
   [ -x "$GN_DIR/gonotes" ] || die "build reported success but $GN_DIR/gonotes is missing"
   ok "built $GN_DIR/gonotes"

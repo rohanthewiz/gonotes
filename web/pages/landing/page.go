@@ -1,6 +1,9 @@
 package landing
 
-import "github.com/rohanthewiz/element"
+import (
+	"github.com/rohanthewiz/cats/buildbadge"
+	"github.com/rohanthewiz/element"
+)
 
 // Page represents the main landing page with the three-pane layout
 type Page struct {
@@ -36,8 +39,17 @@ func (p Page) renderHead(b *element.Builder) any {
 		b.Title().T(p.Title),
 		// Inline theme init — runs before CSS to prevent flash of wrong theme
 		b.Script().T(`(function(){var t=localStorage.getItem('gonotes-theme')||'dark-green';document.documentElement.setAttribute('data-theme',t);})()`),
+		// Build badge: the commit this binary was built from, shown beside the
+		// toolbar logo (see Toolbar) so a stale install or a lagging Mac app
+		// bundle is visible at a glance. Head() inlines the badge's styles, the
+		// build data and its small script, and is "" for an unknown build.
+		//
+		// It goes BEFORE app.css deliberately: the package declares its --bb-*
+		// colours on :root, and app.css re-points them at the theme variables.
+		// Coming later at equal specificity is what lets app.css win.
+		b.Text(buildbadge.Head()),
 		// CSS
-		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=17"),
+		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=18"),
 		// Highlight.js CSS theme - chosen based on current theme (default to dark)
 		b.Link("rel", "stylesheet", "id", "hljs-theme", "href", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css"),
 		// Update hljs theme link based on saved preference

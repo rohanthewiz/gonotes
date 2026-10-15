@@ -44,8 +44,11 @@ bin = ["./bin/gonotes"]
 # already .gitignore'd as the hand-built binary, and giving the plugin host its
 # own copy means `go build .` in a working tree cannot leave a half-built
 # binary where a plugin launch will find it.
+#
+# scripts/stamp.sh links the commit into the web UI's build badge; it prints
+# nothing when it can't resolve, so the build never fails on its account.
 [[build]]
-command = ["sh", "-c", "mkdir -p bin && go build -o bin/gonotes ."]
+command = ["sh", "-c", "mkdir -p bin && go build -ldflags \"$(sh scripts/stamp.sh)\" -o bin/gonotes ."]
 
 # The TUI, which is the whole point of launching GoNotes from cats.
 #

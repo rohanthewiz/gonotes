@@ -7,10 +7,11 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/rohanthewiz/bytdb v0.21.2
+	github.com/rohanthewiz/cats v0.4.1-0.20261015150947-80e336cd65a4
 	github.com/rohanthewiz/element v0.6.0
 	github.com/rohanthewiz/logger v1.3.0
 	github.com/rohanthewiz/rutil v0.2.0
-	github.com/rohanthewiz/rweb v0.1.26
+	github.com/rohanthewiz/rweb v0.1.31
 	github.com/rohanthewiz/serr v1.4.0
 	github.com/sergi/go-diff v1.4.0
 	github.com/urfave/cli/v2 v2.27.7

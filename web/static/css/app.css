@@ -220,6 +220,35 @@ input, textarea, select {
   background: none;
 }
 
+/* Build badge beside the logo (github.com/rohanthewiz/cats/buildbadge).
+   The package colours itself through --bb-* custom properties; pointing them
+   at this file's theme variables makes the badge and its hover card follow
+   the light / dark-green switch instead of the OS colour scheme the package
+   falls back to. These are declared on :root like the package's own, and win
+   because buildbadge.Head() is emitted before this stylesheet (see
+   landing/page.go). They are resolved on <html>, which is also where
+   data-theme lives, so each var() picks up the active theme's value. */
+:root {
+  --bb-fg: var(--text-primary);
+  --bb-bg: var(--bg-primary);
+  --bb-muted: var(--text-secondary);
+  --bb-line: var(--border-dark);
+  --bb-accent: var(--primary);
+}
+
+/* The toolbar row already spaces its items with a gap, so the badge drops
+   the package's own left margin and is pulled a little toward the logo it
+   annotates. An unknown build leaves the placeholder empty; hiding it keeps
+   that empty item from adding a second gap. */
+.toolbar-build {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: calc(-1 * var(--spacing-sm));
+}
+.toolbar-build:empty { display: none; }
+.toolbar-build .build-badge { margin-left: 0; }
+
 /* Flexible spacer between left filter controls and right action controls */
 .toolbar-spacer {
   flex: 1;
