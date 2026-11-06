@@ -292,7 +292,7 @@ func GetUnsentChangesForPeer(peerID string, userGUID string, limit int) ([]NoteC
 				WHERE nc.id NOT IN (
 					SELECT note_change_id FROM note_change_sync_peers WHERE peer_id = ?
 				)
-				ORDER BY nc.created_at ASC`
+				ORDER BY nc.created_at ASC, nc.id ASC`
 			args := []any{userGUID, peerID}
 			if limit > 0 {
 				q += " LIMIT ?"
@@ -306,7 +306,7 @@ func GetUnsentChangesForPeer(peerID string, userGUID string, limit int) ([]NoteC
 			WHERE nc.id NOT IN (
 				SELECT note_change_id FROM note_change_sync_peers WHERE peer_id = ?
 			)
-			ORDER BY nc.created_at ASC`
+			ORDER BY nc.created_at ASC, nc.id ASC`
 		args := []any{peerID}
 		if limit > 0 {
 			q += " LIMIT ?"
@@ -338,9 +338,16 @@ func GetUnsentChangesForPeer(peerID string, userGUID string, limit int) ([]NoteC
 	}
 
 	// Merge the two databases' oldest-unsent slices into one global
-	// oldest-first order, then re-apply the limit.
+	// oldest-first order, then re-apply the limit. The id breaks ties so the
+	// order is total and the same on every call: the pull stream is cut from
+	// this, and an acknowledged pull re-cuts it (see pullStreamLess). The
+	// ORDER BY above breaks ties the same way, which is what makes the
+	// per-database LIMIT keep the right rows at a tie on the boundary.
 	sort.SliceStable(changes, func(i, j int) bool {
-		return changes[i].CreatedAt.Before(changes[j].CreatedAt)
+		if !changes[i].CreatedAt.Equal(changes[j].CreatedAt) {
+			return changes[i].CreatedAt.Before(changes[j].CreatedAt)
+		}
+		return changes[i].ID < changes[j].ID
 	})
 	if limit > 0 && len(changes) > limit {
 		changes = changes[:limit]

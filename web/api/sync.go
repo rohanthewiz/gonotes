@@ -80,11 +80,22 @@ func GetUserChanges(ctx rweb.Context) error {
 // changes that haven't been sent to the requesting peer yet.
 //
 // Query parameters:
-//   - peer_id: Unique identifier for the requesting peer (required)
-//   - limit:   Maximum number of changes to return (optional, default: 100)
+//   - peer_id:  Unique identifier for the requesting peer (required)
+//   - limit:    Maximum number of changes to return (optional, default: 100)
+//   - delivery: "ack" to hold the page until the next pull acknowledges it
+//     (optional; without it the page is marked delivered as it is served)
+//   - ack:      with delivery=ack, the GUID of the last change of the page
+//     the spoke last stored (optional: absent on a spoke's first pull)
+//   - ack_sum:  with ack, that page's models.PullPageSum
+//
+// The acknowledgement is applied before the page is cut, so the page served
+// starts after whatever it marked. See models/sync_pull_ack.go for the
+// protocol and why the sum is needed.
 //
 // The response includes a has_more flag so the client knows whether to
-// issue another pull request for the remaining changes.
+// issue another pull request for the remaining changes, and delivery="ack"
+// when the page was held. A held page needs one more pull to be marked even
+// when has_more is false.
 func PullChanges(ctx rweb.Context) error {
 	// Authentication required for sync operations
 	userGUID := GetCurrentUserGUID(ctx)
@@ -108,6 +119,32 @@ func PullChanges(ctx rweb.Context) error {
 		limit = parsedLimit
 	}
 
+	// Acknowledged delivery is opt-in per request, so spokes that predate it
+	// keep the mark-on-serve behavior they were written against. Any value
+	// other than "ack" is the old behavior rather than an error, which leaves
+	// room for other modes later without breaking a hub that doesn't know them.
+	ackMode := ctx.Request().QueryParam("delivery") == models.PullDeliveryAck
+
+	// Apply the acknowledgement first. A page marked here is skipped when
+	// the next page is cut just below; applied after the cut, the spoke would
+	// be served its acknowledged page again.
+	if ackGUID := ctx.Request().QueryParam("ack"); ackMode && ackGUID != "" {
+		outcome, marked, err := models.AckPulledPage(peerID, userGUID, ackGUID,
+			ctx.Request().QueryParam("ack_sum"), limit)
+		if err != nil {
+			// Serving now would hand back the unacknowledged page, which the
+			// spoke would store again and acknowledge again into the same
+			// failure. Refusing makes the problem visible on its first round.
+			logger.LogErr(serr.Wrap(err, "failed to apply pull acknowledgement"), "pull error")
+			return writeError(ctx, http.StatusInternalServerError, "failed to record the acknowledged changes")
+		}
+		logger.Info("Sync pull acknowledged",
+			"peer_id", peerID,
+			"outcome", string(outcome),
+			"marked", marked,
+		)
+	}
+
 	// Fetch unified changes for this peer, scoped to the authenticated user
 	response, err := models.GetUnifiedChangesForPeer(peerID, userGUID, limit)
 	if err != nil {
@@ -115,14 +152,20 @@ func PullChanges(ctx rweb.Context) error {
 		return writeError(ctx, http.StatusInternalServerError, "failed to retrieve changes")
 	}
 
-	// Mark the returned changes as synced to this peer so they aren't
-	// returned on the next pull
-	models.MarkSyncChangesForPeer(response.Changes, peerID)
+	if ackMode {
+		// Held: the spoke's next pull acknowledges what it stored.
+		response.Delivery = models.PullDeliveryAck
+	} else {
+		// Mark the returned changes as synced to this peer so they aren't
+		// returned on the next pull
+		models.MarkSyncChangesForPeer(response.Changes, peerID)
+	}
 
 	logger.Info("Sync pull completed",
 		"peer_id", peerID,
 		"count", len(response.Changes),
 		"has_more", response.HasMore,
+		"held_for_ack", ackMode,
 	)
 
 	return writeSuccess(ctx, http.StatusOK, response)

@@ -65,9 +65,17 @@ type CategoryFragmentOutput struct {
 // SyncPullResponse is the response body for GET /api/v1/sync/pull.
 // HasMore indicates whether additional changes remain beyond the requested limit,
 // signaling the client to issue another pull request.
+//
+// Delivery is PullDeliveryAck when the hub has NOT marked this page delivered
+// and is waiting for the next pull to acknowledge it (see sync_pull_ack.go).
+// It is empty when the page was marked as it was served, which is what a
+// spoke that did not ask for acknowledged delivery gets, and all a hub from
+// before it could do. A spoke tells the two apart by this field alone: only a
+// held page needs the closing pull that carries its acknowledgement.
 type SyncPullResponse struct {
-	Changes []SyncChange `json:"changes"`
-	HasMore bool         `json:"has_more"`
+	Changes  []SyncChange `json:"changes"`
+	HasMore  bool         `json:"has_more"`
+	Delivery string       `json:"delivery,omitempty"`
 }
 
 // SyncPushRequest is the request body for POST /api/v1/sync/push.
@@ -209,125 +217,195 @@ func categoryFragmentFromOutput(out *CategoryFragmentOutput) CategoryFragment {
 // The algorithm:
 //  1. Fetch unsent note changes (limit+1 to detect has_more)
 //  2. Fetch unsent category changes (limit+1 to detect has_more)
-//  3. Convert each to SyncChange (loading fragments, authored_at)
-//  4. Merge into one slice sorted by CreatedAt ASC
-//  5. Categories with the same timestamp are sorted before notes so that
-//     category definitions exist before note-category mappings reference them
-//  6. Truncate to 'limit' and report has_more
+//  3. Merge into one slice in the stream order (see pullStreamLess):
+//     created_at ASC, categories before notes at the same timestamp so that
+//     category definitions exist before note-category mappings reference
+//     them, then change id
+//  4. Truncate to 'limit' and report has_more
+//  5. Convert each served row to SyncChange (loading fragments, authored_at)
+//
+// Steps 1–4 are unsentStreamForPeer, which AckPulledPage shares: an
+// acknowledgement names a page by the stream it was cut from, so the page and
+// the acknowledgement must be cut by the same code. Only the rows actually
+// served are hydrated; the limit+1 extra from each source exist only to answer
+// has_more.
 func GetUnifiedChangesForPeer(peerID string, userGUID string, limit int) (*SyncPullResponse, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 
-	// Fetch limit+1 to detect whether more changes exist beyond this batch
-	fetchLimit := limit + 1
-
-	noteChanges, err := GetUnsentChangesForPeer(peerID, userGUID, fetchLimit)
+	rows, hasMore, err := unsentStreamForPeer(peerID, userGUID, limit)
 	if err != nil {
-		return nil, serr.Wrap(err, "failed to get unsent note changes for peer")
+		return nil, err
 	}
 
-	categoryChanges, err := GetUnsentCategoryChangesForPeer(peerID, userGUID, fetchLimit)
-	if err != nil {
-		return nil, serr.Wrap(err, "failed to get unsent category changes for peer")
-	}
-
-	// Convert note changes to SyncChange envelopes
-	var unified []SyncChange
-	for _, nc := range noteChanges {
-		sc := SyncChange{
-			ID:         nc.ID,
-			GUID:       nc.GUID,
-			EntityType: "note",
-			EntityGUID: nc.NoteGUID,
-			Operation:  nc.Operation,
-			CreatedAt:  nc.CreatedAt,
+	unified := make([]SyncChange, 0, len(rows))
+	for _, row := range rows {
+		if row.note != nil {
+			unified = append(unified, noteSyncChange(row.note))
+		} else {
+			unified = append(unified, categorySyncChange(row.cat))
 		}
-		if nc.User.Valid {
-			sc.User = nc.User.String
-		}
-
-		// Load fragment if present
-		if nc.NoteFragmentID.Valid {
-			fragment, err := GetNoteFragment(nc.NoteFragmentID.Int64)
-			if err != nil {
-				logger.LogErr(err, "failed to load note fragment for sync", "fragment_id", nc.NoteFragmentID.Int64)
-			} else {
-				sc.Fragment = noteFragmentToOutput(fragment)
-			}
-		}
-
-		// Retrieve authored_at from disk DB (cache schema lacks it)
-		authoredAt, err := getNoteAuthoredAt(nc.NoteGUID)
-		if err == nil {
-			sc.AuthoredAt = authoredAt
-		}
-
-		unified = append(unified, sc)
-	}
-
-	// Convert category changes to SyncChange envelopes
-	for _, cc := range categoryChanges {
-		sc := SyncChange{
-			ID:         cc.ID,
-			GUID:       cc.GUID,
-			EntityType: "category",
-			EntityGUID: cc.CategoryGUID,
-			Operation:  cc.Operation,
-			CreatedAt:  cc.CreatedAt,
-		}
-		if cc.User.Valid {
-			sc.User = cc.User.String
-		}
-
-		// Load fragment if present
-		if cc.CategoryFragmentID.Valid {
-			fragment, err := GetCategoryFragment(cc.CategoryFragmentID.Int64)
-			if err != nil {
-				logger.LogErr(err, "failed to load category fragment for sync", "fragment_id", cc.CategoryFragmentID.Int64)
-			} else {
-				sc.Fragment = categoryFragmentToOutput(fragment)
-			}
-		}
-
-		// Use category updated_at as authored_at (categories don't have a
-		// separate authored_at column)
-		catUpdatedAt, err := getCategoryUpdatedAt(cc.CategoryGUID)
-		if err == nil {
-			sc.AuthoredAt = catUpdatedAt
-		}
-
-		unified = append(unified, sc)
-	}
-
-	// Sort by CreatedAt ASC; categories sort before notes at the same timestamp
-	// so that category definitions exist before note-category mappings reference them
-	sort.SliceStable(unified, func(i, j int) bool {
-		if unified[i].CreatedAt.Equal(unified[j].CreatedAt) {
-			// Categories before notes at same timestamp
-			if unified[i].EntityType == "category" && unified[j].EntityType == "note" {
-				return true
-			}
-			return false
-		}
-		return unified[i].CreatedAt.Before(unified[j].CreatedAt)
-	})
-
-	// Determine has_more and truncate to limit
-	hasMore := len(unified) > limit
-	if len(unified) > limit {
-		unified = unified[:limit]
-	}
-
-	// Return empty slice instead of nil for clean JSON serialization
-	if unified == nil {
-		unified = []SyncChange{}
 	}
 
 	return &SyncPullResponse{
 		Changes: unified,
 		HasMore: hasMore,
 	}, nil
+}
+
+// pullStreamRow is one change in a peer's unsent stream, before its fragment
+// is loaded. Exactly one of note and cat is set.
+type pullStreamRow struct {
+	note *NoteChange
+	cat  *CategoryChange
+}
+
+func (r pullStreamRow) guid() string {
+	if r.note != nil {
+		return r.note.GUID
+	}
+	return r.cat.GUID
+}
+
+func (r pullStreamRow) createdAt() time.Time {
+	if r.note != nil {
+		return r.note.CreatedAt
+	}
+	return r.cat.CreatedAt
+}
+
+func (r pullStreamRow) id() int64 {
+	if r.note != nil {
+		return r.note.ID
+	}
+	return r.cat.ID
+}
+
+// pullStreamLess is the stream's order, and it is total: no two rows compare
+// equal. created_at alone is not enough. A bulk import or a hub compaction
+// pass writes many rows inside one timestamp tick, and without the id
+// tie-break their order was left to unspecified places (each database's
+// ORDER BY, then which database was merged first). Serving did not care. An
+// acknowledgement does: AckPulledPage re-cuts the stream to find the page a
+// spoke is acknowledging, and a tie that broke differently the second time
+// would make an intact page look altered.
+//
+// Category ids and note ids come from different sequences and may coincide,
+// but the category-first rule already separates the two kinds, so the id
+// comparison only ever runs between rows of one kind. Note ids are unique
+// across both note databases (the private one's sequence starts past an
+// offset), so it is unique there too.
+func pullStreamLess(a, b pullStreamRow) bool {
+	if at, bt := a.createdAt(), b.createdAt(); !at.Equal(bt) {
+		return at.Before(bt)
+	}
+	if aCat, bCat := a.cat != nil, b.cat != nil; aCat != bCat {
+		return aCat // categories before notes at the same timestamp
+	}
+	return a.id() < b.id()
+}
+
+// unsentStreamForPeer returns the first limit changes not yet delivered to
+// peerID, in stream order, without their fragments, and whether more remain.
+//
+// Each source is asked for limit+1 rows in the same order (see the ORDER BY in
+// GetUnsentChangesForPeer and GetUnsentCategoryChangesForPeer). Any row of the
+// merged first limit is within the first limit of its own source, so the merge
+// of the two truncated lists is exactly the head of the full stream.
+func unsentStreamForPeer(peerID, userGUID string, limit int) ([]pullStreamRow, bool, error) {
+	fetchLimit := limit + 1
+
+	noteChanges, err := GetUnsentChangesForPeer(peerID, userGUID, fetchLimit)
+	if err != nil {
+		return nil, false, serr.Wrap(err, "failed to get unsent note changes for peer")
+	}
+
+	categoryChanges, err := GetUnsentCategoryChangesForPeer(peerID, userGUID, fetchLimit)
+	if err != nil {
+		return nil, false, serr.Wrap(err, "failed to get unsent category changes for peer")
+	}
+
+	rows := make([]pullStreamRow, 0, len(noteChanges)+len(categoryChanges))
+	for i := range noteChanges {
+		rows = append(rows, pullStreamRow{note: &noteChanges[i]})
+	}
+	for i := range categoryChanges {
+		rows = append(rows, pullStreamRow{cat: &categoryChanges[i]})
+	}
+	sort.Slice(rows, func(i, j int) bool { return pullStreamLess(rows[i], rows[j]) })
+
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	return rows, hasMore, nil
+}
+
+// noteSyncChange builds the wire envelope for one note change row, loading
+// its fragment and the note's authored_at.
+func noteSyncChange(nc *NoteChange) SyncChange {
+	sc := SyncChange{
+		ID:         nc.ID,
+		GUID:       nc.GUID,
+		EntityType: "note",
+		EntityGUID: nc.NoteGUID,
+		Operation:  nc.Operation,
+		CreatedAt:  nc.CreatedAt,
+	}
+	if nc.User.Valid {
+		sc.User = nc.User.String
+	}
+
+	// Load fragment if present
+	if nc.NoteFragmentID.Valid {
+		fragment, err := GetNoteFragment(nc.NoteFragmentID.Int64)
+		if err != nil {
+			logger.LogErr(err, "failed to load note fragment for sync", "fragment_id", nc.NoteFragmentID.Int64)
+		} else {
+			sc.Fragment = noteFragmentToOutput(fragment)
+		}
+	}
+
+	// Retrieve authored_at from disk DB (cache schema lacks it)
+	authoredAt, err := getNoteAuthoredAt(nc.NoteGUID)
+	if err == nil {
+		sc.AuthoredAt = authoredAt
+	}
+	return sc
+}
+
+// categorySyncChange builds the wire envelope for one category change row.
+func categorySyncChange(cc *CategoryChange) SyncChange {
+	sc := SyncChange{
+		ID:         cc.ID,
+		GUID:       cc.GUID,
+		EntityType: "category",
+		EntityGUID: cc.CategoryGUID,
+		Operation:  cc.Operation,
+		CreatedAt:  cc.CreatedAt,
+	}
+	if cc.User.Valid {
+		sc.User = cc.User.String
+	}
+
+	// Load fragment if present
+	if cc.CategoryFragmentID.Valid {
+		fragment, err := GetCategoryFragment(cc.CategoryFragmentID.Int64)
+		if err != nil {
+			logger.LogErr(err, "failed to load category fragment for sync", "fragment_id", cc.CategoryFragmentID.Int64)
+		} else {
+			sc.Fragment = categoryFragmentToOutput(fragment)
+		}
+	}
+
+	// Use category updated_at as authored_at (categories don't have a
+	// separate authored_at column)
+	catUpdatedAt, err := getCategoryUpdatedAt(cc.CategoryGUID)
+	if err == nil {
+		sc.AuthoredAt = catUpdatedAt
+	}
+	return sc
 }
 
 // getNoteAuthoredAt returns a note's authored_at timestamp from whichever

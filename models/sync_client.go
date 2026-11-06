@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -886,12 +887,38 @@ func (sc *SyncClient) doAuthenticatedRequest(ctx context.Context, method, url st
 // pullChanges fetches unsynced changes from the hub and applies them locally.
 // Pulls in batches (has_more pagination) until all changes are consumed.
 // Each change is checked for conflicts before application.
+//
+// Pulls ask for acknowledged delivery (see sync_pull_ack.go): the hub holds
+// each page until the next pull names its last change, so a page this process
+// dies holding is served again instead of being lost. Each pull acknowledges
+// the page before it, which means the last page needs one more pull, the
+// closing pull, which normally comes back empty.
+//
+// The acknowledgement lives only in memory, unlike the mobile spoke's, which
+// is stored with the page. A process that dies mid-cycle, before its closing
+// pull, therefore re-pulls the last page it applied when it next syncs. That
+// is safe here because ApplyIncomingSyncChange skips a change whose GUID it
+// has recorded, and the cost is one page, once. The only trace is a second
+// sync_conflicts row for a change in that page that lost to a local edit.
+//
+// Against a hub that predates acknowledged delivery the page comes back
+// without Delivery set, already marked, and the loop ends on has_more as it
+// always did.
 func (sc *SyncClient) pullChanges(ctx context.Context) error {
-	hasMore := true
+	var ackGUID, ackSum string // the page this cycle last applied; empty before the first
 
-	for hasMore {
-		url := fmt.Sprintf("%s/api/v1/sync/pull?peer_id=%s&limit=100", sc.config.HubURL, sc.peerID)
-		resp, err := sc.doAuthenticatedRequest(ctx, http.MethodGet, url, nil)
+	for {
+		q := url.Values{
+			"peer_id":  {sc.peerID},
+			"limit":    {"100"},
+			"delivery": {PullDeliveryAck},
+		}
+		if ackGUID != "" {
+			q.Set("ack", ackGUID)
+			q.Set("ack_sum", ackSum)
+		}
+		pullURL := sc.config.HubURL + "/api/v1/sync/pull?" + q.Encode()
+		resp, err := sc.doAuthenticatedRequest(ctx, http.MethodGet, pullURL, nil)
 		if err != nil {
 			return serr.Wrap(err, "pull request failed")
 		}
@@ -910,8 +937,25 @@ func (sc *SyncClient) pullChanges(ctx context.Context) error {
 			return serr.New("pull request returned success=false")
 		}
 
+		changes := apiResp.Data.Changes
+		if len(changes) == 0 {
+			break // drained; with a held page this was the closing pull
+		}
+
+		guids := make([]string, len(changes))
+		for i, ch := range changes {
+			guids[i] = ch.GUID
+		}
+		pageGUID, pageSum := changes[len(changes)-1].GUID, PullPageSum(guids)
+		if pageGUID == ackGUID && pageSum == ackSum {
+			// The page just acknowledged came back unchanged, so the hub did
+			// not take the acknowledgement. A mismatch would have re-cut a
+			// different page. Pulling again would loop on the same answer.
+			return serr.New("hub served an acknowledged page again", "ack", ackGUID)
+		}
+
 		// Apply each change with conflict detection
-		for _, change := range apiResp.Data.Changes {
+		for _, change := range changes {
 			if err := sc.applyChangeWithConflictDetection(change); err != nil {
 				// Log and continue — one bad change shouldn't block the whole pull
 				logger.LogErr(err, "failed to apply pulled change",
@@ -922,13 +966,25 @@ func (sc *SyncClient) pullChanges(ctx context.Context) error {
 			}
 		}
 
-		hasMore = apiResp.Data.HasMore
+		hasMore := apiResp.Data.HasMore
+		held := apiResp.Data.Delivery == PullDeliveryAck
 
-		if len(apiResp.Data.Changes) > 0 {
-			logger.Info("Pulled changes from hub",
-				"count", len(apiResp.Data.Changes),
-				"has_more", hasMore,
-			)
+		logger.Info("Pulled changes from hub",
+			"count", len(changes),
+			"has_more", hasMore,
+			"held_for_ack", held,
+		)
+
+		// Applied, so this is the page the next pull acknowledges. A change
+		// that failed to apply above is acknowledged too: that was already
+		// the outcome when the hub marked on serve, and re-pulling a change
+		// that fails deterministically would only fail again.
+		ackGUID, ackSum = pageGUID, pageSum
+
+		// A page marked on serve (an older hub) needs no acknowledgement, so
+		// has_more alone decides. A held page always needs one more pull.
+		if !held && !hasMore {
+			break
 		}
 	}
 

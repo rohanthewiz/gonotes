@@ -226,7 +226,7 @@ func GetUnsentCategoryChangesForPeer(peerID string, userGUID string, limit int) 
 			WHERE cc.id NOT IN (
 				SELECT category_change_id FROM category_change_sync_peers WHERE peer_id = ?
 			)
-			ORDER BY cc.created_at ASC`
+			ORDER BY cc.created_at ASC, cc.id ASC`
 		args = []any{userGUID, peerID}
 	} else {
 		query = `
@@ -235,7 +235,7 @@ func GetUnsentCategoryChangesForPeer(peerID string, userGUID string, limit int) 
 			WHERE cc.id NOT IN (
 				SELECT category_change_id FROM category_change_sync_peers WHERE peer_id = ?
 			)
-			ORDER BY cc.created_at ASC`
+			ORDER BY cc.created_at ASC, cc.id ASC`
 		args = []any{peerID}
 	}
 	if limit > 0 {

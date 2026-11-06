@@ -45,6 +45,7 @@ gonotes/
 │   ├── category_change.go      # Category change tracking (parallel to notes)
 │   ├── sync_apply.go           # ApplySync* functions for incoming sync data
 │   ├── sync_protocol.go        # Unified SyncChange envelope, pull/push logic
+│   ├── sync_pull_ack.go        # Acknowledged pull delivery (ack, page sum)
 │   └── msgpack.go              # MessagePack serialization helpers
 ├── web/
 │   ├── server.go               # NewServer, NewTestServer, middleware setup
@@ -263,11 +264,45 @@ One hub (typically a VPS) serves as the central sync point. Spokes (clients/devi
 
 Spokes always **pull first**, then **push**. This is analogous to a git rebase workflow:
 
-1. Spoke calls `GET /api/v1/sync/pull?peer_id=<id>&limit=100`
-2. Hub returns unsent `SyncChange` objects (unified note+category stream)
-3. Spoke applies received changes locally
+1. Spoke calls `GET /api/v1/sync/pull?peer_id=<id>&limit=100&delivery=ack`, adding
+   `&ack=<guid>&ack_sum=<sum>` to acknowledge the page it stored last
+2. Hub marks the acknowledged page delivered, then returns the next unsent `SyncChange`
+   objects (unified note+category stream), held until the next pull acknowledges them
+3. Spoke applies received changes locally, and pulls again until a page comes back empty.
+   The closing pull acknowledges the last page.
 4. Spoke calls `POST /api/v1/sync/push` with its local changes
 5. Hub applies incoming changes and returns accepted/rejected results
+
+### Acknowledged Pull Delivery
+
+A pull without `delivery=ack` marks its page delivered as it is served. That page is lost if
+it never reaches the spoke's storage: the response dropped, or the spoke killed while reading
+it. With `delivery=ack` the page stays pending until the spoke names its last change on a
+later pull:
+
+```
+pull ?delivery=ack                    → page 1, held (nothing marked)
+spoke stores page 1
+pull ?delivery=ack&ack=c100&ack_sum=… → hub marks page 1, returns page 2, held
+…
+pull ?…&ack=<last>&ack_sum=…          → hub marks the last page, returns []
+```
+
+A spoke that dies before storing a page sends the previous ack again, and the page is
+served again.
+
+`ack_sum` is `PullPageSum`: the first 16 hex digits of the SHA-256 of the page's change GUIDs,
+each followed by a newline, in served order. The hub marks "the stream up to the acknowledged
+change" only if that prefix hashes to `ack_sum`. Hub compaction can write a category's
+replacement row ahead of the acknowledged change, and that row carries edits the spoke never
+saw. On a mismatch nothing is marked and the head of the stream is served again, so spokes
+must recognise a repeated change by its GUID.
+
+The response says `"delivery": "ack"` when the page was held. Spokes that don't ask keep the
+old behavior, so a new hub works with old spokes. A new spoke works with an old hub, too: the
+old hub ignores the parameters and marks pages as it serves them. The protocol lives in
+`models/sync_pull_ack.go`. The stream's order is made total by tie-breaking `created_at` on
+categories first, then change id, so a page can be re-cut exactly.
 
 ### Change Tracking
 
@@ -325,7 +360,7 @@ note_change_sync_peers:     (note_change_id, peer_id, synced_at)
 category_change_sync_peers: (category_change_id, peer_id, synced_at)
 ```
 
-`GetUnifiedChangesForPeer()` returns only changes not yet synced to the requesting peer. After delivery, `MarkSyncChangesForPeer()` records the send.
+`GetUnifiedChangesForPeer()` returns only changes not yet synced to the requesting peer. A pull without `delivery=ack` records the send with `MarkSyncChangesForPeer()` as it serves the page. With `delivery=ack`, `AckPulledPage()` records it when the next pull acknowledges the page (see above).
 
 ### Idempotency
 
