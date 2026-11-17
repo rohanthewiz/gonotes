@@ -1604,12 +1604,22 @@
     updateActiveFilters();
   };
 
+  // clearSearch — empties only the text query (the toolbar's inline "×").
+  // Regex, category and filter-bar state are untouched; clearSearchBar is the
+  // reset-everything path.
   window.app.clearSearch = function() {
-    document.getElementById('search-input').value = '';
+    // Cancel any keystroke still waiting out handleSearch's 300ms debounce,
+    // otherwise typing then clicking × quickly lets that timer fire afterwards
+    // and put the old text back into state.filters.search.
+    clearTimeout(searchDebounceTimer);
+    const input = document.getElementById('search-input');
+    input.value = '';
     state.filters.search = '';
     renderNoteList();
     updateResultCount();
     updateActiveFilters();
+    // Return focus so the user can type the next query straight away.
+    input.focus();
   };
 
   // clearSearchBar — resets all search bar state: text input, regex, category dropdown, subcats

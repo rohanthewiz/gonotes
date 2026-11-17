@@ -34,6 +34,16 @@ func (t Toolbar) Render(b *element.Builder) any {
 					"placeholder", "Search by text or ID...",
 					"oninput", "app.handleSearch(this.value)",
 					"autocomplete", "off"),
+				// Inline "×" that clears only the text, leaving regex/category/
+				// subcat filters alone (the Clear button resets all of those).
+				// It must stay the input's immediate next sibling: app.css shows
+				// it with `.search-bar-input:not(:placeholder-shown) + …`, so it
+				// appears and disappears with the text, with no JS needed, and
+				// stays correct when Clear/Reset empty the input from code.
+				// type=button keeps it from ever acting as a form submit.
+				b.Button("type", "button", "class", "search-bar-input-clear",
+					"onclick", "app.clearSearch()",
+					"title", "Clear search text", "aria-label", "Clear search text").T("×"),
 			),
 			// Regex toggle — switches between substring and regular expression mode
 			b.Button("class", "btn btn-secondary search-bar-regex-toggle", "id", "regex-toggle",

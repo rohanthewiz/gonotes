@@ -49,7 +49,7 @@ func (p Page) renderHead(b *element.Builder) any {
 		// Coming later at equal specificity is what lets app.css win.
 		b.Text(buildbadge.Head()),
 		// CSS
-		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=18"),
+		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=19"),
 		// Highlight.js CSS theme - chosen based on current theme (default to dark)
 		b.Link("rel", "stylesheet", "id", "hljs-theme", "href", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css"),
 		// Update hljs theme link based on saved preference
@@ -144,7 +144,7 @@ func (p Page) renderBody(b *element.Builder) any {
 
 		// Application JavaScript (cache-bust version for development)
 		// app.js must load first — it exposes _internal for cats_subcats.js
-		b.Script("src", "/static/js/app.js?v=18").R(),
+		b.Script("src", "/static/js/app.js?v=19").R(),
 		b.Script("src", "/static/js/cats_subcats.js?v=5").R(),
 		b.Script("src", "/static/js/sync.js?v=4").R(),
 		b.Script("src", "/static/js/note_links.js?v=2").R(),

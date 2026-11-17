@@ -455,6 +455,41 @@ input, textarea, select {
   box-shadow: 0 0 0 3px var(--primary-alpha-10);
 }
 
+/* Inline "×" that clears just the search text (see toolbar.go).
+   Hidden by default and shown only while the input holds text: the input
+   always has a placeholder, so :placeholder-shown is exactly "empty". The
+   input gets matching right padding so long queries don't run under it. */
+.search-bar-input {
+  padding-right: 28px;
+}
+
+.search-bar-input-clear {
+  position: absolute;
+  right: var(--spacing-xs);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.search-bar-input-clear:hover {
+  background: var(--border-light);
+  color: var(--text-primary);
+}
+
+.search-bar-input:not(:placeholder-shown) + .search-bar-input-clear {
+  display: flex;
+}
+
 /* Category dropdown in the search bar */
 .search-bar-select {
   min-width: 180px;
