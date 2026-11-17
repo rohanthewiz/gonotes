@@ -207,7 +207,53 @@
     showToast('Image embedded', 'success');
   }
 
+  // ============================================
+  // Pasted Text Cleanup
+  // ============================================
+
+  // Text copied out of web pages, chat apps, Slack, Word, and some terminals
+  // routinely carries characters that look like ordinary spaces but aren't:
+  // most often NO-BREAK SPACE (U+00A0), which browsers emit for runs of
+  // indentation in rendered HTML. In the note they are worse than useless:
+  // Monaco draws a highlight box around each one ("funny chars"), markdown
+  // treats them as content rather than whitespace, and text search for
+  // "a  b" won't match "a  b".
+  //
+  // Two classes, two treatments:
+  //   SPACE-LIKE  → plain ' '. They carried visible width, so dropping them
+  //                 would collapse alignment (box-drawing diagrams, columns).
+  //     U+00A0 no-break space, U+2000–U+200A en/em/thin/hair/figure spaces,
+  //     U+202F narrow no-break space, U+205F medium math space
+  //   ZERO-WIDTH  → removed. They had no width, so removing them changes
+  //                 nothing the user saw.
+  //     U+200B zero-width space, U+2060 word joiner, U+FEFF BOM/ZWNBSP,
+  //     U+00AD soft hyphen
+  //
+  // Deliberately left alone: U+200C/U+200D (ZWNJ/ZWJ) and U+FE0F — emoji
+  // sequences (👨‍👩‍👧) and several scripts (Persian, Indic) need them; U+3000
+  // ideographic space, which is legitimate in CJK text; tabs and newlines.
+  const SPACE_LIKE_RE = /[  -   ]/g;
+  const ZERO_WIDTH_RE = /[​⁠﻿­]/g;
+
+  function cleanPastedText(text) {
+    if (!text) return text;
+    return text.replace(SPACE_LIKE_RE, ' ').replace(ZERO_WIDTH_RE, '');
+  }
+
+  // Insert text at the textarea's selection as if typed. execCommand
+  // 'insertText' keeps the edit on the browser's native undo stack (Cmd+Z
+  // undoes the paste) and fires 'input' itself. It is formally deprecated
+  // but supported for textareas by every current engine; setRangeText is the
+  // fallback, at the cost of native undo for that one paste.
+  function insertTextAtCursor(textarea, text) {
+    textarea.focus();
+    if (document.execCommand && document.execCommand('insertText', false, text)) return;
+    textarea.setRangeText(text, textarea.selectionStart, textarea.selectionEnd, 'end');
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
   // Set up paste handler on the edit body textarea to intercept pasted images
+  // and clean pasted text (see cleanPastedText)
   function setupImagePasteHandler() {
     const textarea = document.getElementById('edit-body');
     if (!textarea) return;
@@ -226,7 +272,15 @@
           return; // Only handle the first image
         }
       }
-      // If no image items, let the default paste behavior proceed (text paste)
+      // No image: a text paste. Only take over when cleanup changes something,
+      // so ordinary pastes keep the browser's native behavior untouched.
+      const text = e.clipboardData.getData('text/plain');
+      const clean = cleanPastedText(text);
+      if (clean !== text) {
+        e.preventDefault();
+        insertTextAtCursor(textarea, clean);
+      }
+      // Otherwise let the default paste behavior proceed
     });
   }
 
@@ -307,5 +361,8 @@
   // Entry point for monaco_editor.js: lets Monaco's paste/drop handlers reuse
   // the same resize dialog + insert pipeline as the textarea handlers
   window.app._insertImageFile = insertImageAsBase64;
+
+  // Shared with monaco_editor.js so both editing surfaces clean pastes the same way
+  window.app._cleanPastedText = cleanPastedText;
 
 })();
