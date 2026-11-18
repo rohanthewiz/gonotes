@@ -1120,6 +1120,13 @@ input, textarea, select {
   display: none;
 }
 
+/* The "back to the list" button exists only for the narrow-width drawer
+   (see the max-width: 1024px block); as a column beside the list the panel
+   has nothing to go back to. */
+.right-panel-close {
+  display: none;
+}
+
 /* ============================================
    Focus Mode — expand preview to full width
    ============================================
@@ -2763,6 +2770,20 @@ mark.note-search-hit-current {
 
   .right-panel.open {
     transform: translateX(0);
+  }
+
+  /* Half the width is too little for an editor once the window is this
+     narrow; the drawer takes most of it and leaves a strip of the list
+     visible as a reminder of what is underneath. Below 768px the mobile
+     block makes it full width. */
+  .right-panel {
+    width: min(100%, max(60%, 560px));
+  }
+
+  /* Sits in the preview header, so it disappears with that header while the
+     edit form is up: there the form's own Save and Cancel are the way out. */
+  .right-panel-close {
+    display: inline-flex;
   }
 
   .center-panel {

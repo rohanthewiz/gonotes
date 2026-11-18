@@ -16,15 +16,36 @@ import (
 // - Keeps metadata human-readable for easier debugging and logging
 // - Maintains backwards compatibility with standard JSON-only clients
 // - Client signals msgpack mode via X-Body-Encoding: msgpack header
+//
+// The header selects how the body field MAY arrive, not how it must. A request
+// in msgpack mode can still carry a plain `body`, and it is honoured when
+// `body_encoded` is absent. That is not a courtesy: the browser falls back to
+// a plain body whenever its encoder fails, and it sets the header from "is the
+// library loaded", not from "did this body encode". A struct that knew only
+// body_encoded read such a request as "no body" and the update then wrote
+// NULL over the note's text, with a success response.
+//
+//	header      body_encoded   body       stored body
+//	msgpack     present        (ignored)  decoded body_encoded
+//	msgpack     absent/empty   present    body
+//	msgpack     absent/empty   absent     NULL  (an intentionally empty note)
 type MsgPackBodyRequest struct {
 	GUID         string  `json:"guid"`
 	Title        string  `json:"title"`
 	Description  *string `json:"description,omitempty"`
-	BodyEncoded  string  `json:"body_encoded"` // Base64-encoded msgpack bytes
+	BodyEncoded  string  `json:"body_encoded"`   // Base64-encoded msgpack bytes
+	Body         *string `json:"body,omitempty"` // Plain body; used when BodyEncoded is empty
 	Tags         *string `json:"tags,omitempty"`
 	IsPrivate    bool    `json:"is_private"`
 	IsFlagged    bool    `json:"is_flagged"`
 	EncryptionIV *string `json:"encryption_iv,omitempty"`
+
+	// ExpectedVersion is NoteInput.ExpectedVersion: the version the editor
+	// loaded, which arms the stale-write guard in UpdateNote. It has to be
+	// carried here too, or a client in msgpack mode can never arm the guard —
+	// its expected_version would be dropped at this struct and every save
+	// would be treated as "do not check".
+	ExpectedVersion int64 `json:"expected_version,omitempty"`
 }
 
 // MsgPackBodyResponse represents the JSON response format when msgpack encoding is used.
@@ -46,6 +67,11 @@ type MsgPackBodyResponse struct {
 	AuthoredAt   *string `json:"authored_at,omitempty"`
 	SyncedAt     *string `json:"synced_at,omitempty"`
 	DeletedAt    *string `json:"deleted_at,omitempty"`
+
+	// Version is NoteOutput.Version. An editor reads it here and sends it back
+	// as expected_version; without it a msgpack-mode client has no version to
+	// name, and the stale-write guard never engages for it.
+	Version int64 `json:"version"`
 }
 
 // EncodeMsgPackBody encodes a string body to Base64-encoded msgpack bytes.
@@ -121,25 +147,32 @@ func (n *NoteOutput) ToMsgPackResponse() (*MsgPackBodyResponse, error) {
 		AuthoredAt:   n.AuthoredAt,
 		SyncedAt:     n.SyncedAt,
 		DeletedAt:    n.DeletedAt,
+		Version:      n.Version,
 	}, nil
 }
 
 // ToNoteInput converts a MsgPackBodyRequest to NoteInput.
-// The body_encoded field is decoded from Base64 msgpack format to plain string.
+// The body_encoded field is decoded from Base64 msgpack format to plain string;
+// when it is empty the plain body field is used instead (see the table on
+// MsgPackBodyRequest).
 func (r *MsgPackBodyRequest) ToNoteInput() (*NoteInput, error) {
 	body, err := DecodeMsgPackBody(r.BodyEncoded)
 	if err != nil {
 		return nil, err
 	}
+	if r.BodyEncoded == "" {
+		body = r.Body
+	}
 
 	return &NoteInput{
-		GUID:         r.GUID,
-		Title:        r.Title,
-		Description:  r.Description,
-		Body:         body,
-		Tags:         r.Tags,
-		IsPrivate:    r.IsPrivate,
-		IsFlagged:    r.IsFlagged,
-		EncryptionIV: r.EncryptionIV,
+		GUID:            r.GUID,
+		Title:           r.Title,
+		Description:     r.Description,
+		Body:            body,
+		Tags:            r.Tags,
+		IsPrivate:       r.IsPrivate,
+		IsFlagged:       r.IsFlagged,
+		EncryptionIV:    r.EncryptionIV,
+		ExpectedVersion: r.ExpectedVersion,
 	}, nil
 }

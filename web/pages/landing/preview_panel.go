@@ -22,6 +22,15 @@ func (p PreviewPanel) Render(b *element.Builder) any {
 					),
 					// Right-aligned icon group: search + focus
 					b.DivClass("preview-header-actions").R(
+						// Back to the list. Shown only at narrow widths, where this
+						// panel is a drawer over the list rather than a column beside
+						// it (see setRightPanelOpen in app.js and the 1024px rules in
+						// app.css).
+						b.Button("class", "btn-icon right-panel-close", "id", "btn-right-panel-close",
+							"onclick", "app.closeRightPanel()",
+							"title", "Back to the note list", "aria-label", "Back to the note list").R(
+							b.Text(`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>`),
+						),
 						// In-note text search — toggles a search bar above the preview body.
 						b.Button("class", "btn-icon", "id", "btn-search-toggle",
 							"onclick", "app.toggleNoteSearch()",

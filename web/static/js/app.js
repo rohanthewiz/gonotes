@@ -199,7 +199,24 @@
   // Enable/disable msgpack encoding for API requests
   // When enabled, note body content is encoded as msgpack for efficient transport
   // Can be toggled via settings or feature flag for backwards compatibility
-  const USE_MSGPACK_ENCODING = true;
+  //
+  // OFF, and the page no longer loads the MessagePack library. Three reasons:
+  //
+  //  - It never ran. The library's script URL was a 404 from the day it was
+  //    added (see web/pages/landing/page.go), so `typeof MessagePack` was
+  //    always 'undefined' and every request already took the plain-JSON path.
+  //    Off is the behaviour the app has always had.
+  //  - It does not save bytes. The body is a single string: msgpack adds a
+  //    few bytes of framing and base64 then adds a third, so body_encoded is
+  //    LARGER than the JSON string it replaces.
+  //  - The encoded path was the riskier one. Its encoder failed on bodies
+  //    past ~100 KB and the save went out with no usable body (fixed, both
+  //    here and on the server, but only reachable with this flag on).
+  //
+  // The helpers below and the server's X-Body-Encoding support stay, so
+  // turning this back on is this flag plus a pinned, vendored copy of the
+  // library, not a rewrite.
+  const USE_MSGPACK_ENCODING = false;
 
   // Encode note body to Base64-encoded msgpack format
   // Used before sending note data to server to reduce payload size
@@ -212,10 +229,21 @@
     try {
       // Encode string to msgpack bytes using @msgpack/msgpack library
       const encoded = MessagePack.encode(body);
-      // Convert Uint8Array to Base64 string for JSON transport
-      // Using btoa with String.fromCharCode for browser compatibility
-      const base64 = btoa(String.fromCharCode.apply(null, encoded));
-      return base64;
+      // Convert Uint8Array to Base64 string for JSON transport.
+      //
+      // The bytes go through String.fromCharCode in CHUNKS. Passing the whole
+      // array in one apply() call makes every byte a function argument, and
+      // engines cap the argument count: past roughly 100 KB (less in WebKit)
+      // the call throws RangeError. That used to send this function to its
+      // catch for any large note - a pasted screenshot, a long capture - and
+      // the save then went out without a usable body. 32 KB per call is far
+      // below every engine's limit.
+      const CHUNK = 0x8000;
+      let binary = '';
+      for (let i = 0; i < encoded.length; i += CHUNK) {
+        binary += String.fromCharCode.apply(null, encoded.subarray(i, i + CHUNK));
+      }
+      return btoa(binary);
     } catch (err) {
       console.error('MsgPack encode error:', err);
       return null;
@@ -727,6 +755,29 @@
       // edit they might then be asked to abandon.
       if (!(await beginEditLease(noteId))) return;
 
+      // Open the form on the note as the server has it NOW, not as the list
+      // had it when the page last loaded. A tab can sit open for hours while
+      // the TUI, gn-clip or a sync pull changes the note; editing the cached
+      // copy would put stale text in the form and name a stale version on
+      // save. The lease is already held, so nothing else can change the note
+      // between this read and the form opening.
+      //
+      // The fresh fields are copied ONTO the cached object rather than
+      // replacing it, so the list row and state.currentNote keep pointing at
+      // one object. A failed read (server briefly unreachable) falls back to
+      // the cached copy: the version guard still refuses the save if that
+      // copy turns out to be behind.
+      try {
+        const fresh = await apiRequest(`/notes/${noteId}`, { quiet: true });
+        if (fresh && fresh.data) {
+          const moved = fresh.data.version !== note.version;
+          Object.assign(note, fresh.data);
+          if (moved) renderNoteList();
+        }
+      } catch (err) {
+        console.warn('Could not refresh the note before editing; using the cached copy', err);
+      }
+
       state.currentNote = note;
       state.isEditing = true;
       populateEditForm(note);
@@ -857,8 +908,33 @@
         // list, so the winning version is visible alongside the form.
         showToast(error.message, 'error');
         if (error.conflict && error.conflict.reason === 'stale') {
+          // The note changed underneath this form. state.currentNote is kept
+          // as it is (loadNotes builds new objects and does not touch it), so
+          // the form still names the version it was opened on and a plain
+          // retry is refused again - which is right until the user has
+          // decided. The decision is offered here, because without it there
+          // is no way forward except copying the text out by hand:
+          //
+          //   OK      save this form over the other change. The form's own
+          //           fields win; the two it cannot edit (tags, flag) are
+          //           taken from the other change so they are not reverted
+          //           by a form that never showed them.
+          //   Cancel  keep editing. Nothing is saved, the text stays put, and
+          //           the next Save asks again.
+          const theirs = error.conflict.current;
           await loadNotes();
           renderNoteList();
+          if (theirs && state.currentNote && confirm(
+              'This note was changed somewhere else while you were editing it.\n\n' +
+              'OK: save your version over that change.\n' +
+              'Cancel: keep editing. Your text stays in the form and nothing is saved yet.')) {
+            state.currentNote.version = theirs.version;
+            state.currentNote.is_flagged = theirs.is_flagged;
+            state.editTags = theirs.tags || null;
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save';
+            return window.app.saveNote(event);
+          }
         }
       } else {
         showToast('Failed to save note', 'error');
@@ -878,6 +954,9 @@
       renderPreview(state.currentNote);
     } else {
       showPreviewMode();
+      // A new note abandoned before its first save leaves nothing to preview;
+      // at narrow widths hand the space back to the list.
+      setRightPanelOpen(false);
     }
   };
 
@@ -1151,6 +1230,7 @@
 
       showPreviewMode();
       renderPreview(note);
+      setRightPanelOpen(true);
     }
   };
 
@@ -1249,6 +1329,8 @@
     document.getElementById('preview-content').innerHTML = '<p class="text-muted">Select a note from the list to preview its content.</p>';
     document.getElementById('preview-footer').style.display = 'none';
     if (window.app.closeNoteSearch) window.app.closeNoteSearch();
+    // Nothing to show: at narrow widths give the space back to the list.
+    setRightPanelOpen(false);
   }
 
   // ============================================
@@ -1687,12 +1769,18 @@
       if (response && response.data) {
         // Update in state.notes
         const idx = state.notes.findIndex(n => n.id === noteId);
+        // A flag toggle bumps the note's version on the server. The cached
+        // copies take the new version along with the flag; otherwise the next
+        // save from this tab would name the pre-toggle version and be refused
+        // as stale against this tab's own click.
         if (idx !== -1) {
           state.notes[idx].is_flagged = response.data.is_flagged;
+          state.notes[idx].version = response.data.version;
         }
         // Update currentNote if it's the same
         if (state.currentNote && state.currentNote.id === noteId) {
           state.currentNote.is_flagged = response.data.is_flagged;
+          state.currentNote.version = response.data.version;
           renderPreview(state.currentNote);
         }
         renderNoteList();
@@ -2303,7 +2391,34 @@
     window.app._clearCategoryEntries();
   }
 
+  // setRightPanelOpen slides the preview/editor pane in or out at narrow
+  // widths. At 1024px and below the stylesheet takes the pane out of the
+  // layout and parks it off the right edge (.right-panel), and only the
+  // "open" class brings it back (.right-panel.open). Nothing ever set that
+  // class, so in a half-screen window selecting a note, New and Edit all
+  // appeared to do nothing: the pane was drawn, just past the edge.
+  //
+  //   wide (>1024px)    pane is a normal column; the class is inert
+  //   narrow (<=1024px) pane is a drawer over the list:
+  //                       select / new / edit  -> open
+  //                       its back button      -> closed (the list again)
+  //
+  // The class is set regardless of width, so a window that is resized narrow
+  // while a note is showing keeps showing it.
+  function setRightPanelOpen(open) {
+    const panel = document.getElementById('right-panel');
+    if (panel) panel.classList.toggle('open', open);
+  }
+
+  // The drawer's back button. Offered only in preview mode (the stylesheet
+  // hides it while the edit form is up): leaving a form goes through Save or
+  // Cancel, which know what to do with the text and the note's lease.
+  window.app.closeRightPanel = function() {
+    setRightPanelOpen(false);
+  };
+
   function showEditMode() {
+    setRightPanelOpen(true);
     document.getElementById('preview-mode').classList.add('hidden');
     document.getElementById('edit-mode').classList.add('active');
     document.getElementById('edit-title').focus();

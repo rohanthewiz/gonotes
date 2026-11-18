@@ -49,7 +49,7 @@ func (p Page) renderHead(b *element.Builder) any {
 		// Coming later at equal specificity is what lets app.css win.
 		b.Text(buildbadge.Head()),
 		// CSS
-		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=19"),
+		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v=20"),
 		// Highlight.js CSS theme - chosen based on current theme (default to dark)
 		b.Link("rel", "stylesheet", "id", "hljs-theme", "href", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css"),
 		// Update hljs theme link based on saved preference
@@ -65,8 +65,14 @@ func (p Page) renderHead(b *element.Builder) any {
 		b.Script("src", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/languages/python.min.js").R(),
 		b.Script("src", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/languages/bash.min.js").R(),
 		b.Script("src", "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/languages/sql.min.js").R(),
-		// MsgPack for efficient note body encoding between client and server
-		b.Script("src", "https://unpkg.com/@msgpack/msgpack@latest/dist/msgpack.min.js").R(),
+		// The @msgpack/msgpack script tag that used to sit here is gone on
+		// purpose. Its URL (unpkg, "@latest", /dist/msgpack.min.js) has answered
+		// 404 since msgpack 3.0 moved the bundle to /dist.umd/ in February 2025,
+		// which is before this page first referenced it. So the browser has
+		// always sent plain JSON bodies, and the tag's only effect was one
+		// failed, render-blocking request per page load. Body encoding is now
+		// switched off explicitly in app.js (USE_MSGPACK_ENCODING), where the
+		// reasons are given.
 		// Mermaid.js for rendering diagrams in ```mermaid code blocks
 		b.Script("src", "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js").R(),
 	)
@@ -144,9 +150,9 @@ func (p Page) renderBody(b *element.Builder) any {
 
 		// Application JavaScript (cache-bust version for development)
 		// app.js must load first — it exposes _internal for cats_subcats.js
-		b.Script("src", "/static/js/app.js?v=19").R(),
+		b.Script("src", "/static/js/app.js?v=20").R(),
 		b.Script("src", "/static/js/cats_subcats.js?v=5").R(),
-		b.Script("src", "/static/js/sync.js?v=4").R(),
+		b.Script("src", "/static/js/sync.js?v=5").R(),
 		b.Script("src", "/static/js/note_links.js?v=2").R(),
 		b.Script("src", "/static/js/image_embed.js?v=2").R(),
 		b.Script("src", "/static/js/note_search.js?v=3").R(),
