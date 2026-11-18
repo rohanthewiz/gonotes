@@ -36,9 +36,264 @@ with every item's premise re-checked against the code at `e0c2a39`.
 - Open, Validate and Roadmap stay in ID order. Edit an item's text in place
   when its premise changes; keep its ID and `raised`.
 
-**Next ID:** N-055
+**Next ID:** N-088
 
 ## Open
+
+Every item here comes from one review of the whole app (2026-11-18): four
+area reads (sync, HTTP server, web front end, TUI) plus the data layer. Six
+of its items (N-055 to N-058, N-060, N-061) were closed in the same session
+and are under Closed. The rest are in suggested order: data safety first,
+then performance, then usability.
+Unless an item says "confirmed", its premise was established by reading the
+code and has not been reproduced at runtime; re-check it when picking it up.
+
+- **N-059** · raised `2026-1118-1516-reliability-perf-usability-review` · value high
+  A sync cycle still treats changes that did not land as delivered. Push:
+  `pushBatch` (`models/sync_client.go`) marks the whole batch delivered,
+  including what the hub rejected, so a rejected edit is never retried and
+  later body diffs build on text the hub lacks. Since N-060 the rejections
+  are at least visible (status `push_rejected` / `push_rejections`, the web
+  and TUI sync summaries, an error log line each), and the marking is a
+  documented choice: retrying everything forever would let a few permanently
+  refused changes be re-sent indefinitely. What is left: have the hub say
+  whether a rejection is transient or permanent, retry the transient ones,
+  and give a permanent one somewhere to go (a "needs attention" list, or a
+  full-snapshot resend). Pull has the mirror problem: an apply error is
+  logged and the page is still acknowledged, with `last_error` empty; do not
+  ack a page with transient failures.
+
+- **N-062** · raised `2026-1118-1516-reliability-perf-usability-review` · value high
+  A conflict's losing edit is still pushed. When a pull resolves a conflict
+  as remote-wins, the spoke applies the remote change and leaves its own
+  pending change in the log, so the same cycle pushes it. The hub applies
+  pushes with no last-writer-wins guard, so the loser overwrites (or is
+  fuzzy-patched onto) the winner there, and the hub marks it delivered to
+  the sender, which therefore never sees the result: the spoke holds one
+  version and the hub and other spokes another. After resolving, rewrite the
+  note's pending changes as one full snapshot of the resolved state
+  (`compactNoteGroupAs`, allowing a group of one), or drop the losers and
+  add an `authored_at` guard to hub apply. No test calls `ResolveConflict`.
+
+- **N-063** · raised `2026-1118-1516-reliability-perf-usability-review` · value medium
+  Conflict detection counts changes that were already pushed.
+  `GetPendingNoteChanges` (`models/sync_conflict.go`) has no sync-marker
+  filter, so every pulled edit to a note this spoke ever edited is treated
+  as a conflict and put through LWW, where clock skew can discard a
+  legitimate later edit. Each one also writes a `sync_conflicts` row holding
+  the full remote change, body included, into the public (unencrypted)
+  database, so private note text lands in plaintext there. Add the
+  not-yet-sent filter, and keep bodies out of the conflict log.
+
+- **N-064** · raised `2026-1118-1516-reliability-perf-usability-review` · value high
+  Ownership may be lost in transit. Category change rows are recorded with
+  an empty user, so a spoke applies pulled categories with `created_by`
+  NULL, and every category read filters on `created_by`: the category is
+  invisible and filing under its name creates a duplicate. Update and delete
+  relays, and hub-compacted snapshots, carry the same empty user for notes.
+  `MigrateOrphaned*` at first registration may be masking this. **Needs a
+  runtime check first** (hub plus a spoke that registers before its first
+  pull); if it reproduces, stamp incoming changes with the recorded hub user
+  GUID and record the owner on relay and compaction rows.
+
+- **N-065** · raised `2026-1118-1516-reliability-perf-usability-review` · value medium
+  The hub's user-scoped pull query joins the change log to the entity row
+  (`INNER JOIN categories … AND c.created_by = ?`, same for notes). A
+  hard-deleted category has no row to join, so its delete never reaches
+  other spokes. A note that flipped privacy moved databases while its
+  earlier change rows stayed behind, so a new or lagging spoke receives only
+  the flip and can create the note from a partial fragment. Store the owner
+  on the change row and filter on that; refuse to create a note from a
+  non-full fragment.
+
+- **N-066** · raised `2026-1118-1516-reliability-perf-usability-review` · value medium
+  No write is atomic across its statements. A note write and its change-log
+  row are separate autocommit statements with the second one's failure only
+  logged (`models/note.go`), so a crash or error between them leaves an edit
+  that never syncs. Sync apply has the same shape (note row, relay row, peer
+  mark), and the privacy move inserts into one database and deletes from
+  the other, so a crash leaves the note in both. bytdb offers transactions
+  (`Engine.WriteTxn`, or a `sql.Session` with BEGIN/COMMIT); give `dbEngine`
+  a `Tx` helper, wrap each per-engine sequence, and add a startup repair for
+  a note id present in both databases. Also cuts fsyncs per pulled page by
+  about two orders of magnitude (each statement fsyncs under SyncAlways).
+
+- **N-067** · raised `2026-1118-1516-reliability-perf-usability-review` · value high
+  The web form drops unsaved edits without asking: clicking any list row,
+  Escape in any input (including Escape to dismiss the Link to Note popup),
+  `n` or `e` when focus is outside an input, a clipboard summary finishing
+  while another note is open, and closing or reloading the tab. There is no
+  dirty tracking, no draft and no `beforeunload`. Add a dirty flag and one
+  `confirmDiscard()` on every exit, a `beforeunload` guard, and a
+  localStorage draft keyed by note GUID. Summarize-body replaces the text
+  with no undo; keep the pre-summary body for one.
+
+- **N-068** · raised `2026-1118-1516-reliability-perf-usability-review` · value medium
+  A session that expires mid-edit loses the edit. Web: any 401, including
+  one from the 30s lease heartbeat or lock poll, clears the token and
+  navigates to `/login`; the 7-day token is never refreshed although
+  `/auth/refresh` exists; `checkAuth` also clears the token on a 5xx or a
+  network error. TUI over HTTP: a resumed session has no password to
+  re-login with, so after expiry every call fails and the advice is to
+  restart, which discards the form. Refresh the token while active, and on
+  a 401 during an edit ask for the password in place.
+
+- **N-069** · raised `2026-1118-1516-reliability-perf-usability-review` · value medium
+  Shutdown does not wait for work in flight. rweb closes the listener and
+  returns, open connections keep being served through the exit sync, and
+  `CloseDB` then sets the engines to nil under them. `SyncOnExit` and
+  `SyncNow` return success when another cycle holds the lock (`TryLock`
+  fails, `runSyncCycle` returns nil), so "Final sync complete" can be logged
+  over a cycle that is still running when the databases close. Add a
+  stopping flag plus WaitGroup middleware, have `SyncOnExit` wait on the
+  cycle lock (bounded), and let a second signal abort the exit sync.
+
+- **N-070** · raised `2026-1118-1516-reliability-perf-usability-review` · value medium
+  Server hardening for a hub reachable from a phone. Login has no attempt
+  limit (and unknown usernames answer faster than known ones);
+  `RateLimitMiddleware` exists but is unused and keys on a client-supplied
+  header. The request body cap is rweb's 100 MB default, before auth. A
+  missing `GONOTES_JWT_SECRET` falls back to a constant in the source with
+  no warning. `/sync/push` applies updates and deletes by GUID with no owner
+  check (multi-user hubs only). The server speaks plain HTTP with no TLS
+  option and no documented proxy. Each is small; do them together.
+
+- **N-071** · raised `2026-1118-1516-reliability-perf-usability-review` · value medium
+  Static assets are versioned by hand and it has drifted: `image_embed.js`
+  changed in `66c3670` and is still `?v=2`, `auth.js` and `setup.js` have no
+  version, the login page uses `app.css?v=4` against the landing page's
+  `v=19`. Assets are served `max-age=3600` with no ETag, uncompressed, so a
+  phone re-downloads about 400 KB every hour and can run stale JS for up to
+  an hour after an upgrade. Use the build commit (already available for the
+  build badge) as the version on every asset through one helper, serve
+  versioned assets `immutable`, and gzip text assets and large JSON.
+
+- **N-072** · raised `2026-1118-1516-reliability-perf-usability-review` · value medium
+  The page needs five CDN scripts to render a note (marked, DOMPurify,
+  highlight.js, mermaid; msgpack is gone as of N-056). `marked` is unpinned
+  and mermaid is `@11`, so an upstream release changes every install, and
+  offline the body pane silently keeps the previous note's content.
+  Separately, a stopped server shows a "Failed to fetch" toast each minute
+  while the status bar still says "Synced". Vendor and pin the libraries
+  beside Monaco, fall back to escaped text when one is missing, and drive a
+  "server unreachable" status from consecutive poll failures.
+
+- **N-073** · raised `2026-1118-1516-reliability-perf-usability-review` · value medium
+  Avoidable web client costs with the whole library loaded (N-028 stays
+  parked; these apply within it). Every save, delete and batch action
+  re-downloads all notes with bodies although the response already holds
+  the note. A checkbox tick or search keystroke runs the filter and sort
+  twice and rebuilds every row. Search lowercases every body per pass,
+  embedded `data:image` payloads included, which also gives false hits on
+  short terms. Selecting a note fetches categories it already has in
+  `state.noteCategoryMap`, with no stale-response guard.
+
+- **N-074** · raised `2026-1118-1516-reliability-perf-usability-review` · value low
+  Unsent-change queries use `id NOT IN (SELECT …)`, which bytdb evaluates as
+  a linear walk of the subquery per outer row: cost grows as changes times
+  rows already marked for that peer. They run three times per status poll
+  (every 60s per tab and TUI) and six times per pull page. Fine at today's
+  log size; replace with a per-peer high-water mark or an anti-join before
+  the log reaches tens of thousands of rows. Not benchmarked.
+
+- **N-075** · raised `2026-1118-1516-reliability-perf-usability-review` · value low
+  TUI costs that grow with the library. Every "back" from a note reloads all
+  notes with bodies, changed or not. The `/` filter converts and lowercases
+  every body on each keystroke. The preview pane renders the whole note
+  through glamour inside `View()` and shows one screenful, and its cache is
+  dropped whenever the detail view's different wrap width is used.
+
+- **N-076** · raised `2026-1118-1516-reliability-perf-usability-review` · value medium
+  Web list goes stale under an advanced query: `getFilteredNotes` returns
+  the query's snapshot, mutations update only `state.notes`, and nothing
+  re-runs the query, so a flagged, edited or deleted note keeps its old row.
+  The "Unsynced" filter chip lights up and filters nothing
+  (`state.filters.unsynced` is set and never read; confirmed).
+
+- **N-077** · raised `2026-1118-1516-reliability-perf-usability-review` · value medium
+  Rendered note content has more reach than it should. Mermaid runs with
+  `securityLevel: 'loose'`, which allows click handlers and unsanitised
+  URLs in a diagram; the DOMPurify config allows `id` and form elements, so
+  a note body can shadow the app's own element ids; toasts are built with
+  `innerHTML` from server and user text. `escapeHtml` is also used inside
+  inline `onchange="…'${…}'"` attributes, where it does not escape quotes:
+  a category or subcategory with an apostrophe gets checkboxes that toggle
+  on screen and change nothing.
+
+- **N-078** · raised `2026-1118-1516-reliability-perf-usability-review` · value medium
+  TUI async replies go to whichever screen is on top. A summary can land in
+  a different note's form than the one that asked, or replace text typed
+  while waiting; a list load that returns after `n` was pressed is dropped
+  and the list stays empty; two loads in flight finish in either order.
+  Replies carry no request identity, and there is no refresh key. Stamp a
+  generation on list loads, carry the requesting form on summary replies,
+  and add a refresh binding.
+
+- **N-079** · raised `2026-1118-1516-reliability-perf-usability-review` · value medium
+  TUI, with a `/` filter applied: any reload (back from a note, flag,
+  delete, save) returns to page 1 and pagination stays at one page, so
+  results past the first page are unreachable until a resize or re-filter.
+  From bubbles v2.1.1 `SetItems` clearing `filteredItems` and
+  `FilterMatchesMsg` not recomputing pagination. Read from library source,
+  not run; write a teatest for it first.
+
+- **N-080** · raised `2026-1118-1516-reliability-perf-usability-review` · value low
+  Smaller TUI reliability items. "Sync now" over HTTP uses the 15s client
+  while the server syncs synchronously (30s per hub request), so a slow hub
+  reads as "Sync failed" while the cycle continues. The sync-due dialog can
+  open while typing in the `/` prompt, and the next key answers it.
+  `$EDITOR` values with arguments (`code -w`) fail, and a non-zero editor
+  exit deletes the temp file unread. The lease keeper stops for good after
+  one failed renew, its "saving is blocked" banner is not enforced, and one
+  goroutine leaks per edit form. The token cache is not keyed by server URL.
+
+- **N-081** · raised `2026-1118-1516-reliability-perf-usability-review` · value low
+  No TUI screen lists every key. `?` on the list shows the widget's keys and
+  none of the app's (`AdditionalFullHelpKeys` is never set), the short
+  footer is cut off in the wide layout, and in the detail view `f` and `d`
+  (the viewport's paging keys) flag and delete instead.
+
+- **N-082** · raised `2026-1118-1516-reliability-perf-usability-review` · value low
+  Web keyboard and feedback gaps: list rows are not focusable and have no
+  arrow navigation; every toast, including the lease-lost warning, vanishes
+  after 3s; Ctrl/Cmd+S works only with focus in an input and can send
+  concurrent saves; links in a rendered note open in the same tab and
+  replace the app.
+
+- **N-083** · raised `2026-1118-1516-reliability-perf-usability-review` · value low
+  Summarize failures reach the user as "exit status 1" (the handler returns
+  `err.Error()`, which for a serr is the root error), every request forks a
+  `claude` process for up to 3 minutes with no concurrency cap, closing the
+  tab does not cancel it, and the model name is unrestricted.
+
+- **N-084** · raised `2026-1118-1516-reliability-perf-usability-review` · value low
+  The follow-up flag does not sync. `is_flagged` has no fragment bit, flag
+  toggles record no change, and sync apply keeps the local value, so a note
+  flagged on one device is unflagged on the others. Changing that touches
+  the wire format (and the mobile app), so it needs a decision, not a patch.
+
+- **N-085** · raised `2026-1118-1516-reliability-perf-usability-review` · value medium
+  Backup follow-ups (N-055 landed the mechanism). The web UI has no "Back up
+  now" button or "last backup" line in the ⚙ panel, and the TUI shows
+  nothing; a failed scheduled backup is only a log line. There is no
+  `gonotes restore`: restoring is a documented file copy. Restoring a sync
+  spoke is untested: the backup carries the spoke's sync bookkeeping from
+  that moment while the hub remembers what it delivered since, so check
+  whether a restored spoke converges (and what it needs if not) before
+  anyone relies on it. Sets also sit on the same disk by default.
+
+- **N-086** · raised `2026-1118-1516-reliability-perf-usability-review` · value low
+  Spoke setup round trip, what N-057 left: the exported `hub_url` is built
+  from the admin's `Host` header, so exporting while browsing the hub as
+  `localhost` yields a config that points the spoke at itself. Accept an
+  explicit `hub_url` in the export request and warn on a loopback host.
+
+- **N-087** · raised `2026-1118-1516-reliability-perf-usability-review` · value low
+  Small sync items: auto-mode backoff is measured from the last success, so
+  it never delays anything and a down hub is probed more often than a
+  healthy one; the consistency check hashes GUID sets only, so content
+  divergence is invisible to it. (The empty-body 401 retry that was listed
+  here is fixed; see N-060.)
 
 ## Validate
 
@@ -104,6 +359,131 @@ session doc marked an item as deferred, so move items here from Open by hand.
   has raised the default again. Raised in `2026-0818-1739-duplicate-note-dialog`.
 
 ## Closed
+
+- **N-061** · raised `2026-1118-1516-reliability-perf-usability-review` · closed
+  2026-11-18, `2026-1118-1516-reliability-perf-usability-review` — TUI saves that half-succeeded did quiet
+  damage. A save writes the note, then reconciles its categories, and the
+  form treated a failure of the second step as a failure of the whole.
+  - **Duplicates.** A new note was created, the category step failed, the
+    form kept no id, and every retry created another note. On an existing
+    note the retry named the pre-save version and was refused as stale
+    against the user's own save. Done: `adoptSavedNote` (`tui/form.go`)
+    makes the form an edit of the note that was written, with only the
+    Categories field still counted as unsaved; the status says the note was
+    saved and its categories were not.
+  - **Stripped categories.** A failed category prefill left the field empty
+    with no message, and the save replaced the note's links with that empty
+    field. Done: the form tracks the prefill (`catsPrefillState`). While it
+    is loading a save waits and says so; if it failed, the status says so
+    and saves run in `categoriesAddOnly` mode (`tui/commands.go`), which
+    keeps every stored link and adds or re-selects what is typed.
+  - Also: the prefill reply carries its note id and a form ignores another
+    note's; text typed before the reply arrives is kept after the stored
+    set, not overwritten.
+  `tui/form_partial_save_test.go`, six tests; with the two fixes disabled
+  three fail, one of them with "categories after the save = []".
+
+- **N-060** · raised `2026-1118-1516-reliability-perf-usability-review` · closed
+  2026-11-18, `2026-1118-1516-reliability-perf-usability-review` — Push sent one batch of 100 per cycle. Done:
+  `pushChanges` loops until the unsent stream is empty (`pushBatchSize` 100,
+  bounded by `maxPushBatches` and by a no-progress check that errors if a
+  batch starts with the change the previous one started with). Each batch
+  is `pushBatch`. Found and fixed on the way, since a longer loop makes it
+  likelier: `doAuthenticatedRequest` retried after a 401 with the request
+  body already read to its end, so a push retried after a token expiry
+  reached the hub with no changes in it, was answered success, and the
+  batch was then marked delivered; the body is now rewound first. Hub
+  rejections are recorded on the client and reported (see N-059, which
+  stays open for the retry policy). `models/sync_client_push_test.go`: 237
+  notes go out as 100/100/37 with none repeated and none left pending;
+  rejections reach `GetStatus` and clear after a clean push; the retried
+  push carries its changes (fails with the rewind disabled). `sync.js?v=5`.
+
+- **N-058** · raised `2026-1118-1516-reliability-perf-usability-review` · closed
+  2026-11-18, `2026-1118-1516-reliability-perf-usability-review` — At window widths of 1024px and below, the
+  preview and edit pane was off-screen and nothing opened it. The stylesheet
+  parks `.right-panel` past the right edge there and only `.right-panel.open`
+  brings it back, and no code ever set `open`: in a half-screen window,
+  selecting a note, New and Edit all appeared to do nothing. Confirmed by
+  measuring in headless Chrome at 1000px and 700px (pane `left` equal to the
+  viewport width). Done: `setRightPanelOpen` (`web/static/js/app.js`) opens
+  the drawer from `selectNote` and `showEditMode` and closes it from
+  `clearPreview` and from cancelling a never-saved note; a back arrow in the
+  preview header (`btn-right-panel-close`, shown only at these widths)
+  returns to the list; the drawer is `min(100%, max(60%, 560px))` wide.
+  `app.css?v=20`. Re-measured at 1400, 1000 and 700px, 19 checks, plus a
+  screenshot at 900px. This is the narrow half of N-054's hand check, which
+  had covered the filter row and not the pane.
+
+- **N-057** · raised `2026-1118-1516-reliability-perf-usability-review` · closed
+  2026-11-18, `2026-1118-1516-reliability-perf-usability-review` — `POST /api/v1/setup/apply` let anyone who
+  could reach the port rewrite the server's `.env`. Its only guard was "sync
+  is not enabled", which is true of every hub and standalone server. Three
+  things were wrong and all are fixed (`web/api/config_import.go`):
+  - **Who:** with no accounts (first run) it stays open, the case it exists
+    for; once an account exists it requires an admin. `setup.js` now sends
+    the signed-in token, so an admin can still apply from `/setup`.
+  - **What:** values are refused if they contain a line break, which would
+    have added an environment variable of the sender's choosing.
+  - **How:** it overwrote the whole file, deleting anything else kept there,
+    `GONOTES_ENCRYPTION_KEY` included (the private database would then not
+    open at next start). It now merges through `setEnvFileValues`, one
+    temp-file-plus-rename for all keys, and creates `config/cfg_files/` on a
+    fresh data directory. Values containing `#` are quoted so the loader
+    reads them back whole.
+  Tests: `web/api/setup_apply_test.go` (unauthenticated and non-admin 403,
+  multi-line 400, admin 200, first-run 200) and three in
+  `config_env_test.go`, one of which round-trips values through the real
+  loader. Left for N-086: `hub_url` taken from the `Host` header.
+
+- **N-056** · raised `2026-1118-1516-reliability-perf-usability-review` · closed
+  2026-11-18, `2026-1118-1516-reliability-perf-usability-review` — The web save path could store an empty body
+  and could not be guarded against stale writes in msgpack mode. Found by
+  review, then traced further: the msgpack library's script URL
+  (`unpkg …@latest/dist/msgpack.min.js`) has been a 404 since before the tag
+  was added, so the encoded path **never ran in a browser** and both defects
+  were latent. Had the URL been corrected, any save of a body past about
+  100 KB would have erased it with a success toast (the encoder spread every
+  byte as a call argument, threw, and the fallback sent a plain `body` that
+  the server ignored under the msgpack header). Done:
+  - Server: `MsgPackBodyRequest` accepts a plain `body` when `body_encoded`
+    is empty and carries `expected_version`; `MsgPackBodyResponse` carries
+    `version` (`models/msgpack.go`). `web/api/msgpack_body_test.go` fails on
+    the old code with "stored body is 0 bytes".
+  - Client: the encoder converts in 32 KB chunks; `USE_MSGPACK_ENCODING` is
+    now `false` and the dead script tag is removed, since base64-of-msgpack
+    is larger than the JSON string it replaced.
+  - A live defect on the plain path, fixed alongside: flagging a note and
+    then saving it from the same tab was refused as stale on every retry
+    (the flag bumps the version, the tab kept the old one, and a stale 409
+    never refreshed it). `toggleNoteFlag` now takes the version from the
+    response, `editNote` re-reads the note once the lease is held, and a
+    stale 409 asks: save over the other change (keeping its tags and flag,
+    which the form cannot edit) or keep editing. `app.js?v=20`.
+  Checked in headless Chrome against a scratch server, 18 checks: a 300 KB
+  body saved through the form and read back intact, the form opening on
+  text changed behind the tab's back, a mid-edit change producing 409 then
+  200 after one prompt, and flag-then-save succeeding first time.
+
+- **N-055** · raised `2026-1118-1516-reliability-perf-usability-review` · closed
+  2026-11-18, `2026-1118-1516-reliability-perf-usability-review` — Nothing backed the notes up. Both databases
+  were the only copy that did not follow every edit (sync relays mistakes
+  faithfully). Done: `models/backup.go` takes a consistent online copy of
+  both engines (`Engine.BackupTo`, no pause, private copy stays ciphertext)
+  into `<dir>/data/backups/<UTC stamp>/` with a manifest, published by
+  directory rename so a set is whole or absent. Unchanged data is not
+  backed up again (content hash against the newest set), so rotation's
+  slots hold distinct states. Default: every 24h, keep 7, timed from the
+  newest set so short daily sessions still add up; `GONOTES_BACKUP_INTERVAL`
+  (`off` disables), `GONOTES_BACKUP_KEEP`, `GONOTES_BACKUP_DIR`. Runs in the
+  server and in the local-mode TUI. On demand: admin
+  `POST /api/v1/admin/backup`, `GET /api/v1/admin/backups`, and
+  `gonotes backup` / `gonotes backup list` (the first needs the server
+  stopped and says so, naming the endpoint). Tests cover restore-by-opening,
+  unchanged skip, rotation (which caught a same-second naming bug where a
+  new set could be pruned by its own pass), stale staging sweep, the
+  schedule, the encrypted copy, and the API's admin gate. Run end to end on
+  a scratch server. Raised N-085.
 
 - **N-053** · raised `2026-1013-1525-ui-reorder-filter-bar-sync-panel` · closed
   2026-10-13, `2026-1013-1922-n053-regex-placeholder` — Regex placeholder left
