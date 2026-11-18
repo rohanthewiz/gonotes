@@ -292,3 +292,29 @@ func TestTheBannerIsSilentWhenNothingIsDue(t *testing.T) {
 		}
 	}
 }
+
+// A push the hub partly refused is still a successful cycle, so the only way
+// the TUI can avoid calling it "Synced" without qualification is to carry the
+// refused count into both sentences a person reads: the status line after a
+// sync, and the banner's summary.
+func TestSyncSummariesMentionChangesTheHubRefused(t *testing.T) {
+	now := time.Now()
+	refused := &models.SyncClientStatus{Enabled: true, LastSync: &now, PushRejected: 2}
+	clean := &models.SyncClientStatus{Enabled: true, LastSync: &now}
+
+	if got := syncSuccessLine(syncDoneMsg{status: refused}); !strings.Contains(got, "2 changes were refused by the hub") {
+		t.Errorf("success line after a partly refused push = %q", got)
+	}
+	if got := syncSuccessLine(syncDoneMsg{status: clean}); strings.Contains(got, "refused") {
+		t.Errorf("success line after a clean push mentions a refusal: %q", got)
+	}
+
+	s := &syncState{status: refused}
+	if got := s.overdueSummary(); !strings.Contains(got, "2 changes were refused by the hub") {
+		t.Errorf("banner summary = %q", got)
+	}
+	one := &syncState{status: &models.SyncClientStatus{Enabled: true, LastSync: &now, PushRejected: 1}}
+	if got := one.overdueSummary(); !strings.Contains(got, "1 change was refused by the hub") {
+		t.Errorf("banner summary for one refusal = %q", got)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -72,6 +73,14 @@ type SyncClient struct {
 	lastSync  time.Time
 	lastError error
 
+	// pushRejected is what the hub refused in the most recent push, and
+	// pushRejectedCount how many that was (the slice is capped, the count is
+	// not). A cycle that pushed and was partly refused still counts as a
+	// successful cycle, so lastError stays nil; these are how such a cycle
+	// stops looking identical to a clean one.
+	pushRejected      []SyncPushRejection
+	pushRejectedCount int
+
 	// snoozeUntil suppresses the "sync is due" report until it passes. This is
 	// what a UI's "not now" writes: due-ness is derived from lastSync, which a
 	// dismissal must not touch (dismissing a prompt is not syncing), so the
@@ -128,6 +137,14 @@ type SyncClientStatus struct {
 	SnoozedUntil      *time.Time `json:"snoozed_until,omitempty"` // nil when not snoozed
 	CompactBeforePush bool       `json:"compact_before_push"`     // compaction runs automatically on push
 	SyncOnExit        bool       `json:"sync_on_exit"`            // a final cycle runs at shutdown
+
+	// PushRejected is how many changes the hub refused in the most recent
+	// push, and PushRejections the first few of them with the hub's reasons.
+	// Zero and empty after a clean push. A refused change is not retried
+	// (see SyncClient.pushBatch), so this is the only place it shows up
+	// outside the log.
+	PushRejected   int                 `json:"push_rejected"`
+	PushRejections []SyncPushRejection `json:"push_rejections,omitempty"`
 }
 
 // Schema for sync_state lives in schema.go (public database only). Keyed
@@ -494,6 +511,8 @@ func (sc *SyncClient) GetStatus() *SyncClientStatus {
 	lastErr := sc.lastError
 	failures := sc.consecutiveFailures
 	snooze := sc.snoozeUntil
+	rejectedCount := sc.pushRejectedCount
+	rejections := append([]SyncPushRejection(nil), sc.pushRejected...)
 	sc.stateMu.Unlock()
 
 	status := &SyncClientStatus{
@@ -508,6 +527,9 @@ func (sc *SyncClient) GetStatus() *SyncClientStatus {
 		PromptAfterSecs:   int64(sc.config.PromptAfter.Seconds()),
 		CompactBeforePush: sc.config.CompactBeforePush,
 		SyncOnExit:        sc.config.SyncOnExit,
+
+		PushRejected:   rejectedCount,
+		PushRejections: rejections,
 	}
 	if !lastSync.IsZero() {
 		status.LastSync = &lastSync
@@ -867,7 +889,21 @@ func (sc *SyncClient) doAuthenticatedRequest(ctx context.Context, method, url st
 			return nil, serr.Wrap(err, "re-authentication failed after 401")
 		}
 
-		// Rebuild request with new token (body may have been consumed)
+		// Rebuild request with new token. The first attempt read the body to
+		// its end, so it is rewound first: without that the retry carried an
+		// empty body, and a push retried after a token expiry reached the hub
+		// as a request with no changes in it. Every caller passes a
+		// bytes.Reader or nil; a non-seekable body cannot be replayed and is
+		// refused rather than sent empty.
+		if body != nil {
+			seeker, ok := body.(io.Seeker)
+			if !ok {
+				return nil, serr.New("cannot retry a request whose body cannot be rewound")
+			}
+			if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+				return nil, serr.Wrap(err, "failed to rewind request body for retry")
+			}
+		}
 		req, err = http.NewRequestWithContext(ctx, method, url, body)
 		if err != nil {
 			return nil, serr.Wrap(err, "failed to create retry request")
@@ -1094,32 +1130,104 @@ func (sc *SyncClient) pushChanges(ctx context.Context) error {
 		}
 	}
 
-	// Use the same unified change stream that the hub uses for pulls,
-	// but from our local perspective: changes not yet sent to the hub.
-	// Empty userGUID: spoke is single-user, no per-user filtering needed locally
-	response, err := GetUnifiedChangesForPeer(sc.peerID, "", 100)
-	if err != nil {
-		return serr.Wrap(err, "failed to get local changes for push")
+	// The backlog goes out in batches until none is left. It used to be one
+	// batch per cycle, so after an import or a long spell offline "Sync now"
+	// (and the exit sync, which has nobody to press it again) moved 100
+	// changes and reported the cycle complete with the rest still queued.
+	//
+	//	┌─▶ read up to pushBatchSize unsent changes ──(none)──▶ done
+	//	│        │
+	//	│   POST to the hub
+	//	│        │
+	//	│   mark the batch delivered, record what the hub refused
+	//	│        │
+	//	└──(more)┘
+	//
+	// Two bounds keep the loop honest. A batch that starts with the same
+	// change as the one before it means marking did not take, and sending it
+	// again would repeat forever, so that is an error. And maxPushBatches caps
+	// one cycle's work; a backlog beyond it continues next cycle.
+	var rejected []SyncPushRejection
+	pushed := 0
+	previousFirst := ""
+	for batch := 0; batch < maxPushBatches; batch++ {
+		if err := ctx.Err(); err != nil {
+			return serr.Wrap(err, "push stopped before the backlog was sent", "pushed", strconv.Itoa(pushed))
+		}
+
+		// Use the same unified change stream that the hub uses for pulls,
+		// but from our local perspective: changes not yet sent to the hub.
+		// Empty userGUID: spoke is single-user, no per-user filtering needed locally
+		response, err := GetUnifiedChangesForPeer(sc.peerID, "", pushBatchSize)
+		if err != nil {
+			return serr.Wrap(err, "failed to get local changes for push")
+		}
+		if len(response.Changes) == 0 {
+			break // Nothing (left) to push
+		}
+		if first := response.Changes[0].GUID; first == previousFirst {
+			return serr.New("push is not advancing: the same change was read back after being sent",
+				"change_guid", first)
+		} else {
+			previousFirst = first
+		}
+
+		batchRejected, err := sc.pushBatch(ctx, response.Changes)
+		if err != nil {
+			return err
+		}
+		pushed += len(response.Changes)
+		rejected = append(rejected, batchRejected...)
+
+		if !response.HasMore {
+			break
+		}
 	}
 
-	if len(response.Changes) == 0 {
-		return nil // Nothing to push
+	sc.recordPushRejections(rejected)
+	if pushed > 0 {
+		logger.Info("Pushed changes to hub", "count", pushed-len(rejected), "rejected", len(rejected))
 	}
+	return nil
+}
 
+// pushBatchSize is how many changes one push request carries, and
+// maxPushBatches how many requests one cycle may make. Together they bound a
+// cycle at 100,000 changes, far past any backlog a notes app builds, while
+// still guaranteeing the loop in pushChanges ends.
+const (
+	pushBatchSize  = 100
+	maxPushBatches = 1000
+)
+
+// pushBatch sends one batch to the hub, marks it delivered, and returns the
+// changes the hub refused.
+//
+// EVERY change in the batch is marked delivered, refused ones included. That
+// is a deliberate limit of this step, not an oversight. Marking only the
+// accepted ones would retry a refused change on every cycle forever, and the
+// push stream is ordered, so a few permanently refused changes at its head
+// would be re-sent indefinitely. Telling a transient refusal (worth retrying)
+// from a permanent one needs the hub to say which it is, which the protocol
+// does not yet do. What changed is that a refusal is no longer silent: each
+// one is logged with its reason and reported through the sync status (see
+// recordPushRejections), so "synced" can no longer hide an edit the hub did
+// not take.
+func (sc *SyncClient) pushBatch(ctx context.Context, changes []SyncChange) ([]SyncPushRejection, error) {
 	pushReq := SyncPushRequest{
 		PeerID:  sc.peerID,
-		Changes: response.Changes,
+		Changes: changes,
 	}
 
 	body, err := json.Marshal(pushReq)
 	if err != nil {
-		return serr.Wrap(err, "failed to marshal push request")
+		return nil, serr.Wrap(err, "failed to marshal push request")
 	}
 
 	url := sc.config.HubURL + "/api/v1/sync/push"
 	resp, err := sc.doAuthenticatedRequest(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return serr.Wrap(err, "push request failed")
+		return nil, serr.Wrap(err, "push request failed")
 	}
 	defer resp.Body.Close()
 
@@ -1128,26 +1236,39 @@ func (sc *SyncClient) pushChanges(ctx context.Context) error {
 		Data    SyncPushResponse `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
-		return serr.Wrap(err, "failed to decode push response")
+		return nil, serr.Wrap(err, "failed to decode push response")
 	}
 
 	if !apiResp.Success {
-		return serr.New("push request returned success=false")
+		return nil, serr.New("push request returned success=false")
 	}
 
-	// Mark accepted changes as synced so they won't be pushed again
-	MarkSyncChangesForPeer(response.Changes, sc.peerID)
+	// Mark the batch as synced so it won't be pushed again (see the function
+	// comment for why this includes what the hub refused).
+	MarkSyncChangesForPeer(changes, sc.peerID)
 
-	if len(apiResp.Data.Rejected) > 0 {
-		logger.Info("Some changes rejected by hub",
-			"accepted", len(apiResp.Data.Accepted),
-			"rejected", len(apiResp.Data.Rejected),
-		)
-	} else {
-		logger.Info("Pushed changes to hub", "count", len(apiResp.Data.Accepted))
+	for _, rej := range apiResp.Data.Rejected {
+		logger.LogErr(serr.New("hub refused a pushed change; it will not be retried",
+			"change_guid", rej.GUID, "reason", rej.Reason))
 	}
+	return apiResp.Data.Rejected, nil
+}
 
-	return nil
+// maxRecordedRejections caps how many refusals the status keeps. The count is
+// always exact; only the detail is capped.
+const maxRecordedRejections = 20
+
+// recordPushRejections stores what the hub refused in the latest push, for
+// GetStatus. A push with no refusals clears it, so the status describes the
+// most recent cycle rather than accumulating every refusal since start.
+func (sc *SyncClient) recordPushRejections(rejected []SyncPushRejection) {
+	sc.stateMu.Lock()
+	defer sc.stateMu.Unlock()
+	sc.pushRejectedCount = len(rejected)
+	if len(rejected) > maxRecordedRejections {
+		rejected = rejected[:maxRecordedRejections]
+	}
+	sc.pushRejected = append([]SyncPushRejection(nil), rejected...)
 }
 
 // verifyConsistency compares local and remote checksums to detect data divergence.

@@ -606,6 +606,14 @@
       // the reader needs is that the hub is not answering right now.
       parts.push('the hub is not responding');
     }
+    if (spokeStatus.push_rejected > 0) {
+      // The last push went through, but the hub turned some changes down and
+      // they are not retried. A cycle like that is otherwise indistinguishable
+      // from a clean one, so it is said here; the reasons are in the server log
+      // and in push_rejections on the status.
+      parts.push(spokeStatus.push_rejected +
+        (spokeStatus.push_rejected === 1 ? ' change was' : ' changes were') + ' refused by the hub');
+    }
     return parts.join(', ');
   }
 

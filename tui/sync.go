@@ -99,10 +99,24 @@ func (s *syncState) overdueSummary() string {
 	} else if ago := time.Since(*s.status.LastSync); ago > time.Minute {
 		parts = append(parts, "last synced "+humanAge(ago)+" ago")
 	}
+	if n := s.status.PushRejected; n > 0 {
+		parts = append(parts, refusedByHub(n))
+	}
 	if len(parts) == 0 {
 		return "sync is due"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// refusedByHub words the count of changes the hub turned down in the last
+// push. Those changes are not retried, and the cycle that carried them still
+// counts as a success, so this phrase is the only sign of them on screen; the
+// hub's reasons are in the log and in the status's PushRejections.
+func refusedByHub(n int) string {
+	if n == 1 {
+		return "1 change was refused by the hub"
+	}
+	return strconv.Itoa(n) + " changes were refused by the hub"
 }
 
 // plural renders a count with the right noun. Small enough to inline and
@@ -374,6 +388,10 @@ func syncSuccessLine(msg syncDoneMsg) string {
 		// A cycle pushes in batches, so a very long backlog can survive one
 		// run. Saying so beats a "Synced" that leaves the banner up.
 		line += " — " + plural(msg.status.Pending, "change", "changes") + " still queued"
+	}
+	if msg.status != nil && msg.status.PushRejected > 0 {
+		// "Synced" alone would be untrue for the changes the hub turned down.
+		line += " — " + refusedByHub(msg.status.PushRejected)
 	}
 	return line
 }
