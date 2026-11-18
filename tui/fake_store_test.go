@@ -57,6 +57,13 @@ type fakeStore struct {
 	// storage failure any other way means corrupting a real database.
 	failWith error
 
+	// failCategoryDetails, when set, is returned by GetNoteCategoryDetails
+	// alone. That one read is both the form's category prefill and the first
+	// step of a save's category sync, so failing it by itself produces the two
+	// half-failures failWith cannot: a form whose prefill never arrived, and a
+	// save whose note was written while its categories were not.
+	failCategoryDetails error
+
 	// queryCalls and lastQuery record what the advanced search asked for. A
 	// query that never reaches the store looks the same from the outside as one
 	// that matched nothing, and the difference is what several of the query
@@ -769,6 +776,9 @@ func (f *fakeStore) GetNoteCategoryDetails(noteID int64, userGUID string) ([]mod
 	defer f.mu.Unlock()
 	if f.failWith != nil {
 		return nil, f.failWith
+	}
+	if f.failCategoryDetails != nil {
+		return nil, f.failCategoryDetails
 	}
 	var out []models.NoteCategoryDetailOutput
 	for _, l := range f.links[noteID] {

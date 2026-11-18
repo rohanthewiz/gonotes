@@ -185,7 +185,10 @@ type noteSavedMsg struct {
 // comma-separated specs from the form ("Work/backend, Personal"); unknown
 // categories and unknown subcategories are created on the fly so assigning a
 // brand-new one doesn't require a separate trip to the category screen.
-func saveNoteCmd(st Store, noteID int64, input models.NoteInput, categoriesCSV string, userGUID string) tea.Cmd {
+//
+// catMode says how the typed specs relate to the links already stored; see
+// categorySyncMode.
+func saveNoteCmd(st Store, noteID int64, input models.NoteInput, categoriesCSV string, catMode categorySyncMode, userGUID string) tea.Cmd {
 	return func() tea.Msg {
 		var note *models.Note
 		var err error
@@ -205,14 +208,34 @@ func saveNoteCmd(st Store, noteID int64, input models.NoteInput, categoriesCSV s
 			return noteSavedMsg{err: serr.New("note not found or not owned by you")}
 		}
 
-		if err = syncNoteCategories(st, note.ID, categoriesCSV, userGUID); err != nil {
+		if err = syncNoteCategoriesMode(st, note.ID, categoriesCSV, catMode, userGUID); err != nil {
 			// The note itself saved fine; report the category issue but
-			// still return the note so the UI reflects the save.
+			// still return the note so the UI reflects the save. The form
+			// relies on getting the note back here: it adopts it, so that a
+			// retry updates this note instead of creating another.
 			return noteSavedMsg{note: note, err: serr.Wrap(err, "note saved, but category update failed")}
 		}
 		return noteSavedMsg{note: note}
 	}
 }
+
+// categorySyncMode says what the form's Categories field means for a save.
+//
+//	categoriesReplace  the field is the whole truth: links it does not name
+//	                   are removed. Right whenever the field was prefilled
+//	                   from storage (or the note is new and has no links).
+//	categoriesAddOnly  the field holds additions only: every stored link is
+//	                   kept, and what is typed is added or re-selected. Used
+//	                   when the prefill could not be loaded, so the field's
+//	                   emptiness means "unknown", not "none". Replacing in
+//	                   that state would strip every category from a note
+//	                   whose owner only edited its body.
+type categorySyncMode int
+
+const (
+	categoriesReplace categorySyncMode = iota
+	categoriesAddOnly
+)
 
 // syncNoteCategories makes the note's category assignments match the specs
 // typed into the form's one-line field. A spec is "Name" or "Name/sub" or
@@ -242,6 +265,15 @@ func saveNoteCmd(st Store, noteID int64, input models.NoteInput, categoriesCSV s
 // call it costs a single round trip over HTTP and a single sync change record.
 // An unchanged re-save still writes nothing.
 func syncNoteCategories(st Store, noteID int64, categoriesCSV string, userGUID string) error {
+	return syncNoteCategoriesMode(st, noteID, categoriesCSV, categoriesReplace, userGUID)
+}
+
+// syncNoteCategoriesMode is syncNoteCategories with the meaning of the typed
+// specs made explicit (see categorySyncMode). In add-only mode the stored
+// links are folded into the desired set before it is applied, so the single
+// SetNoteCategories call below keeps them; a name that is both stored and
+// typed takes the typed selection, since that is the one the user just made.
+func syncNoteCategoriesMode(st Store, noteID int64, categoriesCSV string, mode categorySyncMode, userGUID string) error {
 	names, subsByName := models.ParseCategorySpecCSV(categoriesCSV)
 
 	// Current links are read in the detail shape so that a name already on the
@@ -254,6 +286,19 @@ func syncNoteCategories(st Store, noteID int64, categoriesCSV string, userGUID s
 	linked := map[string]models.NoteCategoryDetailOutput{}
 	for _, c := range current {
 		linked[c.Name] = c
+	}
+
+	if mode == categoriesAddOnly {
+		if subsByName == nil {
+			subsByName = map[string][]string{}
+		}
+		for _, c := range current {
+			if _, typed := subsByName[c.Name]; typed {
+				continue
+			}
+			names = append(names, c.Name)
+			subsByName[c.Name] = c.SelectedSubcategories
+		}
 	}
 
 	// Resolve in the parsed order, not map order: the writes then happen in
@@ -522,14 +567,19 @@ func deleteCategoryCmd(st Store, id int64, userGUID string) tea.Cmd {
 // "Work/backend" is not a shorter truth — in the form it is a WRONG prefill,
 // which saving would then write back as a deselection.
 type noteCatsLoadedMsg struct {
-	cats []models.NoteCategoryDetailOutput
-	err  error
+	// noteID is the note these categories belong to. The reply is delivered to
+	// whichever screen is on top when it arrives, which need not be the one
+	// that asked; a form checks this before treating the answer as its own.
+	// Zero in hand-built messages (tests), which means "do not check".
+	noteID int64
+	cats   []models.NoteCategoryDetailOutput
+	err    error
 }
 
 func loadNoteCategoriesCmd(st Store, noteID int64, userGUID string) tea.Cmd {
 	return func() tea.Msg {
 		cats, err := st.GetNoteCategoryDetails(noteID, userGUID)
-		return noteCatsLoadedMsg{cats: cats, err: err}
+		return noteCatsLoadedMsg{noteID: noteID, cats: cats, err: err}
 	}
 }
 

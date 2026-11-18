@@ -82,6 +82,14 @@ type formScreen struct {
 	// override never silently applies to a later save.
 	overrideVersion int64
 
+	// catsPrefill tracks the async load that fills the Categories field of an
+	// existing note. The field's meaning depends on it: once loaded, the field
+	// is the note's whole category set and a save replaces the stored links
+	// with it; until then an empty field says nothing about the note, and a
+	// save must not read it as "no categories". See save() and
+	// categorySyncMode.
+	catsPrefill catsPrefillState
+
 	// baseline is what the form held the last time its contents matched what is
 	// stored — at construction, and again after the async category load fills a
 	// field the user never touched. Everything since is unsaved work, and esc
@@ -103,6 +111,23 @@ type formValues struct {
 	body       string
 	isPrivate  bool
 }
+
+// catsPrefillState is where the Categories prefill stands.
+//
+//	catsPrefillNone     nothing to load: a new note has no stored links, so
+//	                    the field as typed is already the whole set
+//	catsPrefillLoading  asked for, not yet answered: saving waits
+//	catsPrefillLoaded   the field reflects storage (plus the user's edits)
+//	catsPrefillFailed   could not be read: a save keeps every stored link and
+//	                    only adds what is typed
+type catsPrefillState int
+
+const (
+	catsPrefillNone catsPrefillState = iota
+	catsPrefillLoading
+	catsPrefillLoaded
+	catsPrefillFailed
+)
 
 const (
 	focusTitle = iota
@@ -155,6 +180,36 @@ func newFormScreen(sess *session, editing *models.Note) *formScreen {
 	// trip would report a form as dirty the instant it opened.
 	f.baseline = f.values()
 	return f
+}
+
+// adoptSavedNote makes this form an edit of note, after a save that wrote the
+// note and then failed on its categories.
+//
+//	before                      after
+//	editing = nil (a new note)  editing = the note just created
+//	editing = v7 of the note    editing = v8, what this save produced
+//
+// The note's own fields now match storage, so they stop counting as unsaved
+// work; the Categories field keeps its old baseline, because that part is
+// exactly what did not get saved.
+//
+// A note created this way holds no lease (a new note has nothing to lock), and
+// none is taken here: the form is seconds from either a successful retry or
+// being closed, and the version guard covers the gap as it does for any
+// unlocked write.
+func (s *formScreen) adoptSavedNote(note *models.Note) {
+	wasNew := s.editing == nil
+	s.editing = note
+
+	cats := s.baseline.categories
+	s.baseline = s.values()
+	s.baseline.categories = cats
+
+	if wasNew {
+		// A note that did not exist a moment ago has no stored links to load,
+		// so the field as typed is the whole desired set.
+		s.catsPrefill = catsPrefillNone
+	}
 }
 
 // values snapshots the fields as they stand right now.
@@ -269,6 +324,7 @@ func (s *formScreen) Init() tea.Cmd {
 	cmds := []tea.Cmd{textinput.Blink}
 	if s.editing != nil {
 		// Prefill the categories field with the note's current assignments.
+		s.catsPrefill = catsPrefillLoading
 		cmds = append(cmds, loadNoteCategoriesCmd(s.sess.store, s.editing.ID, s.sess.user.GUID))
 
 		// Start the heartbeat. The lease was acquired by whoever pushed this
@@ -380,12 +436,40 @@ func (s *formScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		// included: a note filed under Work/backend must come back as
 		// "Work/backend", or the first save from this form would quietly drop the
 		// subcategory the user never touched.
-		if msg.err == nil && len(msg.cats) > 0 {
-			s.categories.SetValue(models.FormatCategorySpecCSV(noteCatSpecs(msg.cats)))
-			// This field just came from storage, so it is not an edit — move the
-			// baseline with it. Without this, every edit form would be dirty the
-			// moment this message landed, and esc would always stop to ask.
-			s.baseline.categories = s.categories.Value()
+		//
+		// A reply for some other note is not this form's: replies go to whatever
+		// screen is on top when they land, and adopting another note's categories
+		// here would file this note under them at the next save.
+		if s.editing == nil || (msg.noteID != 0 && msg.noteID != s.editing.ID) {
+			return s, nil
+		}
+		if msg.err != nil {
+			// The field stays as it is, and from here it means "additions": a
+			// save keeps every stored link (see categorySyncMode). Saying so
+			// matters, because an empty Categories field on a note that has
+			// categories otherwise looks like a fact about the note.
+			s.catsPrefill = catsPrefillFailed
+			return s, statusErr(msg.err, "Could not load this note's categories; saving will keep them and add any typed here")
+		}
+		s.catsPrefill = catsPrefillLoaded
+		stored := models.FormatCategorySpecCSV(noteCatSpecs(msg.cats))
+		if typed := strings.TrimSpace(s.categories.Value()); typed != "" && s.categories.Value() != s.baseline.categories {
+			// The user got to the field before the answer did. Their text is kept
+			// after the stored set rather than replaced by it: dropping it would
+			// lose what they typed, and keeping only it would unfile the note
+			// from everything it was already in.
+			if stored != "" {
+				s.categories.SetValue(stored + ", " + typed)
+			}
+		} else if stored != "" {
+			s.categories.SetValue(stored)
+		}
+		// What came from storage is not an edit — move the baseline to it.
+		// Without this, every edit form would be dirty the moment this message
+		// landed, and esc would always stop to ask. (Text the user typed ahead
+		// of the answer stays an edit: the baseline is the stored set alone.)
+		if stored != "" {
+			s.baseline.categories = stored
 		}
 		return s, nil
 
@@ -435,6 +519,14 @@ func (s *formScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 
 	case noteSavedMsg:
 		s.busy = false
+		if msg.err != nil && msg.note != nil {
+			// Half a save: the note was written and the category step after it
+			// was not. From here on this form is editing THAT note. Without this
+			// the form kept no id, so each retry of a new note created another
+			// note, and a retry on an existing one named the pre-save version
+			// and was refused as stale against the user's own save.
+			s.adoptSavedNote(msg.note)
+		}
 		if msg.err != nil {
 			// Two refusals are not failures and must not be reported as one.
 			//
@@ -450,6 +542,9 @@ func (s *formScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			// can make it is looking at both versions.
 			if stale, ok := staleWrite(msg.err); ok {
 				return s, push(newStaleScreen(s.sess, stale, s.adoptTheirs, s.overwriteTheirs))
+			}
+			if msg.note != nil {
+				return s, statusErr(msg.err, "Note saved, but its categories were not updated (ctrl+s retries)")
 			}
 			return s, statusErr(msg.err, "Save failed")
 		}
@@ -648,6 +743,20 @@ func (s *formScreen) save() tea.Cmd {
 		return status("Title is required")
 	}
 
+	// What the Categories field means for this save depends on whether it was
+	// ever filled from storage (see catsPrefillState). While the answer is
+	// still on its way the save waits: saving now would have to guess between
+	// "replace" (wrong if the note has categories the field does not show yet)
+	// and "add only" (wrong if the user is deliberately clearing them), and the
+	// wait is the length of one local read or one HTTP round trip.
+	catMode := categoriesReplace
+	switch s.catsPrefill {
+	case catsPrefillLoading:
+		return status("This note's categories are still loading; try the save again in a moment")
+	case catsPrefillFailed:
+		catMode = categoriesAddOnly
+	}
+
 	// Optional fields become nil pointers when empty so the DB stores NULL
 	// rather than empty strings.
 	strPtr := func(v string) *string {
@@ -700,7 +809,7 @@ func (s *formScreen) save() tea.Cmd {
 	// for it is how a channel earns being muted. The editor, where the user is
 	// in another program for as long as they like, is the span that qualifies.
 	s.busy = true
-	return saveNoteCmd(s.sess.store, noteID, input, s.categories.Value(), s.sess.user.GUID)
+	return saveNoteCmd(s.sess.store, noteID, input, s.categories.Value(), catMode, s.sess.user.GUID)
 }
 
 // chrome renders everything drawn around the body textarea: above is the
