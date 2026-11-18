@@ -80,6 +80,6 @@ func (p Page) renderBody(b *element.Builder) any {
 		b.Div("class", "toast-container", "id", "toast-container").R(),
 
 		// Setup JavaScript
-		b.Script("src", "/static/js/setup.js").R(),
+		b.Script("src", "/static/js/setup.js?v=2").R(),
 	)
 }

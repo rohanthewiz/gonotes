@@ -55,8 +55,11 @@
   }
 
   // POSTs the parsed config to the server to write the .env file.
-  // No authentication is required — this endpoint is only available
-  // when sync is not yet configured (first-run guard on the server).
+  // On a server with no accounts yet (first run) no authentication is
+  // required. Once an account exists the server requires an admin, so the
+  // signed-in session's token is sent whenever this browser has one; without
+  // it the server answers 403 with a message saying to sign in first, which
+  // is shown as-is.
   window.applyConfig = async function() {
     if (!parsedConfig) return;
 
@@ -67,9 +70,14 @@
     }
 
     try {
+      const headers = { 'Content-Type': 'application/json' };
+      let token = null;
+      try { token = localStorage.getItem('token'); } catch (e) { /* storage blocked: proceed unsigned */ }
+      if (token) headers['Authorization'] = 'Bearer ' + token;
+
       const response = await fetch('/api/v1/setup/apply', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         body: JSON.stringify(parsedConfig)
       });
 
