@@ -275,6 +275,22 @@ synced): `GET/POST /api/v1/notes/query/saved`, `DELETE …/saved/:id`,
 box (kinds `saved` / `history`, whole-query rows that carry an `id`), so both
 UIs show them with no list of their own. `guid = ` completes notes by title.
 
+**Backups** — a running server (and a local-mode TUI) backs both databases up
+by itself: every 24h, newest 7 kept, in `<dir>/data/backups/<UTC stamp>/`
+(`models/backup.go`; `GONOTES_BACKUP_INTERVAL` / `_KEEP` / `_DIR`, `off`
+disables). The copy is bytdb's online backup, so nothing pauses, and the private
+copy stays encrypted. Unchanged data produces no new set. Restore is a file copy
+with GoNotes stopped.
+
+```bash
+gonotes backup list            # works while the server runs (reads the directory only)
+gonotes backup [-o <dir>]      # server stopped; with it running, use the endpoint:
+curl -s -X POST -H "Authorization: Bearer $TOKEN" http://localhost:8444/api/v1/admin/backup
+```
+
+Before any risky operation on real data (a migration, `account merge`, a bulk
+import), take one first.
+
 **Markdown round-trip** (server stopped) — export is Obsidian-compatible and
 idempotent in both directions, anchored on the frontmatter `guid`:
 
@@ -435,7 +451,7 @@ heartbeat that renews leases and reports when one is lost.
 
 | Path | What lives there |
 |---|---|
-| `main.go` | urfave/cli wiring: default action serves; subcommands `tui`, `import-gob`, `export-md`, `import-md`. `runTui` holds the local-vs-HTTP mode decision. |
+| `main.go` | urfave/cli wiring: default action serves; subcommands `tui`, `import-gob`, `export-md`, `import-md`, `account` (`account_cmd.go`), `backup` (`backup_cmd.go`). `runTui` holds the local-vs-HTTP mode decision. |
 | `models/` | Data layer + business logic: `note.go`, `category.go`, `user.go`, `db.go` (two bytdb engines), `encryption.go`, `lock.go`, `sync_*.go` (including `sync_compact.go`, the change-log compactor), and `query_*.go` — the advanced-search language: `query_fields.go` (the catalog every other piece reads), `query_lex.go`, `query_parse.go`, `query_value.go`, `query_eval.go`, `query.go` (the runner) and `query_complete.go` (the autocompleter both UIs share). |
 | `web/routes.go` | Every route in one file — read it first when looking for an endpoint. |
 | `web/api/` | JSON handlers. All responses use the `APIResponse` envelope: `{success, data?, error?}`. |

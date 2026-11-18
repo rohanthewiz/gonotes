@@ -64,6 +64,47 @@ GoNotes stores data in two [bytdb](https://github.com/rohanthewiz/bytdb) databas
 
 bytdb keeps all rows in memory (the on-disk write-ahead log is only for durability), so there is no separate read cache. Reads that span a user's whole note set — listing, search, sync — fan out to both databases on separate goroutines and merge (divide and conquer). Note ids are globally unique across the two databases (the private one offsets its id sequence), so a note stays addressable by id no matter which database holds it, and toggling a note's privacy moves it between the two files while preserving its id.
 
+### Backups
+
+A running GoNotes backs its two databases up by itself: once a day, keeping the newest seven, in `~/.gonotes/data/backups/`. Each backup is a directory named by its UTC time holding a copy of both database files and a `manifest.json` (sizes and SHA-256 of each).
+
+Sync is not a backup. A hub relays a mistaken edit or delete to every spoke as faithfully as a good one; a backup is the copy that does not follow along.
+
+- **Who takes them:** whichever process has the databases open: the server (or the macOS app), or `gonotes tui` in local mode. The copy is taken while the notes stay in use; nothing pauses.
+- **When:** timed from the newest existing backup, not from process start, so a laptop that runs GoNotes a few hours a day still gets one per interval.
+- **Unchanged notes are not backed up again.** If nothing changed since the newest backup, no new one is kept, so the seven slots hold seven different states rather than seven copies of an idle week.
+- **Encryption:** the private database's copy is encrypted exactly as the live file is. With `GONOTES_ENCRYPTION_KEY` set, restoring it needs the same key; without a key, the copy is plaintext like the original.
+- **Same disk by default.** That protects against a bad edit, a bad migration or a corrupted file, not against losing the disk. Point `GONOTES_BACKUP_DIR` at another disk or a synced folder for that.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GONOTES_BACKUP_INTERVAL` | `24h` | How often to back up (a Go duration). `off` or `0` disables the schedule; on-demand backups still work |
+| `GONOTES_BACKUP_KEEP` | `7` | How many backups to keep |
+| `GONOTES_BACKUP_DIR` | `<dir>/data/backups` | Where they go. A relative path is relative to the working directory (`~/.gonotes`) |
+
+On demand:
+
+```bash
+gonotes backup list                 # what exists, newest first; works while the server runs
+gonotes backup                      # take one now; needs the server stopped (it holds the files)
+gonotes backup -o /Volumes/usb/gn   # somewhere else, this once
+
+# with the server running, ask it (admin token):
+curl -s -X POST -H "Authorization: Bearer $TOKEN" http://localhost:8444/api/v1/admin/backup
+curl -s      -H "Authorization: Bearer $TOKEN" http://localhost:8444/api/v1/admin/backups
+```
+
+**Restoring** is a file copy, with GoNotes stopped. A backup file is a complete database, so putting it in place is the whole procedure:
+
+```bash
+cp ~/.gonotes/data/backups/<stamp>/notes_public.bytdb  ~/.gonotes/data/notes_public.bytdb
+cp ~/.gonotes/data/backups/<stamp>/notes_private.bytdb ~/.gonotes/data/notes_private.bytdb
+```
+
+Restore both files from the same backup: they are one snapshot. Edits made after the backup are not in it.
+
+Restoring a sync **spoke** is untested. The backup holds the spoke's sync bookkeeping as of that moment, while the hub separately remembers what it has delivered to that spoke since, so the two may not line up again by themselves. Restoring a hub or a standalone install has no such second party.
+
 Migrating from a pre-existing DuckDB database? See [scripts/migrate](scripts/migrate) — a standalone tool that reads the legacy `data/notes.ddb`, decrypts any legacy per-note ciphertext, and writes the two bytdb files.
 
 ---
@@ -310,6 +351,9 @@ The spoke exposes six endpoints for UI integration (all require authentication):
 | `GONOTES_SYNC_COMPACT` | No | `false` | Collapse the pending change log before every push (see [Compacting](#compacting-the-change-log)) |
 | `GONOTES_SYNC_INVITE_TOKEN` | No | — | One-time invite token for auto-registration on the hub |
 | `GONOTES_HUB_COMPACT_INTERVAL` | No | — | **Hub only.** Compact the hub's change log this often (a Go duration, e.g. `24h`); see [Compacting the hub](#compacting-the-hub) |
+| `GONOTES_BACKUP_INTERVAL` | No | `24h` | How often a running GoNotes backs up its databases; `off` disables. See [Backups](#backups) |
+| `GONOTES_BACKUP_KEEP` | No | `7` | How many backups to keep |
+| `GONOTES_BACKUP_DIR` | No | `<dir>/data/backups` | Where backups are written |
 
 ---
 

@@ -155,6 +155,7 @@ func main() {
 				},
 			},
 			accountCommand(defaultDir),
+			backupCommand(defaultDir),
 		},
 	}
 
@@ -323,10 +324,21 @@ func runTui(dir string, force storeForce) error {
 	// the TUI can say how overdue this spoke is and offer to fix it.
 	syncClient := initSyncClient()
 
+	// Backups, in local mode, are this process's job too, for the same reason
+	// sync is: there is no server holding these files to take them. Someone
+	// who only ever uses the local TUI would otherwise never get one. The
+	// schedule is timed from the newest existing backup, so short sessions
+	// still add up to a backup per interval.
+	stopBackups := models.StartBackupSchedule(models.LoadBackupConfig())
+
 	// The mode carries whatever the decision had to say — including, when the
 	// probe found a server serving someone else's directory, the fact that it
 	// was deliberately passed over.
 	runErr := tui.Run(tui.NewLocalStore(), mode)
+
+	// Before the exit sync and the deferred CloseDB: waits out a pass in
+	// progress so the engines never close under a copy.
+	stopBackups()
 
 	// The exit cycle, after the terminal is back and before the deferred
 	// CloseDB. The TUI's quit dialog is the prompt half of this, and a user who
@@ -541,6 +553,14 @@ func serve(dir, port string) error {
 	// close.
 	stopHubCompaction := startHubCompaction(client)
 
+	// Scheduled backups of both databases (models/backup.go). On by default:
+	// a backup is the one copy of the notes that does not follow every edit
+	// (sync relays a mistake as faithfully as anything else), and the process
+	// holding the files is the only one that can copy them without being
+	// stopped. Stopped before CloseDB below, for the same reason hub
+	// compaction is: a pass must never be mid-copy when the engines close.
+	stopBackups := models.StartBackupSchedule(models.LoadBackupConfig())
+
 	// Start server
 	srv := web.NewServer(port)
 	logger.Info("Starting GoNotes Web", "port", port)
@@ -553,6 +573,7 @@ func serve(dir, port string) error {
 	runErr := web.Run(srv)
 
 	stopHubCompaction()
+	stopBackups()
 
 	// The exit sync, before CloseDB unwinds. A server has nobody to prompt, so
 	// this is the only unattended cycle prompt mode leaves it: without it,

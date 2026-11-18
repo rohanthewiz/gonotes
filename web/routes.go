@@ -122,6 +122,8 @@ func setupRoutes(s *rweb.Server) {
 	s.Get("/api/v1/admin/invites", api.ListInviteTokens)               // List invite tokens
 	s.Post("/api/v1/admin/export-spoke-config", api.ExportSpokeConfig) // Export spoke config file
 	s.Post("/api/v1/admin/sync/compact", api.HubCompact)               // Collapse the hub's change log (global)
+	s.Post("/api/v1/admin/backup", api.BackupNow)                      // Back up both databases now
+	s.Get("/api/v1/admin/backups", api.ListBackups)                    // Existing backups and the backup settings
 
 	// =========================================
 	// Spoke setup endpoints — no auth (first-run)
